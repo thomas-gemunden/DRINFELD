@@ -1,0 +1,29 @@
+# macOS
+.DS_Store
+
+# Editor scratch
+*~
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# LaTeX build outputs
+*.aux
+*.log
+*.out
+*.toc
+*.bbl
+*.blg
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+*.pdf
+
+# GAP
+.gaprc
+*.gap
+
+# Investigation work files
+q8_extension_type/scripts/Modular_Data
+q8_extension_type/scripts/*.output

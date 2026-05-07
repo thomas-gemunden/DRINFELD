@@ -1,0 +1,399 @@
+\documentclass[11pt,a4paper]{amsart}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage[margin=1in]{geometry}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  urlcolor=blue!60!black,
+  citecolor=blue!50!black
+}
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{lemma}[theorem]{Lemma}
+
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{remark}[theorem]{Remark}
+\newtheorem{observation}[theorem]{Observation}
+
+\DeclareMathOperator{\Aut}{Aut}
+\DeclareMathOperator{\Vec}{Vec}
+\DeclareMathOperator{\Rep}{Rep}
+\DeclareMathOperator{\Mod}{Mod}
+\DeclareMathOperator{\Irr}{Irr}
+\DeclareMathOperator{\Hom}{Hom}
+\DeclareMathOperator{\Ext}{Ext}
+\DeclareMathOperator{\Tor}{Tor}
+\DeclareMathOperator{\im}{im}
+\DeclareMathOperator{\Inn}{Inn}
+\DeclareMathOperator{\Out}{Out}
+
+\newcommand{\GrpCenter}[1]{Z\!\left(#1\right)}
+\newcommand{\Drinfeld}[2]{Z\!\left(\Vec_{#1}^{#2}\right)}
+\newcommand{\trivcoc}{\mathbf{1}}
+\newcommand{\ord}{\mathrm{ord}}
+\newcommand{\hcl}[1]{[#1]}
+
+\title{The trivial and order--$2$ twists of $Q_8$\\
+       give inequivalent modular tensor categories\\
+       but identical fusion rings}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We compare the modular data of the two twisted Drinfeld doubles
+$\Drinfeld{Q_8}{\trivcoc}$ and $\Drinfeld{Q_8}{\omega_4}$, where
+$\omega_4$ is the unique order--$2$ class in
+$H^3(Q_8;U(1))\cong\mathbb Z/8$. By an exhaustive permutation search we
+show that there is no relabelling of simple objects identifying the two
+modular data $(S_i,T_i)$, even after a Galois twist $i\leftrightarrow -i$,
+so $\Drinfeld{Q_8}{\trivcoc}$ and $\Drinfeld{Q_8}{\omega_4}$ are
+inequivalent as modular tensor categories. Combined with
+Mignard--Schauenburg's theorem that modular data is a complete invariant
+for $|G|<32$, this implies $\Vec_{Q_8}$ and $\Vec_{Q_8}^{\omega_4}$ are
+not categorically Morita equivalent. \emph{Nevertheless}, their fusion
+rings (Grothendieck rings) coincide: we exhibit an explicit ring
+isomorphism. The entire numerical difference is concentrated in a single
+$g$--twisted sector, where two $T$--eigenvalues swap. Hence Evans--Gannon's
+``extension type'' property cannot be detected from the fusion ring
+alone, but is visible from the joint $(S,T)$ data.
+\end{abstract}
+
+\section{Setup and question}
+
+For a finite group $G$ and a $3$--cocycle
+$\omega\in Z^3(G;U(1))$ the twisted Drinfeld double
+$\Drinfeld{G}{\omega}=Z(\Vec_G^\omega)$ is a modular tensor category
+(MTC) whose simple objects are pairs $(g,\rho)$ with $g$ ranging over
+conjugacy class representatives of $G$ and $\rho$ a projective
+irreducible representation of the centraliser $C_G(g)$ with respect to a
+$2$--cocycle $\beta_g$ obtained from $\omega$
+by the formula
+\begin{equation}
+\beta_g(h,k) = \omega(g,h,k) + \omega(h,k,g) - \omega(h,g,k).
+\label{eq:beta}
+\end{equation}
+
+Evans--Gannon \cite{EvansGannon} call a (type--$1$, equivalently:
+extension--type) module category over $\Drinfeld{G}{\omega}$
+\emph{trivialising} when its category of local modules is
+$\Vec_{\mathbb C}$. Their Corollary~2 classifies such trivialising
+extensions by pairs $(K\le G,\;\psi'\in Z^2(K;U(1)))$ with
+$\omega|_K$ a coboundary. For $\omega=\trivcoc$ this is automatic with
+$K=G$; for nontrivial $\omega$ one needs a proper subgroup $K$ on which
+$\omega$ trivialises, and the supply of such $K$ is what
+Evans--Gannon call ``the obstruction''.
+
+It is folklore in the physics literature that this obstruction is
+detectable from modular data $(S,T)$ alone. The user--posed question:
+
+\begin{quote}
+  \emph{Does $Q_8$ provide a counterexample? That is, do the trivial
+  cocycle and the unique order--$2$ cocycle on $Q_8$ produce
+  modular data that agree under some natural equivalence relation?}
+\end{quote}
+
+\section{Verified setup}
+
+We use Gruen's GAP implementation (\cite{Gruen}, in
+\verb|DRINFELD/modular_data.g|) of the Mignard--Schauenburg /
+Gruen--Morrison algorithms for computing $(S,T)$, applied via the
+\textsf{HAP} package.
+
+\begin{itemize}
+\item \verb|SmallGroup(8,4)| has GAP \verb|StructureDescription "Q8"|;
+      its element--order distribution is $\{1\colon 1,\ 2\colon 1,\ 4\colon 6\}$,
+      so the group is the quaternion group $Q_8$.
+\item Gruen's universal--coefficients computation returns
+      \verb|UCT.exponent = 8| and \verb|UCT.torsion = [8]|, recovering
+      $H^3(Q_8;U(1))\cong\mathbb Z/8$.
+\item $\Aut(Q_8)$ acts trivially on $H^3(Q_8)$: there are exactly $8$
+      orbits, each a singleton. The eight orbit representatives stored in
+      \verb|modular_data/8/4/3-cocycles.txt| have orders
+      $\{1, 2, 4, 4, 8, 8, 8, 8\}$ in $\mathbb Z/8$, accounting for all
+      $8$ elements.
+\item File index $1$ has cocycle vector $[0,0,0]$ whose
+      $H^3$--class is $[0,0]$ --- the \textbf{trivial cocycle} $\trivcoc$.
+\item File index $2$ has cocycle vector $[0,4,0]$ whose $H^3$--class
+      is $[0,4]$, the unique class of order $2$ --- write this
+      $\omega_4$.
+\item Both modular data sets have rank $22$ ($=5+5+4+4+4$, from the
+      conjugacy class / centraliser--irrep counts of $Q_8$).
+\item A fresh \texttt{ComputeModularData} run reproduces each stored
+      $(S_i,T_i)$ up to permutation; the random row selection in
+      \texttt{GenerateModularData} only reorders simples.
+\end{itemize}
+
+Throughout, $(S_1,T_1)$ denotes the modular data stored as cocycle~$1$
+(trivial) and $(S_2,T_2)$ the modular data stored as cocycle~$2$ (order
+$2$).
+
+\section{Equivalence ladder}
+
+We tested whether $(S_1,T_1)$ and $(S_2,T_2)$ are identified by the
+following equivalence relations, in increasing order of strength.
+
+\begin{enumerate}
+\item \emph{$T$--spectrum equality} (multiset of diagonal entries).
+\item \emph{Per--row $S$ multiset equality}.
+\item \emph{Fusion ring isomorphism} (Grothendieck rings agree up to a
+       relabelling of simples).
+\item \emph{Joint (Fusion ring, $T$--vector) equivalence}: a single
+       permutation aligning both $N$ and $T$.
+\item \emph{Modular data equivalence}: a single permutation aligning
+       both $S$ and $T$.
+\item \emph{Galois--twisted modular data equivalence}: the same plus an
+       overall complex--conjugation symmetry $i\leftrightarrow -i$.
+\end{enumerate}
+
+The $S$--matrices entries lie in $\mathbb Q$ in this case, so the Galois
+action is trivial on $S$ and acts only on $T$ (which has entries in
+$\mathbb Q(i)$).
+
+\medskip
+\noindent
+The fusion coefficients are computed from $S$ via the Verlinde formula
+\begin{equation}
+N_{ij}^k = \sum_{a} \frac{S_{ia}\,S_{ja}\,\overline{S_{ka}}}{S_{0a}}.
+\label{eq:verlinde}
+\end{equation}
+
+We computed $N_1$ and $N_2$ from $S_1, S_2$ and verified their entries
+are nonnegative integers, as expected. For each candidate equivalence we
+ran an exact backtracking search across the $22\times 22$ index space,
+pruning by the natural per--row signature.
+
+\begin{table}[h!]
+\centering
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{lc}
+\toprule
+Equivalence relation & $(S_1,T_1) \sim (S_2,T_2)?$ \\
+\midrule
+$T$--spectrum (multiset) & \textbf{Yes} \\
+$S$--row multisets & \textbf{Yes} \\
+Fusion ring (Grothendieck ring) & \textbf{Yes} \\
+Joint (fusion ring,\,$T$--vector) up to permutation & \textbf{No} \\
+Full $(S,T)$ up to permutation & \textbf{No} \\
+$(S,T)$ up to permutation $+$ Galois twist & \textbf{No} \\
+\bottomrule
+\end{tabular}
+\caption{Equivalence ladder for $(S_1,T_1)$ vs.\ $(S_2,T_2)$.}
+\end{table}
+
+\paragraph*{Common $T$--spectrum.}
+Both $T_1$ and $T_2$ have multiset of diagonal entries
+\[
+  \bigl\{1^{\times 12},\ (-1)^{\times 4},\ i^{\times 3},\ (-i)^{\times 3}\bigr\}.
+\]
+
+\paragraph*{Fusion ring isomorphism.}
+The backtracking search returns the explicit permutation
+\begin{equation}
+\pi_F \;=\; (6,8)(7,9)\,(10,12)(11,13)\,(15,16,17)\,(19,21)(20,22),
+\label{eq:piF}
+\end{equation}
+of order $6$, satisfying
+$N_2[i,j,k] = N_1[\pi_F(i),\pi_F(j),\pi_F(k)]$ for all $i,j,k$. So
+the Grothendieck rings of $\Drinfeld{Q_8}{\trivcoc}$ and
+$\Drinfeld{Q_8}{\omega_4}$ are isomorphic.
+
+\paragraph*{Modular data inequivalence.}
+The exact backtracking search for permutations $\pi$ satisfying
+$T_2[i] = T_1[\pi(i)]$ and $S_2[i,j]=S_1[\pi(i),\pi(j)]$ exhausts the
+search space and returns no solution. The same search with a Galois
+twist $T_2 \mapsto \overline{T_2}$ (and the corresponding twist on $S$,
+which acts trivially since $S_2\in\mathbb Q^{22\times 22}$) also returns
+no solution. Sanity--checks confirm the search recovers the identity
+permutation when comparing $(S_1,T_1)$ to itself and the correct
+permutation when comparing to a known random permutation of itself.
+
+\paragraph*{Joint $(N,T)$ inequivalence.}
+We also enumerated permutations $\pi$ satisfying \emph{both}
+$N_2[i,j,k]=N_1[\pi(i),\pi(j),\pi(k)]$ and $T_2[i]=T_1[\pi(i)]$. The
+count is $0$. As a clean discriminating invariant,
+\[
+  |\Aut(N_1, T_1)| = 6,\qquad |\Aut(N_2, T_2)| = 24,
+\]
+where $\Aut(N,T)$ denotes permutations of $\{1,\dots,22\}$ preserving
+both $N$ and $T$. Since the two automorphism counts differ, the labelled
+pairs $(N_1,T_1)$ and $(N_2,T_2)$ are not isomorphic, even though the
+underlying fusion rings are.
+
+\paragraph*{Note on the heuristic.}
+Gruen's \texttt{BasicEquivalentModularDataTests} returns \texttt{true}
+on this pair. The heuristic only checks per--$T$--block sorted
+$S$--diagonal multisets and does not verify cross--row consistency, so
+it is genuinely fooled here. The exact search above settles the
+question.
+
+\section{Where exactly do the two modular data diverge?}
+
+We label each row of the modular data with its
+$(\text{conjugacy class},\;\dim\rho)$ pair by re--running
+\texttt{GenerateSimpleObjects} (deterministic) and aligning to the
+stored ordering with the same backtracking search.
+
+The simples partition by conjugacy class as follows. Write
+$c_{(\trivcoc)}=\{1\}$, $c_{(-1)}=\{-1\}$, and $c_A,c_B,c_C$ for the
+three order--$4$ conjugacy classes (each of size $2$).
+
+\begin{table}[h!]
+\centering
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{l c c c c}
+\toprule
+class & rows in stored data & $\dim$ & $T$ values (data~$1$) & $T$ values (data~$2$) \\
+\midrule
+$c_{(\trivcoc)}$ & $1,2,3,4,5$    & $1,1,1,1,2$ & $1,1,1,1,1$       & $1,1,1,1,1$ \\
+$c_{(-1)}$       & $14,15,16,17,18$ & $1,1,1,1,2$ & $1,1,1,1,-1$       & $1,1,1,1,-1$ \\
+$c_A$            & $6,7,8,9$      & $1,1,1,1$   & $1,-1,i,-i$       & $1,-1,i,-i$ \\
+$c_B$            & $10,11,12,13$  & $1,1,1,1$   & $1,-1,i,-i$       & $1,-1,i,-i$ \\
+$c_C$            & $19,20,21,22$  & $1,1,1,1$   & $\boldsymbol{1,-1},i,-i$ & $\boldsymbol{-1,1},i,-i$ \\
+\bottomrule
+\end{tabular}
+\caption{Sector decomposition of the simples and their twists.}
+\label{tab:sectors}
+\end{table}
+
+\begin{observation}
+\label{obs:onesector}
+The entire numerical difference between the two modular data is a swap
+of two $T$--eigenvalues in exactly one $g$--twisted sector --- the third
+order--$4$ conjugacy class $c_C$. The other four sectors
+($c_{(\trivcoc)},c_{(-1)},c_A,c_B$) are identical between the two cocycles.
+At the level of the diff between the stored files
+\verb|1.txt| and \verb|2.txt|, this corresponds to a transposition of
+$T$--diagonal positions $19$ and $20$, accompanied by all the necessary
+sign changes in the rows / columns of $S$ that link sector $c_C$ to the
+other sectors.
+\end{observation}
+
+\section{Interpretation}
+
+\subsection*{Why fusion rings agree but $T$ differs.}
+Each cyclic centraliser $C_G(g)\cong\mathbb Z/4$ for $g\in c_A,c_B,c_C$
+has trivial Schur multiplier, so the $2$--cocycle $\beta_g$ from
+\eqref{eq:beta} is necessarily a coboundary. Hence the projective
+characters appearing in the simple--object enumeration are still
+ordinary characters of $\mathbb Z/4$: dimensions are unaffected.
+\emph{Fusion rules see only dimensions and multiplicities and are
+phase--blind}, so the fusion ring is unchanged by the cocycle.
+
+The explicit choice of $1$--cochain trivialising $\beta_g$ does depend
+on $g$, however, and rotates the $T$--eigenvalues
+$\rho(g)/\dim\rho$ by a $g$--dependent phase. For $\omega=\omega_4$ on
+$Q_8$ this phase happens to be trivial on two of the three order--$4$
+classes and equal to $-1$ on the third (Observation
+\ref{obs:onesector}). The resulting $T$--diagonal therefore differs from
+the trivial--cocycle one only in sector $c_C$, by a swap of two entries.
+
+\subsection*{Implication for ``extension type''.}
+By Mignard--Schauenburg \cite[Theorem on modular data
+completeness]{MignardSchauenburg}, modular data is a complete invariant
+of $\Drinfeld{G}{\omega}$ for $|G|<32$. Combined with our explicit
+non--existence of a permutation aligning $(S_1,T_1)$ with $(S_2,T_2)$,
+we conclude:
+
+\begin{proposition}
+$\Drinfeld{Q_8}{\trivcoc}$ and $\Drinfeld{Q_8}{\omega_4}$ are
+inequivalent as modular tensor categories. Equivalently
+$\Vec_{Q_8}$ and $\Vec_{Q_8}^{\omega_4}$ are not categorically Morita
+equivalent.
+\end{proposition}
+
+In particular, $Q_8$ is \textbf{not} a counterexample to the folklore
+``modular data detects $[\omega]=0$'' under the standard reading of
+``modular data'' as the pair $(S,T)$.
+
+\medskip
+\noindent
+However, the analysis surfaces a clean weaker statement.
+
+\begin{observation}
+The fusion ring and the $T$--multiset, taken \emph{individually}, do not
+distinguish $\Drinfeld{Q_8}{\trivcoc}$ from $\Drinfeld{Q_8}{\omega_4}$:
+the fusion rings are isomorphic via $\pi_F$, and the $T$--multisets are
+equal. The discriminator that detects $[\omega_4]\ne 0$ is the joint
+$(N,T)$ structure, equivalently any invariant that ties a $T$--eigenvalue
+to its position in the fusion algebra (such as the full $S$).
+Anyone reading ``extension type'' off the fusion ring alone --- or off
+the $T$--spectrum alone --- would conflate the trivial and order--$2$
+twists of $Q_8$.
+\end{observation}
+
+\section*{Reproducibility}
+
+The investigation is reproducible from the
+\href{https://github.com/thomas-gemunden/DRINFELD}{DRINFELD repository}.
+Required software: GAP $\ge 4.14$ with the \textsf{HAP} and \textsf{IO}
+packages. A standalone GAP $4.15.1$ install (via the
+\verb|gap-system/gap| Homebrew tap) and Sage's bundled GAP both work.
+
+The GAP scripts driving the searches live alongside this file in
+\verb|scripts/|:
+
+\begin{itemize}\itemsep0pt
+\item \verb|verify_q8.g| --- confirms \verb|SmallGroup(8,4)=Q_8| and
+      identifies the two cocycles by $H^3$ class and order.
+\item \verb|recompute_check.g|, \verb|recompute_perm.g| --- recompute
+      $(S,T)$ from scratch and verify the stored data is correct up to
+      permutation.
+\item \verb|find_permutation.g|, \verb|sanity_check.g| --- exact
+      backtracking search for permutations aligning $(S,T)$.
+\item \verb|galois_and_fusion.g| --- Galois--twisted search; Verlinde
+      fusion ring; per--row signature comparison.
+\item \verb|fusion_plus_T.g|, \verb|sanity_count.g| --- joint
+      $(N,T)$ search and the $6$--vs--$24$ automorphism--count
+      discriminator.
+\item \verb|label_simples.g| --- recovers $(g,\rho)$ labels for every
+      row of stored \verb|1.txt|/\verb|2.txt| and prints $\pi_F$ in
+      label form.
+\end{itemize}
+
+\noindent
+To run them, \verb|cd| into \verb|scripts/| and invoke
+\verb|./setup.sh| once (this creates the \verb|Modular_Data| symlink
+that Gruen's \verb|LoadModularData| expects), then
+\verb|gap -q -b -c 'Read("<script>.g");'|. The actual modular data
+files live outside this repository (the full database is $\sim 77$\,GB)
+at the sibling path \verb|../../../modular_data/8/4/{1,2}.txt|.
+
+\begin{thebibliography}{9}
+
+\bibitem{EvansGannon}
+D.~E.~Evans and T.~Gannon,
+\emph{Reconstruction and local extensions for twisted group doubles,
+and permutation orbifolds},
+arXiv:\href{https://arxiv.org/abs/1804.11145}{1804.11145}.
+
+\bibitem{Gruen}
+A.~Gruen,
+\emph{Computing Modular Data for Drinfeld Centres of Pointed Fusion
+Categories},
+B.Phil.\ thesis, Australian National University, 2017.
+Available at
+\href{https://tqft.net/web/research/students/AngusGruen/thesis.pdf}%
+{tqft.net/web/research/students/AngusGruen/thesis.pdf}.
+
+\bibitem{MignardSchauenburg}
+M.~Mignard and P.~Schauenburg,
+\emph{Morita equivalence of pointed fusion categories of small rank},
+arXiv:\href{https://arxiv.org/abs/1708.06538}{1708.06538}.
+
+\end{thebibliography}
+
+\end{document}
