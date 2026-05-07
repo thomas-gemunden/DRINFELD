@@ -110,4 +110,6 @@ Print("Each row of T11 sums to 1? ", ForAll(T11, row -> Sum(row) = 1), "\n");
 Print("Each col of T11 sums to 1? ", ForAll(TransposedMat(T11), col -> Sum(col) = 1), "\n");
 Print("Order of T11: ", Order(T11), "\n");
 
-QUIT;
+# (Library/driver hybrid: the T11..T32 globals are exported for use by
+#  test_defect_rep_m3.g; QUIT removed so the file can be Read'd from
+#  other drivers.)

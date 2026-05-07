@@ -55,12 +55,12 @@ not in this repo — it ships with arXiv:2411.13646 as
 | 2: $E(m)$, $BRW(m)$, $C(m)$ | ~170 | **$E(m)$ ported**; `scripts/em_construction.g` |
 | 3: $BBW_{2^m}$, $BW_{2^m}$ | ~60 | **Gram + half-Gram ported via Lemma A.1.2 directly**; `scripts/bw_lattice.g` |
 | 4: Twisted group algebra, lift, $u_g$ | ~150 | **ported**; `scripts/twisted_group_algebra.g`. Theorem 3.5 of paper verified for $m = 2, 3, 4$ (zero failures across 64, 288, 1024 checks of relations (A) and (B) of the lifting proof). |
-| 5: Quadratic forms ($\mathbb F_2$ standardisation) | ~170 | not yet ported |
-| 6: Defect representation for $g = -1$, Schur averaging | ~600 | not yet ported (the bulk of the work) |
-| 7: Defect representation, other classes | ~100 | not yet ported |
+| 5: Quadratic forms ($\mathbb F_2$ standardisation) | ~170 | **ported**; `scripts/qforms_f2.g`. All 7 hand-built test cases pass (radical splits, hyperbolic-pair finding, anisotropic / totally-singular separation, canonical-form output). |
+| 6: Defect representation for $g = -1$, Schur averaging | ~600 | **brute-force core ported**; `scripts/defect_rep_minus_id.g`. For $m = 3$, runs in ~1 s and reproduces the substantive paper claim: $T_{a,r}^2 = 256\cdot I$ (so $T_{a,r}^2 = I$ after dividing by 16), $T_{a,r}T_{b,s} = T_{b,s}T_{a,r}$, and the trace distribution on $(\mathbb Z/2)^6$ matches the paper exactly. The intertwiners are not literally bit-for-bit equal to the paper's because Magma's `WittDecomposition` and our `SymplecticBasisF2` pick different symplectic bases of $N = L/2L$ — but the abstract rep is the same. The optimisation pipeline (`Finder` / `HardCodeFinder` / `efCoeff*`) needed for tractable $m \in \{5, 7\}$ via single-entry computations is **not** ported. |
+| 7: Defect representation, other classes | ~100 | **ported**; `scripts/defect_rep_other.g`. For $m \in \{3, 5\}$ and the two non-$(-1)$ conjugacy class representatives $g_2 = \Sigma_{1,1}$ and $g_4 = \Sigma_{1,1}\Sigma_{1,2}$, exhaustively verified that *every* element of $C_{E(m)}(g)$ acts trivially on $N_\theta$ (the paper's Section 4.4 surprise observation). The intertwiner representation is therefore trivial and $c_g = 0$ automatically. |
 
-In place of redoing the Schur-averaging algorithm we have, for $m = 3, 5$,
-verified the paper's published outputs of that algorithm directly:
+In addition to the brute-force port for $m = 3$, we also independently
+checked the paper's published outputs:
 
 - **$m = 3$**: the paper's explicit intertwiner formulas (4.4.3)–(4.4.8)
   are implemented in `scripts/m3_intertwiners_explicit.g`.
@@ -122,11 +122,19 @@ GAP run is required.
 
 ```sh
 cd scripts
-ln -sfn ../../../modular_data Modular_Data        # for inspect_e_plus_2_data.g
-gap -q -b -c 'Read("identify_extraspecial.g");'   # SmallGroup IDs of E_±(m)
-gap -q -b -c 'Read("test_em_and_bw.g");'          # E(m) + BW lattice sanity checks
-gap -q -b -c 'Read("twisted_group_algebra.g");'   # lifting Thm 3.5 for m=2,3,4
-gap -q -b -c 'Read("m3_intertwiners_explicit.g");'# m=3 intertwiners via paper's formulas
-gap -q -b -c 'Read("m5_relation_matrix.g");'      # m=5 relation matrix transcription
-gap -q -b -c 'Read("inspect_e_plus_2_data.g");'   # untwisted Z(Vec_{E_+(2)}) shape
+ln -sfn ../../../modular_data Modular_Data           # for inspect_e_plus_2_data.g
+gap -q -b -c 'Read("identify_extraspecial.g");'      # SmallGroup IDs of E_±(m)
+gap -q -b -c 'Read("test_em_and_bw.g");'             # E(m) + BW lattice sanity checks
+gap -q -b -c 'Read("twisted_group_algebra.g");'      # lifting Thm 3.5 for m=2,3,4
+gap -q -b -c 'Read("test_qforms_f2.g");'             # F_2 quadratic-form utilities
+gap -q -b -c 'Read("test_defect_rep_m3.g");'         # brute-force Schur averaging, m=3
+gap -q -b -c 'Read("test_defect_rep_other.g");'      # other conjugacy classes, m=3, 5
+gap -q -b -c 'Read("m3_intertwiners_explicit.g");'   # m=3 intertwiners via paper's formulas
+gap -q -b -c 'Read("m5_relation_matrix.g");'         # m=5 relation matrix transcription
+gap -q -b -c 'Read("inspect_e_plus_2_data.g");'      # untwisted Z(Vec_{E_+(2)}) shape
 ```
+
+The headline check is `test_defect_rep_m3.g` plus `test_defect_rep_other.g`:
+together they reproduce, **end-to-end from scratch in GAP**, the paper's
+$c_g = 0$ result for $m = 3$ (all three conjugacy class types) and the
+non-$(-1)$ conjugacy classes for $m = 5$.

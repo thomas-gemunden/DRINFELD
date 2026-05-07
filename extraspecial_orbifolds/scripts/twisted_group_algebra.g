@@ -88,6 +88,16 @@ ug := function(g, m, alpha)
     return (-1)^(BgQ(g, m, alpha) mod 2);
 end;;
 
+# Helper: write integer i in 0..2^m-1 as a length-2^m vector with a 1
+# in position i+1, zeros elsewhere.  Used to evaluate u on a basis
+# element.
+BitsOfBasis := function(i, n)
+    local v;
+    v := List([1..n], k -> 0);
+    v[i+1] := 1;
+    return v;
+end;;
+
 # --- Verifications: theorems 3.3, 3.5 of the paper ---
 # Theorem 3.3 (m even >= 4):  u_{Σ_{a,r}} = 1 for all generators.
 # Theorem 3.5 (m >= 3):  the lifted Σ̂_{a,r} continue to satisfy the
@@ -152,18 +162,4 @@ VerifyLift := function(m)
     Print("  errors: ", errs, " out of ", count, " checks\n");
 end;;
 
-# Helper: write integer i in 0..2^m-1 as a length-2^m vector with a 1
-# in position i+1, zeros elsewhere.  Used to evaluate u on a basis
-# element.
-BitsOfBasis := function(i, n)
-    local v;
-    v := List([1..n], k -> 0);
-    v[i+1] := 1;
-    return v;
-end;;
-
-VerifyLift(2);
-VerifyLift(3);
-VerifyLift(4);
-
-QUIT;
+# Library file: VerifyLift(2/3/4) is run from test drivers, not on Read.
