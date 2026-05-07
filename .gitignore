@@ -25,5 +25,5 @@
 *.gap
 
 # Investigation work files
-q8_extension_type/scripts/Modular_Data
-q8_extension_type/scripts/*.output
+**/scripts/Modular_Data
+**/scripts/*.output
