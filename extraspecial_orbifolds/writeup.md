@@ -164,7 +164,7 @@ Under `extraspecial_orbifolds/computed/`:
 | $E_+(2)$ | full $(S, T)$, rank 184 | 0.36 s | rerun-on-demand; matches `modular_data/32/49/1.txt` byte-for-byte |
 | $E_+(3)$ | full $(S, T)$, rank 2272, S 26 MB | 7 m 30 s wall (1m51s S, 5m45s S² = (ST)³ check) | persisted to `E_plus_3/{S, T, manifest}.g` |
 | $E_+(5)$ | $T$ only (full S would be ~5 TB), 1025 sector chunks | 100 s | persisted to `E_plus_5/T/sector_*.g` |
-| $E_+(7)$ | $T$ only (full S impossible) | running, ETA ~55 min | will persist to `E_plus_7/T/sector_*.g` |
+| $E_+(7)$ | $T$ only (full S impossible) | hit memory ceiling (see "Scaling caveats" below) | not yet on disk |
 
 For each computed instance: rank matches the analytical prediction,
 T-multiset matches exactly, modularity $S^2 = (ST)^3$ verified
@@ -194,6 +194,41 @@ verified on sample rows.
   A definitive proof needs the *full* $S$ to demonstrate isomorphism
   with $\mathrm{Mod}(D^1(E_+(m)))$, OR a higher-cohomology argument
   that shows no obstruction beyond the c_g.
+
+## Scaling caveats discovered along the way
+
+* **GAP `ConjugacyClasses` is the wall for $E_+(7)$.**  Even with
+  GAP's heap raised to 32 GB and 60 GB, `ClassesSolvableGroup` on
+  $|G| = 32{,}768$ exhausts memory while building the induced PCG
+  structure for class enumeration.  The bottleneck is GAP's
+  general-purpose algorithm; for an extraspecial 2-group we *know*
+  the conjugacy classes structurally (4^m + 1 of them, sizes 1 or
+  2), so a hand-rolled enumeration would bypass this completely.
+  This is the immediate technical blocker for full Phase F at $m=7$.
+* **Brute-force enumeration of $H^3$ classes is hopeless for $m \ge 2$.**
+  $|H^3(E_+(2); U(1))| = 4096$ is borderline; $|H^3(E_+(3); U(1))|
+  \approx 7 \times 10^{10}$; $|H^3(E_+(7); U(1))|$ is astronomical.
+  The Tier-4 kernel test must be done linearity-style: evaluate the
+  transgression on each generator (10 for $E_+(2)$, 35 for $E_+(3)$)
+  and assemble the kernel via Smith Normal Form.
+* **`IsCoboundary2(H, c, m)` is the slow inner loop.**  For
+  centraliser of order $n$, builds an $n^2 \times (n + n^2)$
+  augmented integer matrix and asks `SolutionIntMat`.  At $n = 64$
+  ($E_+(3)$ non-central centraliser) this is a $4096 \times 4160$
+  matrix per query and ~30 s per call. With 35 generators × 65
+  classes = 2275 queries, the full $E_+(3)$ Tier-4 sweep is many
+  hours.  Tractable but slow; an HAP cohomology-of-cochains
+  formulation should be faster but needs careful conventions.
+
+## Tier-4 progress so far
+
+* $E_+(1) = D_8$: brute-force enumeration of all 16 H^3 classes
+  shows kernel is **trivial**.  So for $D_8$, the c_g triviality
+  evidence is actually *sufficient* for $\omega = 0$.  (D_8 is not
+  the Keller paper's group, but a useful sanity check on the test.)
+* $E_+(2), E_+(3)$: per-generator linearity-based test in progress.
+  Brute-force enumeration is ruled out.
+* $E_+(7)$: deferred until Phase F unblocked.
 
 ## Open question for next round
 
