@@ -7,15 +7,7 @@
 # results table to ../computed/E_plus_3/transgression_per_gen.g for
 # resumption / downstream analysis.
 #
-# Estimated wall time: 35 generators × (2 central classes + 63 non-central)
-# × per-call cost. Per-call IsCoboundary2 at:
-#   n = 128 (central centralisers): ~2-3 min
-#   n = 64  (non-central centralisers): ~30 s
-# Total ~ 35 × (2*120 + 63*30) seconds = ~ 22 hours.
-#
-# The per-gen result alone determines which e_i are in mod-exp ker Tr.
-# Generators NOT in mod-exp ker may still be in U(1) ker (Bockstein
-# triviality test) -- run that as a follow-up only on the failures.
+# Estimated wall: ~22 hours.
 
 Read("transgression_per_generator.g");
 
@@ -24,15 +16,12 @@ Exec(Concatenation("mkdir -p ", OutDir));
 LogPath := "/tmp/e_plus_3_per_gen.log";;
 ResultsPath := Concatenation(OutDir, "/transgression_per_gen.g");;
 
-PrintTo(LogPath, "");
-LogLn := function(s) AppendTo(LogPath, s, "\n"); end;;
-
-LogLn(Concatenation("=== E_+(3) per-generator transgression sweep ==="));
-t_start_runtime := Runtime();;
-LogLn(Concatenation("Started (Runtime ms): ", String(t_start_runtime)));
+PrintTo(LogPath, "=== E_+(3) per-generator transgression sweep ===\n");
+t_start := Runtime();;
+AppendTo(LogPath, "Started: Runtime ms = ", t_start, "\n");
 
 G := SmallGroup(128, 2326);;       # E_+(3)
-LogLn(Concatenation("G = E_+(3) = SmallGroup(128, 2326), |G| = ", String(Order(G))));
+AppendTo(LogPath, "G = E_+(3) = SmallGroup(128, 2326), |G| = ", Order(G), "\n");
 
 t_setup := Runtime();;
 setup := SetupCohomology3(G);;
@@ -40,20 +29,17 @@ classes := ConjugacyClasses(G);;
 n_classes := Length(classes);;
 k := setup.num_generators;;
 exp := setup.exponent;;
-LogLn(Concatenation("Setup wall: ", String((Runtime() - t_setup)/1000.), " s"));
-LogLn(Concatenation("k = ", String(k), " generators, exp = ", String(exp),
-                    ", torsion = ", String(setup.torsion)));
-LogLn(Concatenation("# classes = ", String(n_classes)));
+AppendTo(LogPath, "Setup wall: ", (Runtime() - t_setup)/1000., " s\n");
+AppendTo(LogPath, "k = ", k, " generators, exp = ", exp, "\n");
+AppendTo(LogPath, "torsion = ", setup.torsion, "\n");
+AppendTo(LogPath, "# classes = ", n_classes, "\n");
 
-# Pre-compute centraliser orders
 centraliser_orders := List(classes, cl -> Order(Centralizer(G, Representative(cl))));;
-LogLn(Concatenation("centraliser orders: ", String(Collected(centraliser_orders))));
+AppendTo(LogPath, "centraliser orders: ", Collected(centraliser_orders), "\n\n");
 
-# Per-generator sweep
-results := [];;     # results[i] = list of [j, isCob (0/1), wall_seconds]
+results := [];;
 in_kernel := [];;
-LogLn("");
-LogLn("--- Per-generator sweep ---");
+AppendTo(LogPath, "--- Per-generator sweep ---\n");
 for i in [1..k] do
     t_gen := Runtime();
     vec := List([1..k], j -> If_(j = i, 1, 0));
@@ -71,11 +57,10 @@ for i in [1..k] do
     od;
     Add(results, per_gen);
     if all_in_kernel_i then Add(in_kernel, i); fi;
-    LogLn(Concatenation("  e_", String(i), " (order ", String(setup.torsion[i]), "): ",
-                        If_(all_in_kernel_i, "IN", "NOT"), " kernel  (wall ",
-                        String((Runtime() - t_gen)/1000.), " s)"));
+    AppendTo(LogPath, "  e_", i, " (order ", setup.torsion[i], "): ",
+             If_(all_in_kernel_i, "IN", "NOT"), " kernel  (wall ",
+             (Runtime() - t_gen)/1000., " s)\n");
 
-    # Save partial results after each generator
     PrintTo(ResultsPath,
         "# E_+(3) per-generator transgression results (partial; updated incrementally).\n",
         "results := ", results, ";;\n",
@@ -86,13 +71,10 @@ for i in [1..k] do
         "centraliser_orders := ", centraliser_orders, ";;\n");
 od;
 
-LogLn("");
-LogLn("=== Summary ===");
-LogLn(Concatenation("Generators IN ker Tr (mod exp): ", String(Length(in_kernel)),
-                    " / ", String(k)));
-LogLn(Concatenation("In-kernel indices: ", String(in_kernel)));
-LogLn(Concatenation("NOT-in-kernel indices: ",
-                    String(Difference([1..k], in_kernel))));
-LogLn(Concatenation("Total wall time (ms): ", String(Runtime() - t_start_runtime)));
+AppendTo(LogPath, "\n=== Summary ===\n");
+AppendTo(LogPath, "Generators IN ker Tr (mod exp): ", Length(in_kernel), " / ", k, "\n");
+AppendTo(LogPath, "In-kernel indices: ", in_kernel, "\n");
+AppendTo(LogPath, "NOT-in-kernel indices: ", Difference([1..k], in_kernel), "\n");
+AppendTo(LogPath, "Total wall (ms): ", Runtime() - t_start, "\n");
 
 QUIT;
