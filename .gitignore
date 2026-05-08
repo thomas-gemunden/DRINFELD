@@ -27,3 +27,7 @@
 # Investigation work files
 **/scripts/Modular_Data
 **/scripts/*.output
+**/scripts/*.log
+
+# Large canonical-block files for m >= 7 (multi-GB)
+extraspecial_orbifolds/computed/E_plus_7/structural/canonical_blocks.g
