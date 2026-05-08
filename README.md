@@ -54,6 +54,42 @@ cd q8_extension_type/scripts
 gap -q -b -c 'Read("verify_q8.g");'
 ```
 
+## Workstream issue dispatch
+
+Active research is structured as parallel workstreams (see
+[`extraspecial_orbifolds/parallel_workstreams_design.md`](extraspecial_orbifolds/parallel_workstreams_design.md)
+and the execution plan
+[`extraspecial_orbifolds/trajectory_c_execution_plan.md`](extraspecial_orbifolds/trajectory_c_execution_plan.md)).
+GitHub issues are pre-populated; agents pick up an issue labelled
+`ready` and follow the TDD template at
+[`docs/superpowers/plans/2026-05-08-issue-T-1-tdd.md`](docs/superpowers/plans/2026-05-08-issue-T-1-tdd.md).
+
+When an agent closes their issue, run
+
+```sh
+./scripts/dispatch/relabel_on_close.sh <issue-id>
+```
+
+(e.g. `./scripts/dispatch/relabel_on_close.sh Q-1`) to advance any
+downstream issues from `blocked` to `ready` once all of *their*
+upstream dependencies are closed. The dependency graph is recorded
+in [`scripts/dispatch/dependency_graph.json`](scripts/dispatch/dependency_graph.json).
+
+The full set of dispatch scripts lives under
+[`scripts/dispatch/`](scripts/dispatch/):
+
+- `_helpers.sh` — shared body-extraction and issue-creation
+  functions sourced by the bulk creators.
+- `create_epics.sh` — one-shot creator for the 7 workstream
+  meta-issues.
+- `create_wave_0.sh` — one-shot creator for the 14 ready-from-day-1
+  issues.
+- `create_remaining.sh` — one-shot creator for the 39 downstream
+  issues that begin in the `blocked` state.
+- `relabel_on_close.sh` — the auto-promotion hook described above.
+- `epic_numbers.txt` — a snapshot of the GitHub epic issue numbers
+  for cross-reference.
+
 ## References
 
 - Evans, Gannon. *Reconstruction and local extensions for twisted group doubles, and permutation orbifolds.* [arXiv:1804.11145](https://arxiv.org/abs/1804.11145).
