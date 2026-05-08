@@ -361,14 +361,125 @@ Under `extraspecial_orbifolds/computed/`:
 | Group | Output | Wall | Status |
 |---|---|---|---|
 | $E_+(2)$ | full $(S, T)$, rank 184 | 0.36 s | rerun-on-demand; matches `modular_data/32/49/1.txt` byte-for-byte |
-| $E_+(3)$ | full $(S, T)$, rank 2272, S 26 MB | 7 m 30 s wall (1m51s S, 5m45s S² = (ST)³ check) | persisted to `E_plus_3/{S, T, manifest}.g` |
-| $E_+(5)$ | $T$ only (full S would be ~5 TB), 1025 sector chunks | 100 s | persisted to `E_plus_5/T/sector_*.g` |
-| $E_+(7)$ | $T$ only (full S impossible) | hit memory ceiling, see §6 | not yet on disk |
+| $E_+(3)$ | full $(S, T)$, rank 2272, $S$ 26 MB; 22 canonical $S$-blocks (337 KB) | 7 m 30 s dense; 0.3 s structural | persisted to `E_plus_3/{S, T, manifest}.g` and `E_plus_3/structural/canonical_blocks.g` |
+| $E_+(5)$ | $T$ only (full $S$ would be ~5 TB), 1025 sector chunks; 22 canonical $S$-blocks (94 MB) | 100 s $T$; 26 s structural $S$ | persisted to `E_plus_5/T/sector_*.g` and `E_plus_5/structural/canonical_blocks.g` |
+| $E_+(7)$ | $T$ multiset analytical (full vector astronomical); 9 canonical non-zero $S$-blocks (8.7 GB) + 3 closed-form O(1) blocks + 6 zero blocks | $T$: ~ms; $S$ blocks: ~16 min | persisted to `E_plus_7/manifest.g` and `E_plus_7/structural/{manifest.g, canonical_blocks.g}` (the 8.7 GB blocks file is gitignored — re-create via `run_e_plus_7_canonical.g`) |
 
 For each completed instance: rank matches the analytical prediction,
 T-multiset matches exactly, modularity $S^2 = (ST)^3$ verified
 exactly (in $E_+(3)$), unitarity $\sum_a \lvert S_{ia}\rvert^2 = 1$
 verified on sample rows.
+
+### 4.5 BRW-orbit-folded structural S representation (Phase E_BRW)
+
+For $m \in \{3, 5, 7\}$ the dense $S$ is too big to store at $m \ge 5$.
+A drastically more compact representation comes from observing that
+$E_+(m)$ is an index-(power-of-2) subgroup of its normaliser
+$\mathrm{BRW}(m)$ in $O(2^m, \mathbb R)$, and conjugacy classes of
+$E_+(m)$ under $\mathrm{BRW}(m)$ form just **four orbits** (KRR Prop
+3.1): $\{1\}$, $\{-1\}$, $\sigma_2$-type, $\sigma_1\sigma_2$-type.
+The S-formula entries depend only on:
+
+1. The pair of BRW-orbit types of the two arguments, $(\mathrm{type}_i, \mathrm{type}_j)$;
+2. Whether the class representatives commute, $\omega(\bar g_i, \bar g_j) \in \{0, 1\}$ in $E_+(m)/Z \cong (\mathbb F_2)^{2m}$;
+3. Whether the pair is "diagonal" $i = j$ as $E_+(m)$-classes or off-diagonal $i \neq j$.
+
+So $S$ has, modulo per-class irrep relabellings, only **22 distinct
+canonical blocks** (more precisely: 22 refined groups, of which 6 are
+the all-zero non-commuting blocks that don't need materialisation).
+This is independent of $m$.
+
+#### Canonical blocks computed
+
+`scripts/compute_canonical_blocks.g` computes the 22 canonical blocks
+by direct evaluation of `ComputeSBlock` at one canonical pair per
+refined group. Cross-checked byte-for-byte for $m = 3$ against the
+dense $S$ already on disk: every canonical block matches the
+corresponding submatrix of the dense $S$.
+
+For $m = 5, 7$ no dense $S$ exists; this is the only way we get $S$
+data at those orders.
+
+| $m$ | wall | non-zero canonical blocks | structural storage | dense (hypothetical) |
+|---|---:|---:|---:|---:|
+| 3 | 0.3 s | 22 (16 non-zero + 6 zero) | 337 KB | 26 MB |
+| 5 | 25.8 s | 22 | 94 MB | ~5 TB |
+| 7 | ~16 min | 9 of 22 (3 fully-central are O(1) closed-form, 6 zero) | 8.7 GB | ~3 · 10¹⁷ B |
+
+Compression ratios: ~80× ($m=3$), ~5 · 10⁴× ($m=5$),
+~3.5 · 10⁷× ($m=7$).
+
+#### How the $E_+(7)$ blocks were computed despite the OOM on `ConjugacyClasses`
+
+For $E_+(7)$ the OOM-on-`ConjugacyClasses(E_+(7))` (under any heap
+budget tested, including 60 GB) is bypassed in three ways:
+
+1. **`Centralizer(E_+(7), x)`** for non-central $x$ has order
+   $16384$, and `CharacterTable` on it works comfortably (~40 s) —
+   so we get full $\mathrm{Irr}(C_x)$ data for non-central canonical
+   classes via standard GAP.
+2. **$\mathrm{Irr}(E_+(7))$** itself is bypassed analytically: the
+   16384 linear characters factor through $E_+(7)/Z = (\mathbb F_2)^{14}$
+   (computable via PC exponent vectors with `ExponentsOfPcElement`),
+   plus 1 faithful character of dim $2^7 = 128$ with values
+   $128, -128, 0$ at $1, z$, non-central respectively. This is used
+   for central sector evaluations without any GAP `CharacterTable`
+   call on $E_+(7)$.
+3. **Closed-form Phase-D formula** for (central, non-central) blocks:
+   $S_{((1, \rho), (h, \sigma))} = \dim \sigma / |C_G(h)| \cdot \overline{\rho(h)}$
+   (and the analogous form for $-1$). 4 such canonical blocks
+   computed in 13–21 s each.
+4. **Class-element-to-class-index dictionary** (`NewDictionary`) on each
+   centraliser, eliminating the $O(|C|)$ per-evaluation cost in the
+   inner loop of `ComputeSBlock`. Without this, naive class-membership
+   checks dominated; with it, non-central blocks compute in 130–150 s.
+
+#### What's NOT in the canonical-block representation alone
+
+To reconstruct any specific block $S(i, j)$ (for non-canonical
+$(i, j)$) from the canonical block of its refined group, we would need
+**per-class irrep relabellings $\sigma_i$**. We attempted to compute
+these by row-matching `block(canonical, anchor)` against `block(i, anchor)`
+using the dense $S$ for $m = 3$. The naive form fails empirically
+(61/61 non-canonical $E_+(3)$ classes failed) because
+
+> $\mathrm{BRW}(m)$ is the **outer** normaliser of $E_+(m)$: its
+> conjugation by $x_i \in \mathrm{BRW}(m)$ permutes $E_+(m)$-conjugacy
+> classes (different from the inner ones), and hence permutes
+> $\mathrm{Irr}(E_+(m))$. So when comparing
+> `block(canonical, j_anchor)` to `block(i, j_anchor)`, the column
+> axis (indexed by $\mathrm{Irr}(C_{j_{\mathrm{anchor}}})$) also
+> permutes — a row-only relabelling does not suffice.
+
+To recover the full per-class machinery we would need to construct
+$\mathrm{BRW}(m)$ explicitly as a matrix subgroup of $O(2^m, \mathbb R)$
+following KRR Section 3.1 (using $H$, $D$, $\mathrm{GL}(m, 2)$,
+plus the $\sigma$ generators) and use `RepresentativeAction(\mathrm{BRW}(m), g_{\mathrm{canonical}}, g_i)`
+to find $x_i$. Then $x_i$'s induced permutations on each centraliser
+character table can be computed canonically.
+
+This is **deferred** as future work; it is not needed for the use
+case that motivates this whole investigation.
+
+#### Practical workflow for Keller-style comparison
+
+For comparing single $S$-entries against an alternative pipeline
+(e.g. the one Keller-Roberts-Roberts would produce if they computed
+the full twisted modular data of their $E_+(7)$ orbifold):
+
+1. Decode global indices $(i, j)$ to $(\mathrm{class}_i, \mathrm{irrep}_i),\;
+   (\mathrm{class}_j, \mathrm{irrep}_j)$.
+2. Identify the refined group $g = (\mathrm{type}_i, \mathrm{type}_j, \mathrm{commute}, \mathrm{diag/off})$.
+3. If non-commuting: return 0.
+4. Otherwise: compute $C_{\mathrm{class}_i}$, $C_{\mathrm{class}_j}$
+   (cheap via `Centralizer` even for $E_+(7)$), then
+   `ComputeSBlock` at $(\mathrm{class}_i, \mathrm{class}_j)$ and read
+   off the entry. ~Seconds per query.
+
+The 22 canonical blocks are then a **structural baseline**: any
+on-demand block must agree with its group's canonical up to row+col
+permutations on the irrep axes. This is the entry-by-entry comparison
+target.
 
 ## 5. Tier-4 transgression-kernel test
 
@@ -389,16 +500,22 @@ Here we record the empirical findings.
   expected to take many hours due to the
   $n^2 \times (n + n^2)$ augmented-system inner loop at $n = 64$.
   Deferred behind an HAP cohomology-of-cochains formulation.
-* $E_+(7)$: deferred until $E_+(7)$ centraliser data is unblocked
-  (see §6).
+* $E_+(7)$: centraliser data for canonical classes (orders $16384$)
+  is now available — see §4.5; centraliser computation per non-canonical
+  class is also fast (`Centralizer(G, x)` works fine on $E_+(7)$). The
+  blocker for Tier-4 here is no longer centralisers but the size of
+  $H^3(E_+(7); U(1))$ itself, which makes per-generator iteration
+  costly even with the augmented-system optimisation.
 
 ## 6. Verification ladder
 
 | Property | $m=3$ | $m=5$ | $m=7$ | How |
 |---|---|---|---|---|
-| rank matches predictor | ✓ | ✓ | (Phase F blocked) | direct lib + analytical |
-| T-multiset matches predictor | ✓ | ✓ | (Phase F blocked) | direct lib + analytical |
-| modularity $S^2 = (ST)^3$ | ✓ | (full S not computed) | (impossible) | direct |
+| rank matches predictor | ✓ | ✓ | ✓ (analytical) | direct lib + analytical |
+| T-multiset matches predictor | ✓ | ✓ | ✓ (analytical) | direct lib + analytical |
+| modularity $S^2 = (ST)^3$ | ✓ | (full S not computed) | (impossible at full size) | direct |
+| canonical block matches dense $S$ | ✓ (byte-for-byte) | (no dense $S$) | (no dense $S$) | `compute_canonical_blocks.g` |
+| canonical blocks computed | 22 | 22 | 9 (+ 6 zero, + 3 closed-form O(1)) | structural rep |
 | $c_g$ trivial for $g = -1$ | ✓ | ✓ | ✓ | Magma port (brute-force + closed-form) |
 | $c_g$ trivial for $g = g_2$ | ✓ | ✓ | (m=7 not run; same argument applies) | centraliser acts trivially on $N_\theta$ |
 | $c_g$ trivial for $g = g_4$ | ✓ | ✓ | (same) | same |
@@ -407,14 +524,18 @@ Here we record the empirical findings.
 
 ## 7. Scaling caveats discovered along the way
 
-* **GAP `ConjugacyClasses` is the wall for $E_+(7)$.** Even with
-  GAP's heap raised to 32 GB and 60 GB, `ClassesSolvableGroup` on
+* **GAP `ConjugacyClasses(E_+(7))` exhausts memory.** Even with the
+  heap raised to 32 GB and 60 GB, `ClassesSolvableGroup` on
   $|G| = 32{,}768$ exhausts memory while building the induced PCG
   structure for class enumeration. The bottleneck is GAP's
-  general-purpose algorithm; for an extraspecial 2-group we *know*
-  the conjugacy classes structurally ($4^m + 1$ of them, sizes 1 or
-  2), so a hand-rolled enumeration would bypass this completely.
-  This is the immediate technical blocker for full Phase F at $m=7$.
+  general-purpose algorithm; for an extraspecial 2-group the conjugacy
+  classes are known structurally ($4^m + 1$ of them, sizes 1 or 2).
+  **Bypassed in Phase E_BRW** (§4.5): instead of asking for the full
+  conjugacy class list, we compute centralisers of canonical class
+  representatives directly via `Centralizer(G, x)` — these have order
+  $|G|/2 = 16384$ and GAP handles them comfortably — together with a
+  closed-form structural description of $\mathrm{Irr}(E_+(7))$ that
+  avoids `CharacterTable(G)` entirely. See §4.5 for the full pipeline.
 
 * **Brute-force enumeration of $H^3$ classes is hopeless for $m \ge 2$.**
   $|H^3(E_+(2); U(1))| = 4096$ (UCT torsion $[2^9, 8]$);
@@ -450,6 +571,12 @@ gap -q -b -c 'Read("compute_e_plus_3_full.g");'      # E_+(3) full (S, T)
 gap -q -b -c 'Read("compute_e_plus_5_T.g");'         # E_+(5) T-vector
 gap -q -b -o 60G -c 'Read("compute_e_plus_7_T.g");'  # E_+(7) T-vector (memory!)
 gap -q -b -c 'Read("test_closed_form_central.g");'   # closed-form central rows
+
+# Phase E_BRW: structural canonical-block S representation
+gap -q -b -c 'Read("run_e_plus_3_canonical.g");'     # 22 canonical blocks for m=3 (~0.3 s)
+gap -q -b -c 'Read("run_e_plus_5_canonical.g");'     # 22 canonical blocks for m=5 (~26 s, 94 MB)
+gap -q -b -o 60G -c 'Read("run_e_plus_7_canonical.g");'  # 9 canonical blocks for m=7 (~16 min, 8.7 GB)
+gap -q -b -c 'Read("per_class_perms_e_plus_3.g");'   # documents the per-class-perms failure
 
 # Tier 4: transgression kernel
 gap -q -b -c 'Read("test_transgression_d8.g");'           # full enumeration on D_8
