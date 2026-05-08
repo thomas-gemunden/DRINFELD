@@ -1,0 +1,7 @@
+#7 [W-EPIC] Methodology paper / writeup synthesis
+#6 [X-EPIC] Cross-checks and regression
+#5 [A-EPIC] Application sweeps for E_+(m) at m = 2, 3, 5, 7
+#4 [K-EPIC] KRR pipeline to S-entry adapter
+#3 [V-EPIC] Validators for Tiers 1, 3, 5
+#2 [T-EPIC] Transgression-kernel infrastructure
+#1 [Q-EPIC] Quillen analytical H^3 pipeline
