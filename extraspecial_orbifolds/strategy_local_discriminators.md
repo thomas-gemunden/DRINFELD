@@ -100,18 +100,192 @@ This is what worked for the $Q_8$ investigation: $|\mathrm{Aut}(N, T)| = 6$ vs $
 
 ### Tier 4 — kernel of the cohomology transgression
 
-If we want a *theoretical* answer rather than a *computational* one: compute the kernel of the transgression
+This is the most theoretically powerful test. If we can show the
+relevant kernel is trivial, then the Keller conjecture
+$\omega = 0$ follows *automatically* from their published evidence
+$c_g = 0$, with no further computation required.
+
+#### What is "the transgression" here?
+
+In Dijkgraaf–Pasquier–Roche's construction of the twisted Drinfeld
+double $D^\omega(G)$ [DPR91], the simple objects are pairs $(g, \chi)$
+where $g$ ranges over conjugacy class representatives and $\chi$ is a
+$c_g$-projective character of the centraliser $C_G(g)$. The 2-cocycle
+$c_g \in Z^2(C_G(g); U(1))$ controlling that projective representation
+is given explicitly in terms of $\omega$ (DPR91, eq. (2.7); also Coste–
+Gannon–Ruelle [CGR2000], eq. (2.7); Evans–Gannon [EG18], eq. (2.1.3)):
+
 $$
-\mathrm{Tr}: H^3(E_+(m); U(1)) \;\longrightarrow\; \bigoplus_{[g]} H^2(C_{E_+(m)}(g); U(1)).
+c_g(h_1, h_2) \;=\; \omega(g, h_1, h_2) \,+\, \omega(h_1, h_2, g) \,-\, \omega(h_1, g, h_2),
+\qquad h_1, h_2 \in C_G(g).
 $$
 
-If this kernel is trivial as an abelian group, then $c_g = 0$ for all $g$ implies $\omega = 0$ — *the Keller conjecture follows automatically* from their published evidence, no further computation needed.
+Because $g$ commutes with both $h_1$ and $h_2$ (they are in $C_G(g)$),
+the ordinary cocycle condition for $\omega$ guarantees that $c_g$ is a
+2-cocycle on $C_G(g)$. Coboundary changes of $\omega$ change $c_g$
+only by 2-coboundaries on $C_G(g)$. So the assignment
+$\omega \mapsto c_g$ descends to a homomorphism of abelian groups
 
-If the kernel is non-trivial, the residual classes are classified, and additional conditions (e.g., level matching plus specific extra checks) decide $\omega$.
+$$
+\mathrm{Tr}_g \colon H^3(G; U(1)) \;\longrightarrow\; H^2(C_G(g); U(1)),
+$$
 
-**Calculation route.** HAP's `GroupCohomology(G, n)` returns $H^n(G; \mathbb Z)$ as an abelian group. UCT then gives $H^n(G; U(1))$. The transgression is computed via `EquivariantChainMap` plus standard Eilenberg-Maclane / restriction maps. For $E_+(m)$ at $m = 3$ this is cheap; $m = 5, 7$ may need clever decomposition (using extraspecial structure).
+and assembling these over all conjugacy classes gives the **total
+transgression**
 
-For $E_+(m)$, the cohomology rings are known: $H^*(E_+(m); \mathbb F_2)$ has polynomial + exterior structure described in Quillen [1971] and Adem-Milgram. The mod-2 transgression is computable from these explicit formulas. Lifting to $\mathbb Z$ / $U(1)$ adds bookkeeping but no new ideas.
+$$
+\mathrm{Tr} \colon H^3(G; U(1)) \;\longrightarrow\; \bigoplus_{[g]} H^2(C_G(g); U(1)),
+\qquad
+\mathrm{Tr}([\omega]) = \bigl([c_g]\bigr)_{[g]}.
+$$
+
+#### Why is $\mathrm{Tr}$ called a "transgression"?
+
+The map $\mathrm{Tr}_g$ is the composition
+
+$$
+H^3(G) \;\xrightarrow{\mathrm{res}_g}\; H^3(C_G(g)) \;\xrightarrow{\,\backslash [g]\,}\; H^2(C_G(g))
+$$
+
+where $\mathrm{res}_g$ is the cohomological restriction induced by the
+inclusion $C_G(g) \hookrightarrow G$ and $\backslash [g]$ is the
+**slant product** with the canonical 1-cycle $[g] \in H_1(C_G(g); \mathbb Z)$
+(well-defined because $g \in Z(C_G(g))$ — the centre of its own
+centraliser). The slant product
+
+$$
+H^n(K; M) \;\otimes\; H_p(K; \mathbb Z) \;\longrightarrow\; H^{n-p}(K; M)
+$$
+
+is a standard operation in group cohomology; see Brown's textbook
+[Br82, Chapter V.3] or McLane [McL75, Chapter VIII]. The closed form
+$c_g(h_1, h_2) = \omega(g, h_1, h_2) + \omega(h_1, h_2, g) - \omega(h_1, g, h_2)$
+is exactly the slant of $\omega$ by the 1-cycle $g$ at the cochain level.
+
+This same construction appears in the literature on group-theoretic
+modular data:
+- **Dijkgraaf–Pasquier–Roche** [DPR91] introduced $D^\omega(G)$ and
+  the projective characters with cocycle $c_g$.
+- **Bantay** [Ban97, eq. 2.7] gives a clean version of the formula in
+  the context of orbifold characters.
+- **Coste–Gannon–Ruelle** [CGR2000] systematise the modular data.
+- **Mason–Ng** [MN05] discuss when the resulting modular data depends
+  on $\omega$ vs only on its image in subgroup cohomology.
+- **Evans–Gannon** [EG18] — the paper Keller et al. cite — restate
+  the formula in this context.
+- **Naidu–Nikshych** [NN08] study Morita equivalence of pointed
+  fusion categories in terms of (in particular) the kernel of related
+  transgression-like maps.
+
+#### Why the kernel matters
+
+The Keller-Roberts-Roberts evidence consists, exactly, of verifying
+that $c_g = 0$ in $H^2(C_G(g); U(1))$ for every conjugacy class
+$[g]$ — i.e., $\mathrm{Tr}([\omega]) = 0$. Their conjecture is that
+$[\omega] = 0$ in $H^3(G; U(1))$.
+
+The question "does $c_g = 0\;\forall g$ imply $\omega = 0$?" is
+exactly:
+
+$$
+\boxed{\;\;\ker \mathrm{Tr} \;\;=\;\; 0\;\; \text{?}\;\;}
+$$
+
+If the kernel is trivial, the implication holds and the conjecture
+**follows automatically** from the verified $c_g = 0$ data — no
+additional checks needed.
+
+If the kernel is non-trivial, the c_g triviality data is consistent
+with both $[\omega] = 0$ and certain non-zero classes; the conjecture
+needs additional input.
+
+#### Computational form
+
+For a finite group $G$, $H^3(G; U(1))$ is a finite abelian group of
+order $\prod_i d_i$ where $d_i$ are the invariant factors (UCT.torsion
+in our code; computed by HAP's `GroupCohomology` via the Eilenberg–
+MacLane / Cartan–Eilenberg machinery, [Ell08, HAP package
+documentation]). Similarly each $H^2(C_G(g); U(1))$ is finite abelian.
+
+$\mathrm{Tr}$ is a homomorphism between two finite abelian groups,
+fully encoded by its matrix in fixed bases. Once that matrix is in
+hand, the kernel is computed by Smith Normal Form over $\mathbb Z$ —
+this is exactly what `NormalFormIntMat` in GAP does.
+
+The cost is therefore split between
+
+1. **Setup** — one resolution per centraliser (HAP
+   `ResolutionFiniteGroup`) to get the basis of $H^2(C_G(g))$, plus
+   one resolution of $G$ to get the basis of $H^3(G)$. For $E_+(7)$
+   this is the bottleneck due to $|G| = 32{,}768$ and the fact that
+   GAP's `ConjugacyClasses` for that order currently exhausts memory
+   even at 60 GB; see the writeup's "Scaling caveats" section.
+
+2. **Per-generator evaluation** — for each of the $k = $
+   `Length(UCT.hombasis)` generators of $H^3(G; U(1))$, build the
+   transgressed 2-cocycle $c_g$ on each centraliser, project onto
+   $H^2(C_G(g))$. Total work scales like
+   $k \cdot \#\{[g]\} \cdot $ (per-call cost).
+
+3. **Linear algebra** — Smith Normal Form of an integer matrix
+   whose row count is $k$ (the number of $H^3$ generators) and whose
+   column count is $\sum_{[g]} k_{C_g}$ (sum of $H^2$-generator
+   counts). Cheap relative to the setup.
+
+For $E_+(m)$ with $m \le 3$ the setup is fast (minutes); $m = 5, 7$
+need workarounds for `ConjugacyClasses` and `ResolutionFiniteGroup`.
+
+#### Bibliographic references
+
+* [DPR91] R. Dijkgraaf, V. Pasquier, P. Roche. *Quasi-Hopf algebras,
+  group cohomology and orbifold models.* Nucl. Phys. B Proc. Suppl.
+  **18B** (1990) 60–72; Comm. Math. Phys. **129** (1990).
+* [Br82] K. S. Brown. *Cohomology of Groups.* Graduate Texts in
+  Mathematics 87. Springer, 1982.
+* [McL75] S. Mac Lane. *Homology.* Grundlehren der mathematischen
+  Wissenschaften 114. Springer, 1975.
+* [Ban97] P. Bantay. *Frobenius–Schur indicators, the Klein-bottle
+  amplitude, and the principle of orbifold covariance.*
+  Phys. Lett. B **394** (1997) 87–88.
+* [CGR2000] A. Coste, T. Gannon, P. Ruelle. *Finite group modular
+  data.* Nucl. Phys. B **581** (2000) 679–717. arXiv:hep-th/0001158.
+* [MN05] G. Mason, S.-H. Ng. *Group cohomology and gauge equivalence
+  of some twisted quantum doubles.* Trans. Amer. Math. Soc. **353**
+  (2001) 3465–3509.
+* [NN08] D. Naidu, D. Nikshych. *Lagrangian subcategories and braided
+  tensor equivalences of twisted quantum doubles of finite groups.*
+  Comm. Math. Phys. **279** (2008) 845–872. arXiv:0705.0665.
+* [EG18] D. E. Evans, T. Gannon. *Reconstruction and local extensions
+  for twisted group doubles, and permutation orbifolds.*
+  arXiv:1804.11145.
+* [Ell08] G. Ellis. *HAP — Homological Algebra Programming.* GAP
+  package, 2004– .
+* [Qui71] D. Quillen. *The mod-2 cohomology rings of extra-special
+  2-groups and the spinor groups.* Math. Ann. **194** (1971) 197–212.
+  Useful for the structure of $H^*(E_+(m); \mathbb F_2)$.
+* [AM04] A. Adem, R. J. Milgram. *Cohomology of Finite Groups.*
+  Grundlehren 309, Springer, 2nd ed. 2004. Reference for the
+  cohomology ring structure of $E_+(m)$.
+
+#### Computational state in this repository
+
+* $D_8 = E_+(1)$: full brute-force enumeration of all 16 H^3 classes;
+  $\ker \mathrm{Tr} = 0$. So the c_g triviality test is *sufficient*
+  for $\omega = 0$ on $D_8$.
+* $E_+(2)$: $|H^3| = 4096$. Per-generator linearity-based test
+  ran on all 10 generators of $H^3$; **every generator has
+  $\mathrm{Tr}(e_i) \neq 0$**. So $\ker \mathrm{Tr}$ contains no
+  free generator — necessary but not sufficient for $\ker = 0$. To
+  upgrade to "kernel exactly trivial" we still need the full Smith
+  Normal Form of the $\mathrm{Tr}$ matrix (in progress).
+* $E_+(3)$: $|H^3| \approx 7 \cdot 10^{10}$. Per-generator test
+  expected to take many hours due to the
+  $n^2 \times (n + n^2)$ augmented-system inner loop at $n = 64$.
+  Deferred behind algorithmic improvement (HAP-based cohomology of
+  cochains rather than the brute-force linear algebra solver).
+* $E_+(7)$: $|H^3|$ astronomical; per-generator evaluation requires
+  the centraliser character tables for all 16385 conjugacy classes,
+  which currently runs into GAP's `ConjugacyClasses` memory ceiling.
 
 ### Tier 5 — Frobenius–Schur indicators
 
