@@ -53,9 +53,20 @@ SetupCohomology3 := function(G)
 end;;
 
 # Standard cocycle omega : G × G × G  ->  Z/m, given a class vector
-# `vec` in (Z/m)^k.
+# `vec` in (Z/m)^k where k = number of H^3 generators.
+#
+# We build the integer cocycle as a Z-linear combination of the basis
+# cocycles UCT.cocyclebasis (each is a length-K_n.dim integer vector
+# in ker ∂_{n+1}^*).  Earlier versions used `UCT.lift * vec` which
+# produced shape-mismatched / non-cocycle output -- vec was length k
+# but `lift` expects length |ZZ|.
 StandardCocycleOf := function(setup, vec)
-    return StandardCocycle(setup.R, setup.UCT.lift * vec, 3, setup.exponent);
+    local v, i;
+    v := ListWithIdenticalEntries(setup.K!.dimension(3), 0);
+    for i in [1..Length(vec)] do
+        v := v + vec[i] * setup.UCT.cocyclebasis[i];
+    od;
+    return StandardCocycle(setup.R, v, 3, setup.exponent);
 end;;
 
 # ----------------------------------------------------------------------
