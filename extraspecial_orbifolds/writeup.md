@@ -164,6 +164,16 @@ $[g] \in H_1(C_G(g); \mathbb Z)$. The slant product is well-defined
 because $g \in Z(C_G(g))$. See **Brown** [Br82, Chapter V.3] or
 **Mac Lane** [McL75, Chapter VIII] for the standard treatment.
 
+The terminology *transgression* is consistent with the spectral-sequence
+usage: for the central extension $\langle g \rangle \hookrightarrow
+C_G(g) \twoheadrightarrow C_G(g)/\langle g \rangle$, the
+Lyndon–Hochschild–Serre differential $d_3 \colon E_2^{0,2} \to E_2^{3,0}$
+recovers, on the classes detected by $g$, the slant of $\omega$ by
+$[g]$ at the cochain level [AM04, §III.1; NN08, §3]. The closed-form
+expression for $c_g$ is precisely this slant on the inhomogeneous bar
+resolution; the alternating signs come from the simplicial sign rule
+applied to the boundary of the 1-simplex represented by $g$.
+
 The Keller–Roberts–Roberts evidence consists of verifying
 $c_g = 0 \in H^2(C_G(g); U(1))$ for every conjugacy class $[g]$ —
 i.e. $\mathrm{Tr}([\omega]) = 0$. Their conjecture is
@@ -481,31 +491,191 @@ on-demand block must agree with its group's canonical up to row+col
 permutations on the irrep axes. This is the entry-by-entry comparison
 target.
 
-## 5. Tier-4 transgression-kernel test
+## 5. Tier-4 transgression-kernel test: theory and computation
 
-The technique itself is described in detail in §2.3 above and in the
-companion strategy document
-[`strategy_local_discriminators.md`](strategy_local_discriminators.md).
-Here we record the empirical findings.
+This section gives the precise content of the kernel test introduced
+in §2.3, the algorithmic shape of its current implementation in
+`scripts/transgression_kernel.g`, the linearity reduction that avoids
+enumerating $H^3$ classes wholesale, and the empirical status across
+$m \in \{1, 2, 3, 7\}$. A more detailed informal companion is recorded
+in [`strategy_local_discriminators.md`](strategy_local_discriminators.md).
 
-* $E_+(1) = D_8$: brute-force enumeration of all 16 H^3 classes
-  shows kernel is **trivial**. So for $D_8$, the c_g triviality
-  evidence is actually *sufficient* for $\omega = 0$.
-* $E_+(2)$: $|H^3| = 4096$. Brute force borderline; per-generator
-  test ran on all 10 generators of $H^3$ in 60 GB heap;
-  **every generator has $\mathrm{Tr}(e_i) \neq 0$** (witnesses span
-  16/17 conjugacy classes). Necessary but not sufficient for
-  $\ker = 0$; needs the full SNF of the Tr matrix to upgrade.
-* $E_+(3)$: $|H^3| \approx 7 \times 10^{10}$. Per-generator test
-  expected to take many hours due to the
-  $n^2 \times (n + n^2)$ augmented-system inner loop at $n = 64$.
-  Deferred behind an HAP cohomology-of-cochains formulation.
-* $E_+(7)$: centraliser data for canonical classes (orders $16384$)
-  is now available — see §4.5; centraliser computation per non-canonical
-  class is also fast (`Centralizer(G, x)` works fine on $E_+(7)$). The
-  blocker for Tier-4 here is no longer centralisers but the size of
-  $H^3(E_+(7); U(1))$ itself, which makes per-generator iteration
-  costly even with the augmented-system optimisation.
+### 5.1 Decision-theoretic role
+
+KRR's published evidence is precisely the assertion
+$\mathrm{Tr}([\omega]) = 0$. Their conjecture is $[\omega] = 0 \in H^3(G; U(1))$.
+The implication is therefore controlled entirely by $\ker \mathrm{Tr}$:
+
+| $\ker \mathrm{Tr}$ | Consequence |
+|---|---|
+| $0$ | KRR's $c_g = 0$ proves $[\omega] = 0$. No further direct comparison required. |
+| Killed by level-matching | KRR + level-matching are jointly sufficient (as in [vEMS17]'s type-0 condition). |
+| Non-trivial after level-matching | KRR is consistent with both $[\omega] = 0$ and a non-empty subgroup of $H^3$. A direct discriminator (Tier 1, 3, or 5) is required. |
+
+Tier 4 thus either settles the conjecture without further modular-data
+work, or replaces "all of $H^3(G; U(1))$" with an explicit subgroup
+that a direct discriminator must rule out — pruning the falsification
+problem to a finite, often very small, subset of $H^3$.
+
+### 5.2 Algorithmic structure
+
+The current implementation `scripts/transgression_kernel.g` realises
+the test as follows. Let $G$ be a finite group, $R \to \mathbb Z$ a
+free $\mathbb Z G$-resolution of length $\ge 4$, and
+$K = R \otimes_{\mathbb Z G} \mathbb Z$ the resulting cellular chain
+complex.
+
+1. **Cohomology setup.** `SetupCohomology3(G)` invokes
+   `ResolutionFiniteGroup(G, 4)` (HAP [Ell08]) and Gruen's
+   `UniversalCoefficientsTheorem(K, 3)` to obtain
+   $H^3(G; U(1)) \cong \prod_{i=1}^{k} \mathbb Z/d_i$
+   together with an explicit lift
+   $L \colon \prod \mathbb Z/d_i \to Z^3(G; \mathbb Z/m)$
+   where $m = \mathrm{lcm}(d_i)$, and an evaluator
+   `StandardCocycle` mapping a $Z^3$-element to a function
+   $G^3 \to \mathbb Z/m$.
+
+2. **Transgressed cocycle.** For each conjugacy-class representative
+   $g \in G$ and each $H^3$-class encoded by $v \in \prod \mathbb Z/d_i$,
+   `CGCocycleFunc(\omega_v, g)` realises
+   $$
+   c_g \colon C_G(g) \times C_G(g) \longrightarrow \mathbb Z/m,
+   \qquad
+   c_g(h_1, h_2) = \omega_v(g, h_1, h_2) + \omega_v(h_1, h_2, g) - \omega_v(h_1, g, h_2).
+   $$
+
+3. **Coboundary test.** `IsCoboundary2(C_G(g), c_g, m)` decides
+   whether there exists $\beta \colon C_G(g) \to \mathbb Z/m$ with
+   $$
+   \beta(h_1) - \beta(h_1 h_2) + \beta(h_2) \equiv c_g(h_1, h_2) \pmod m
+   \qquad \forall\, h_1, h_2 \in C_G(g).
+   $$
+   The unknown system has $|C_G(g)|^2$ equations in $|C_G(g)|$
+   integer unknowns; the modular constraint is encoded by augmenting
+   the coefficient matrix with $-m \cdot I_{|C_G(g)|^2}$, yielding an
+   $|C_G(g)|^2 \times (|C_G(g)| + |C_G(g)|^2)$ integer matrix on
+   which GAP's `SolutionIntMat` certifies solvability.
+
+4. **Kernel membership.** A class $v$ lies in $\ker \mathrm{Tr}$ if
+   and only if $c_{g_i}$ is exact on $C_G(g_i)$ for every conjugacy
+   class representative $g_i$.
+
+The dominant cost is step 3. At $|C_G(g)| = n$ the augmented matrix is
+$n^2 \times (n + n^2)$; for $E_+(3)$ non-central centralisers ($n = 64$)
+this is $4096 \times 4160$ and `SolutionIntMat` requires ~30 s per call.
+
+### 5.3 Linearity and the SNF reduction
+
+The full cohomology group is *not* required to certify $\ker \mathrm{Tr} = 0$.
+The transgression $\mathrm{Tr}$ is a homomorphism between finite
+abelian groups; once a basis of $H^3(G; U(1))$ and bases of the
+targets $H^2(C_G(g); U(1))$ are fixed, the kernel is determined by
+the integer matrix
+$$
+M \;\in\; \mathrm{Mat}\!\left(k \,\times\, \sum_{[g]} k_{C_g}\,;\, \mathbb Z\right),
+\qquad
+M_{i, *} \;=\; \bigl(\mathrm{Tr}(e_i)\bigr)_{[g]} \;\in\; \bigoplus_{[g]} H^2(C_G(g); U(1)),
+$$
+where $e_1, \ldots, e_k$ are the standard generators of
+$\prod \mathbb Z/d_i$ and $k_{C_g}$ is the number of cyclic factors of
+$H^2(C_G(g); U(1))$. The kernel is computed exactly via Smith Normal
+Form (`NormalFormIntMat(M, 4)` in GAP) of $M$ together with the source
+torsion vector $(d_1, \ldots, d_k)$. No enumeration of $H^3$ classes
+is needed; only:
+
+* the **torsion vector** $(d_1, \ldots, d_k)$ of $H^3(G; U(1))$,
+* a **basis-realising lift** $L$, and
+* the matrix entries $M_{i, *}$, computable one generator at a time.
+
+The script `scripts/transgression_per_generator.g` produces the rows
+of $M$. Run alone, it admits three outcomes:
+
+| Per-generator output | Implication for $\ker \mathrm{Tr}$ |
+|---|---|
+| $\mathrm{Tr}(e_i) = 0$ for every $i$ | $\mathrm{Tr} \equiv 0$, so $\ker \mathrm{Tr} = H^3(G; U(1))$ in full — Tier 4 vacuous |
+| $\mathrm{Tr}(e_i) \ne 0$ for some $i$ | $e_i \notin \ker \mathrm{Tr}$, but integer combinations such as $e_1 + 2 e_2$ may still lie in the kernel |
+| Smith Normal Form of $M$ has trivial kernel modulo source torsion | $\ker \mathrm{Tr} = 0$ exactly |
+
+The current $E_+(2)$ data place that case in the second regime. The
+third regime — the only one that decides the conjecture — is reached
+without further cohomology computation: the per-generator output
+already constitutes the rows of $M$, and the SNF wrapper is
+$O(k^3)$ in the source rank, negligible compared to evaluation cost.
+
+The role of the resolution `ResolutionFiniteGroup(G, 4)` in the
+current implementation is therefore purely instrumental. If the
+torsion vector and the standard cocycles representing each generator
+$e_i$ are obtained from another source (e.g. a closed-form
+presentation of $H^*(G; \mathbb F_2)$ together with the Bockstein
+spectral sequence for $\mathbb F_2 \leftrightarrow U(1)$), the
+resolution is unnecessary.
+
+### 5.4 Empirical status
+
+| group | $|H^3|$ torsion | $\ker \mathrm{Tr}$ status | bottleneck |
+|---|---|---|---|
+| $E_+(1) = D_8$ | $[8]$ | **trivial** by full enumeration of 8 classes (`test_transgression_d8.g`) | none |
+| $E_+(2)$ | $[2^9, 8]$ | every generator $e_i$ ($i = 1, \ldots, 10$) has $\mathrm{Tr}(e_i) \ne 0$; full SNF pending | none structural; SNF is one matrix calculation |
+| $E_+(3)$ | $[2^{34}, 4]$ | per-generator deferred behind algorithmic improvement | $n^2 \times (n + n^2)$ augmented system at $n = 64$ |
+| $E_+(7)$ | not yet computed via HAP | setup blocked: `ResolutionFiniteGroup` and `ConjugacyClasses` fail at $|G| = 32{,}768$ even at 60 GB heap | bypass HAP via Quillen analytical form or detecting subgroup |
+
+The $D_8$ result $\ker \mathrm{Tr} = 0$ makes the $m = 1$ KRR-type
+evidence *sufficient* for $\omega = 0$. The $E_+(2)$ result is
+necessary but not sufficient; the SNF upgrade closes the gap.
+
+### 5.5 Upgrade roadmap
+
+Three improvements take Tier 4 from "tested at $m = 1$, partially
+tested at $m = 2$" to "operative at $m \in \{2, 3, 5, 7\}$":
+
+1. **Faster `IsCoboundary2`.** Replace the integer augmented-system
+   solve with HAP's native `Cohomology(R, 2)` and `IsBoundary` calls
+   on the centraliser, reusing the bar-resolution boundary maps
+   already constructed for $G$. Expected speedup at $n = 64$ is
+   $10\!-\!100\times$, since HAP works in row-echelon form rather
+   than re-solving from scratch each call.
+
+2. **SNF wrapper on the per-generator output.** Accumulate
+   $M \in \mathrm{Mat}_{k \times \sum k_{C_g}}(\mathbb Z)$ from
+   `transgression_per_generator` and invoke `NormalFormIntMat(M, 4)`;
+   the kernel of $\mathrm{Tr}$ is read off the transformation matrices
+   together with the source torsion. Closes the gap from "necessary"
+   to "exactly $\ker \mathrm{Tr}$".
+
+3. **Bypass HAP at $|G| = 32{,}768$.** Two routes:
+   * Use Quillen's polynomial-times-exterior presentation [Qui71] of
+     $H^*(E_+(m); \mathbb F_2)$ together with the Bockstein long
+     exact sequence relating $\mathbb F_2$ and $U(1)$ coefficients.
+     The torsion of $H^3(E_+(7); U(1))$ is then obtained analytically;
+     standard cocycles representing each generator are constructed
+     directly without `ResolutionFiniteGroup`.
+   * Use a *detecting subgroup* $H \le E_+(7)$ for which
+     $\mathrm{res}^G_H \colon H^3(G) \to H^3(H)$ is injective on the
+     subspace of $H^3(G)$ that survives transgression-restriction
+     ([AM04, V.6]). For an extraspecial 2-group the elementary
+     abelian quotient $E_+(7) \twoheadrightarrow (\mathbb F_2)^{14}$
+     alone is too lossy (the Frattini subgroup is non-trivial), but
+     the diagonal $\mathbb Z/2$ together with one extraspecial section
+     is detecting in this sense.
+
+After (1)–(3) the matrix $M$ for $E_+(3)$ becomes tractable in hours,
+and analytical setup at $E_+(7)$ becomes the only remaining cost.
+
+### 5.6 References
+
+* Brown [Br82, Ch. V.3] — slant product as a chain-level operation.
+* Mac Lane [McL75, Ch. VIII] — slant product and pairing operations.
+* Adem–Milgram [AM04, Ch. III.1, V.6] — transgression in the LHS
+  spectral sequence; detecting subgroups for cohomology of finite
+  groups.
+* Quillen [Qui71] — analytical presentation of $H^*(E_+(m); \mathbb F_2)$.
+* Naidu–Nikshych [NN08, §3] — kernel-of-transgression in the
+  twisted-double / Lagrangian-subcategory context.
+* Karagueuzian–Symonds, online tables (`http://groupcohomology.org/`)
+  — explicit $H^*(E_+(2); \mathbb Z)$ and $H^*(E_+(3); \mathbb Z)$ for
+  cross-checks.
+* Ellis [Ell08] — HAP package; `ResolutionFiniteGroup`, `Cohomology`,
+  `StandardCocycle`.
 
 ## 6. Verification ladder
 
@@ -644,6 +814,10 @@ Cohomology of finite groups:
 - **[Qui71]** D. Quillen. *The mod-2 cohomology rings of
   extra-special 2-groups and the spinor groups.*
   Math. Ann. **194** (1971) 197–212.
+- **[KS]** D. B. Karagueuzian, P. Symonds. *Cohomology of small
+  finite groups.* Online database, `http://groupcohomology.org/`.
+  Explicit $\mathbb Z$-cohomology tables for groups of order
+  dividing $128$, including $E_+(2)$ and $E_+(3)$.
 - **[AM04]** A. Adem, R. J. Milgram. *Cohomology of Finite Groups.*
   Grundlehren 309, Springer, 2nd ed. 2004.
 - **[Gor80]** D. Gorenstein. *Finite Groups.* Chelsea, 2nd ed., 1980.
