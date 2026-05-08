@@ -2181,3 +2181,40 @@ Updates and revisions:
 - Decision-point outcomes may add or remove later issues; the
   dispatcher scripts will record the relevant deltas to this
   document for traceability.
+
+### 15.1 Per-issue execution template
+
+The canonical TDD template every agent should follow when picking
+up an issue is recorded at
+[`docs/superpowers/plans/2026-05-08-issue-T-1-tdd.md`](../docs/superpowers/plans/2026-05-08-issue-T-1-tdd.md).
+Copy its structure (failing test → minimal impl → regression →
+benchmark → close) and substitute your issue's specifics.
+
+For doc-only issues (e.g. `W-1a`), skip the failing-test pattern
+and structure the plan as outline → draft → revise → commit.
+
+For math-heavy issues (the Q workstream in particular), include a
+"verify against published reference" step before the implementation
+step — Quillen [Qui71] for cohomology presentations,
+Iovanov–Mason–Ng [IMN14] for FS-indicator formulas, etc.
+
+### 15.2 Agent dispatch protocol
+
+For each `ready`-labelled issue:
+
+1. An agent claims it by adding the `in progress` label and
+   removing `ready`, with a comment "Claimed by &lt;agent ID&gt;".
+2. The agent works in a feature branch
+   `&lt;workstream&gt;/&lt;issue-id&gt;-&lt;short-slug&gt;` (e.g.
+   `T/T-1-hap-native-iscoboundary2`).
+3. The agent follows the TDD template at
+   `docs/superpowers/plans/2026-05-08-issue-T-1-tdd.md`.
+4. On completion, the agent opens a PR closing the issue and
+   triggers `scripts/dispatch/relabel_on_close.sh &lt;issue-id&gt;`
+   to advance dependents.
+
+The relabel hook is *not* automated by a GitHub Action at present;
+the closing agent must invoke it manually after the PR merges.
+Adding a `workflow_dispatch` action wrapper around it is a
+nice-to-have but is deferred until at least one Wave-0 issue
+closes and we observe whether the manual flow is sufficient.
