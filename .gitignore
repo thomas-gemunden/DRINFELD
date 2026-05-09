@@ -29,5 +29,8 @@
 **/scripts/*.output
 **/scripts/*.log
 
+# Allow spike output captures (small, committed alongside the spike script)
+!extraspecial_orbifolds/scripts/solver/spikes/*.out
+
 # Large canonical-block files for m >= 7 (multi-GB)
 extraspecial_orbifolds/computed/E_plus_7/structural/canonical_blocks.g

@@ -1,0 +1,59 @@
+#I  polymake command not found. Please set POLYMAKE_COMMAND by hand
+#I  HAP warning: Set NEATO_PATH manually if needed.
+#I  HAP warning: Set DOT_PATH manually if needed.
+#I  HAP warning: Set DISPLAY_PATH manually if needed.
+#I  HAP warning: Set BROWSER_PATH manually if needed.
+#I  HAP warning: Set ASY_PATH manually if needed.
+=== Probe: which Bockstein/Steenrod names are actually bound?
+  SteenrodAlgebraOperations: NOT bound
+  Sq: bound
+  Sq1: NOT bound
+  Bockstein: bound
+  BocksteinHomomorphism: NOT bound
+  Mod2SteenrodAlgebra: bound
+  ModPSteenrodAlgebra: bound
+  BocksteinHomology: bound
+  HAP_bockstein: bound
+  HAP_chain_bockstein: bound
+  ModPRingGenerators: bound
+
+=== Build mod-2 Steenrod algebra of D_8 up to degree 4
+  A = Algebra( GF(2), [ v.1, v.2, v.3, v.4, v.5, v.6, v.7, v.8, v.9, v.10, 
+  v.11, v.12, v.13, v.14, v.15, v.16, v.17, v.18, v.19, v.20, v.21 ] )
+  ModPRingGenerators(A) = [ v.1, v.2, v.3, v.4 ]
+  degrees                = [ 0, 1, 1, 2 ]
+
+=== Sq^1 = Bockstein on degree-1 generators of H^*(D_8; F_2)
+  degree-1 generators: [ v.2, v.3 ]
+The Bockstein operation is not defined for this algebra.
+    Sq^1(v.2) = fail
+    Sq(A,1,v.2) = v.4+v.5
+The Bockstein operation is not defined for this algebra.
+    Sq^1(v.3) = fail
+    Sq(A,1,v.3) = v.6
+
+=== Cross-check on a degree-2 element (Sq^1 of a square)
+  y = v.2^2 (degree 2)
+The Bockstein operation is not defined for this algebra.
+  Sq^1(y)  = fail
+  Sq(A,1,y) = 0*v.1
+
+=== Outcome
+HAP exposes Sq^1 cleanly via Sq(A, 1, w) where
+    A := Mod2SteenrodAlgebra(G, N).
+Concretely on D_8 = SmallGroup(8,3) with generators v.2, v.3 in
+degree 1 we get Sq^1(v.2) = v.4 + v.5 and Sq^1(v.3) = v.6,
+and the Cartan relation Sq^1(v.2^2) = 2 v.2 Sq^1(v.2) = 0 mod 2
+checks out.
+
+Caveat: the higher-level wrapper Bockstein(A, w) prints
+'The Bockstein operation is not defined for this algebra.'
+and returns fail on Mod2SteenrodAlgebra output, even though
+Sq(A, 1, w) works on the same A. This appears to be because
+Mod2SteenrodAlgebra populates A!.squares[2] but on this code
+path A!.bockstein is not bound (cf. steenrod.gi lines 215-216).
+Workaround for downstream Tasks: prefer Sq(A, 1, w) over
+Bockstein(A, w). Both are documented HAP entry points.
+
+The plan's guessed names (SteenrodAlgebraOperations, ops.Sq1)
+are NOT the HAP API.
