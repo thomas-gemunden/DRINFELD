@@ -1,0 +1,29 @@
+#I  polymake command not found. Please set POLYMAKE_COMMAND by hand
+#I  HAP warning: Set NEATO_PATH manually if needed.
+#I  HAP warning: Set DOT_PATH manually if needed.
+#I  HAP warning: Set DISPLAY_PATH manually if needed.
+#I  HAP warning: Set BROWSER_PATH manually if needed.
+#I  HAP warning: Set ASY_PATH manually if needed.
+Finished loading Modular Data.g
+Syntax warning: Unbound global variable in transgression_kernel.g:120
+    sol := AugmentedSolve(A, b, m, n);
+           ^^^^^^^^^^^^^^
+Syntax warning: Unbound global variable in transgression_kernel.g:130
+        List([1..n_eq], j -> If_(i = j, -m, 0))));
+                             ^^^
+E_+(2) torsion = [ 2, 2, 2, 2, 2, 2, 2, 2, 2, 8 ]
+exp = 8
+expected_divisor = exp/2 = 4
+Using class 5: rep order = 2, class size = 2
+|C_G(gRep)| = 16
+  e_1: bad = 0 (out of 256); values seen = [ 0, 4 ]
+  e_2: bad = 0 (out of 256); values seen = [ 0, 4 ]
+  e_3: bad = 0 (out of 256); values seen = [ 0 ]
+  e_4: bad = 0 (out of 256); values seen = [ 0, 4 ]
+  e_5: bad = 0 (out of 256); values seen = [ 0 ]
+  e_6: bad = 0 (out of 256); values seen = [ 0, 4 ]
+  e_7: bad = 0 (out of 256); values seen = [ 0, 4 ]
+  e_8: bad = 0 (out of 256); values seen = [ 0, 4 ]
+  e_9: bad = 0 (out of 256); values seen = [ 0, 4 ]
+
+All order-2 c_g values are 4-divisible: true
