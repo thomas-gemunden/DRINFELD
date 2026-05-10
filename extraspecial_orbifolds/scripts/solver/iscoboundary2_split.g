@@ -40,18 +40,28 @@ fi;
 ChangeDirectoryCurrent(ic2split_target);;
 Read("mod2_solver.g");
 Read("z4_fallback.g");
+Read("iterated_bockstein.g");
 ChangeDirectoryCurrent(Filename(ic2split_orig_dir, ""));;
 
 IsCoboundary2Split := function(C, c_g, vec, setup)
-    local i, exp_index, r, c_prime;
+    local i, exp_index, r, c_prime, k;
     # Find the index of the order-exp generator (if any). Position returns
     # the FIRST match; in the canonical case there is exactly one entry of
     # setup.torsion equal to setup.exponent, so this is unambiguous.
     exp_index := Position(setup.torsion, setup.exponent);
 
     # Path Z: vec touches the order-exp generator (non-zero coordinate).
+    # When setup.exponent is a power of 2, route to the fast iterated
+    # Bockstein solver (IsCoboundary2Z2k); otherwise fall back to the slow
+    # Z/exp baseline (IsCoboundary2Zexp). The power-of-2 case covers the
+    # canonical extraspecial-orbifold setting.
     if exp_index <> fail and vec[exp_index] <> 0 then
-        return IsCoboundary2Zexp(C, c_g, setup.exponent);
+        k := LogInt(setup.exponent, 2);
+        if 2^k = setup.exponent then
+            return IsCoboundary2Z2k(C, c_g, k);
+        else
+            return IsCoboundary2Zexp(C, c_g, setup.exponent);
+        fi;
     fi;
 
     # Path A: all non-zero coordinates are at order-2 generators.
