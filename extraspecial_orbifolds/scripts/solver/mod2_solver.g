@@ -8,30 +8,49 @@
 # Builds the boundary system A·beta = b over GF(2) and runs SolutionMat.
 # Spike-confirmed at 1 ms / 10 ms for |H| = 64 / 128.
 
-IsCoboundary2Mod2 := function(H, c)
-    local elts, n, idx, A, b, i, j, ij, row, sol, zero, one;
+# BoundaryMatrixGF2(H) — n^2 x n GF(2) matrix A where row (i, j) (linearised
+# as (i-1)*n+j) encodes the constraint
+#   β(elts[i]) + β(elts[i]*elts[j]) + β(elts[j]) = c(elts[i], elts[j])  (mod 2).
+# Equivalently, column k of A is δ(1_{elts[k]}) viewed as a length-n² vector,
+# so the column space of A is B²(H; F_2) ⊆ C²(H; F_2). Used by both
+# IsCoboundary2Mod2 (solving A·β = b) and IsCoboundary2Mod2WithLift (where
+# the row space of TransposedMat(A) is the boundary subspace we add to im(β)
+# for cohomology-level membership testing).
+BoundaryMatrixGF2 := function(H)
+    local elts, n, idx, A, i, j, ij, row, zero, one;
     elts := AsList(H);
     n := Length(elts);
     idx := function(h) return Position(elts, h); end;
     zero := Zero(GF(2));
     one  := One(GF(2));
 
-    # A: n^2 x n matrix over GF(2). Row (i, j) encodes
-    #   beta(elts[i]) + beta(elts[i]*elts[j]) + beta(elts[j]) = c(elts[i], elts[j]).
     A := List([1..n*n], i -> List([1..n], j -> zero));
-    b := List([1..n*n], i -> zero);
     for i in [1..n] do
         for j in [1..n] do
             row := (i - 1) * n + j;
             ij := idx(elts[i] * elts[j]);
-            # +beta(i) + beta(j) - beta(ij), all mod 2 -> just sum.
             A[row][i]  := A[row][i]  + one;
             A[row][j]  := A[row][j]  + one;
             A[row][ij] := A[row][ij] + one;
-            b[row]     := (c(elts[i], elts[j]) mod 2) * one;
         od;
     od;
     ConvertToMatrixRep(A, GF(2));
+    return A;
+end;;
+
+IsCoboundary2Mod2 := function(H, c)
+    local elts, n, A, b, i, j, sol, one;
+    elts := AsList(H);
+    n := Length(elts);
+    one  := One(GF(2));
+
+    A := BoundaryMatrixGF2(H);
+    b := List([1..n*n], i -> Zero(GF(2)));
+    for i in [1..n] do
+        for j in [1..n] do
+            b[(i - 1) * n + j] := (c(elts[i], elts[j]) mod 2) * one;
+        od;
+    od;
     ConvertToVectorRep(b, GF(2));
 
     # SolutionMat solves x * M = b. We have A * beta = b, equivalent to
@@ -100,4 +119,50 @@ BocksteinH1ToH2 := function(C)
     fi;
     ConvertToMatrixRep(vecs, GF(2));
     return BaseMat(vecs);
+end;;
+
+# IsCoboundary2Mod2WithLift(C, c'_g) — does [c'_g] in H^2(C; F_2) lie in image(β)?
+#
+# Equivalent (per the SES LES 0 -> F_2 -·²-> Z/4 -> F_2 -> 0) to: does the
+# cocycle c_g = (exp/2) · c'_g lift to a Z/exp coboundary on C? Returns true if
+# yes — covering both [c'_g] = 0 (early-returned via IsCoboundary2Mod2) and
+# [c'_g] ≠ 0 but in image(β).
+#
+# Algorithm: build vec ∈ F_2^{n²} from c. Then [vec] ∈ im(β) ⊆ H^2(C; F_2) iff
+#   vec ∈ span(BocksteinH1ToH2(C)) + B²(C; F_2)
+# at the cochain level. Stack the image basis and the boundary subspace
+# (rows of TransposedMat(BoundaryMatrixGF2(C))) into one matrix M and run
+# SolutionMat against vec. The boundary subspace is necessary because the
+# rows of BocksteinH1ToH2 only span im(β) modulo B² — concretely, on
+# Z/2 × Z/2 with α := α₁+α₂, β(α) differs from β(α₁)+β(α₂) by the
+# coboundary α₁∪α₂ + α₂∪α₁, so a row-span-only check would falsely reject
+# β(α).
+IsCoboundary2Mod2WithLift := function(C, c)
+    local elts, n, vec, i, j, img, B, M, one;
+    if IsCoboundary2Mod2(C, c) then return true; fi;
+
+    elts := AsList(C);
+    n := Length(elts);
+    one := One(GF(2));
+    vec := List([1..n*n], i -> Zero(GF(2)));
+    for i in [1..n] do
+        for j in [1..n] do
+            vec[(i-1)*n + j] := (c(elts[i], elts[j]) mod 2) * one;
+        od;
+    od;
+    ConvertToVectorRep(vec, GF(2));
+
+    img := BocksteinH1ToH2(C);
+    # Boundary subspace of C²(C; F_2): rows of TransposedMat(A) where A is
+    # the n²×n boundary matrix (column space of A = B²).
+    B := TransposedMat(BoundaryMatrixGF2(C));
+
+    if img = [] then
+        M := B;
+    else
+        M := Concatenation(img, B);
+        ConvertToMatrixRep(M, GF(2));
+    fi;
+
+    return SolutionMat(M, vec) <> fail;
 end;;
