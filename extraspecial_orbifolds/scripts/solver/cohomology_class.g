@@ -70,14 +70,10 @@ ProjectToH2Basis := function(C, c_vec, exp)
     # is cheap.
     h2 := GroupCohomology(C, 2);
     r := Length(h2);
-    if r = 0 then
-        # H^2(C; Z) trivial: the coordinate vector is empty, but the test
-        # expects a non-empty list to call ForAll on. Return [0] so the
-        # ForAll predicate is vacuously true and the caller can still see
-        # "no nontrivial classes" without crashing.
-        return [0];
-    fi;
     if all_zero then
+        # ForAll([], _) = true in GAP, so r = 0 (trivial H^2) returns []
+        # cleanly; downstream stacking via Concatenation handles empty
+        # without phantom columns.
         return ListWithIdenticalEntries(r, 0);
     fi;
     Error("ProjectToH2Basis: real projection not yet implemented for ",
