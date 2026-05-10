@@ -5,42 +5,31 @@
 # by enumerating the (finite) H^3 classes and asking the public dispatcher
 # IsCoboundary2Split whether each per-class restriction c_g is a coboundary.
 #
-# Implementation choice: brute-force enumeration.
+# Implementation: brute-force enumeration with a per-class cocycle-basis
+# cache. The original plan (lines 896-973) called for an SNF-based approach;
+# brute force is correct as-is for E_+(2)-scale computations and avoids the
+# stubbed ProjectToH2Basis.
 #
-#   The original plan called for an SNF-based approach that projects each
-#   per-class 2-cocycle onto a fixed Z/exp basis of H^2(C; Z/exp), stacks
-#   these vectors into a matrix, and intersects ker(M) with the torsion
-#   lattice. That route requires a real (non-stub) ProjectToH2Basis in
-#   cohomology_class.g and the cell-to-group cochain translation through
-#   HAP's resolution structure — both deferred.
+# Why per-class basis caching matters (issue #62):
 #
-#   The brute-force route is correct as-is: the dispatcher's boolean is
-#   exactly the cohomology test we need. For the rung-1 anchor (D_8, 16
-#   classes × 5 conjugacy classes) and the rung-3 anchor (E_+(2), 4096
-#   classes × 17 conjugacy classes; expected kernel size 2048) it is
-#   easily within the time budget.
+#   omega(g, h, k) = sum_i vec[i] * basis[i](g, h, k) is Z-linear in vec.
+#   Per class g, c_g(h, k) = omega(g, h, k) - omega(h, g, k) + omega(h, k, g)
+#   is also linear in vec. So per class we can precompute an (n^2 x k)
+#   integer matrix M_g such that c_g(h_a, h_b) = (M_g * vec)[(a-1)*n+b].
 #
-#   For E_+(3) (T-2 design target, ~2^34 classes × 65 conjugacy classes
-#   ≈ 7e10 evaluations) brute force is NOT feasible; the proper SNF
-#   approach plus the BRW-orbit reduction (PR2) is required there.
-#   That work is OUT OF SCOPE for this task and is documented as a
-#   known limitation.
+#   Without the cache, every (vec, class) inner-step does n^2 HAP cocycle
+#   evaluations (~0.36 ms each on E_+(2) centralisers); with the cache it's
+#   one matrix-vector product. Profile in #62 shows ~100x speedup, bringing
+#   T13 (E_+(2) anchor) from ~100 min to ~1 min wall.
 #
 # Returned record fields:
-#   .setup       — SetupCohomology3(G) (so callers can reuse the cocycle data)
-#   .classes     — ConjugacyClasses(G) (in GAP's iteration order)
-#   .kernel      — list of NON-zero kernel coordinate vectors
-#                  (the zero vector is always in the kernel and is
-#                   intentionally excluded from this list, matching the
-#                   plan's convention "Length(result.kernel) = 0 iff the
-#                   transgression kernel is trivial")
-#   .kernel_size — total count of kernel elements, including the zero
-#                  cocycle (so kernel_size = 1 + Length(kernel))
+#   .setup       — SetupCohomology3(G)
+#   .classes     — ConjugacyClasses(G)
+#   .kernel      — list of NON-zero kernel coordinate vectors (zero excluded)
+#   .kernel_size — total count including zero (so 1 + Length(kernel))
 #
-# Read-path note: this file is intended to be Read either directly from
-# solver/ or from solver/tests/. It pulls in iscoboundary2_split.g, which
-# uses the same CWD-shim pattern internally. We replicate the shim here so
-# we can locate iscoboundary2_split.g from either entry point.
+# Read-path note: this file uses a CWD shim consistent with iscoboundary2_split.g
+# so it works whether Read from solver/ or from solver/tests/.
 snf_wrapper_orig_dir := DirectoryCurrent();;
 snf_wrapper_target := fail;;
 for snf_wrapper_try in [".", "..", "../.."] do
@@ -57,21 +46,90 @@ ChangeDirectoryCurrent(snf_wrapper_target);;
 Read("iscoboundary2_split.g");
 ChangeDirectoryCurrent(Filename(snf_wrapper_orig_dir, ""));;
 
+# Per-class cocycle-basis cache. For class g, returns the n^2 x k integer
+# matrix M_g whose row (a-1)*n+b column i is
+#   omega_i(gRep, elts[a], elts[b])
+# - omega_i(elts[a], gRep, elts[b])
+# + omega_i(elts[a], elts[b], gRep),
+# where omega_i := StandardCocycle(setup.R, basis[i], 3, exp). The result rec
+# also stores the ordered element list and an index map for O(log n) lookup.
+BuildPerClassCocycleBasis := function(setup, gRep, C)
+    local elts, n, basis, k, exp, omegas, table, idx_map, a, b, r, i;
+    elts := AsList(C);
+    n := Length(elts);
+    basis := setup.UCT.cocyclebasis;
+    k := Length(basis);
+    exp := setup.UCT.exponent;
+    omegas := List([1..k],
+                   i -> StandardCocycle(setup.R, basis[i], 3, exp));
+    table := List([1..n*n], r -> List([1..k], i -> 0));
+    for a in [1..n] do
+        for b in [1..n] do
+            r := (a-1)*n + b;
+            for i in [1..k] do
+                table[r][i] := omegas[i](gRep, elts[a], elts[b])
+                             - omegas[i](elts[a], gRep, elts[b])
+                             + omegas[i](elts[a], elts[b], gRep);
+            od;
+        od;
+    od;
+    idx_map := NewDictionary(elts[1], true, elts);
+    for a in [1..n] do
+        AddDictionary(idx_map, elts[a], a);
+    od;
+    return rec(C := C, table := table, elts := elts, n := n,
+               idx_map := idx_map);
+end;;
+
+# Make a c_g closure that does a fast dictionary lookup against the
+# precomputed integer table.
+MakeCgFromCache := function(c_g_table, cache)
+    return function(h, kk)
+        return c_g_table[(LookupDictionary(cache.idx_map, h) - 1) * cache.n
+                         + LookupDictionary(cache.idx_map, kk)];
+    end;
+end;;
+
 TransgressionKernelExact := function(G)
-    local setup, classes, kernel_vecs, vec, omega, all_zero,
-          j, gRep, C, c_g, zero_vec;
+    local setup, classes, k, n_classes, caches, t_cache, kernel_vecs, vec,
+          all_zero, j, cache, c_g_table, c_g_func, zero_vec, t_solve;
     setup := SetupCohomology3(G);
     classes := ConjugacyClasses(G);
+    n_classes := Length(classes);
+    k := Length(setup.torsion);
 
+    Print("TransgressionKernelExact: building per-class basis caches for ",
+          n_classes, " classes...\n");
+    t_cache := Runtime();
+    caches := List([1..n_classes],
+                   j -> BuildPerClassCocycleBasis(
+                            setup,
+                            Representative(classes[j]),
+                            Centralizer(G, Representative(classes[j]))));
+    Print("Caches built in ", (Runtime() - t_cache) / 1000., " s.\n");
+    Print("Enumerating ",
+          Product(setup.torsion), " cocycle classes x ",
+          n_classes, " centralisers...\n");
+
+    t_solve := Runtime();
     kernel_vecs := [];
     for vec in Cartesian(List(setup.torsion, t -> [0..t-1])) do
-        omega := StandardCocycleOf(setup, vec);
         all_zero := true;
-        for j in [1..Length(classes)] do
-            gRep := Representative(classes[j]);
-            C := Centralizer(G, gRep);
-            c_g := CGCocycleFunc(omega, gRep);
-            if not IsCoboundary2Split(C, c_g, vec, setup) then
+        for j in [1..n_classes] do
+            cache := caches[j];
+            c_g_table := List(cache.table,
+                              row -> Sum([1..k], i -> vec[i] * row[i]));
+            # Early-return: if c_g is identically zero mod exp, it is the
+            # zero cocycle and trivially a coboundary. This always holds
+            # for the identity class (where c_g(h, k) = omega(id, h, k) -
+            # omega(h, id, k) + omega(h, k, id) = 0 for normalized omega),
+            # which would otherwise cost ~1.1 s per Path Z vec on E_+(2)
+            # via SolutionIntMat (issue #62 diagnostic).
+            if ForAll(c_g_table, x -> x mod setup.exponent = 0) then
+                continue;
+            fi;
+            c_g_func := MakeCgFromCache(c_g_table, cache);
+            if not IsCoboundary2Split(cache.C, c_g_func, vec, setup) then
                 all_zero := false;
                 break;
             fi;
@@ -80,10 +138,8 @@ TransgressionKernelExact := function(G)
             Add(kernel_vecs, vec);
         fi;
     od;
+    Print("Solve loop: ", (Runtime() - t_solve) / 1000., " s.\n");
 
-    # Drop the zero vector: it's vacuously in the kernel and the plan's
-    # convention is that result.kernel is the list of NON-zero kernel
-    # elements (so Length = 0 iff the kernel is trivial).
     zero_vec := List(setup.torsion, t -> 0);
     return rec(setup       := setup,
                classes     := classes,
