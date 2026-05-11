@@ -53,23 +53,52 @@ ChangeDirectoryCurrent(Filename(snf_wrapper_orig_dir, ""));;
 # + omega_i(elts[a], elts[b], gRep),
 # where omega_i := StandardCocycle(setup.R, basis[i], 3, exp). The result rec
 # also stores the ordered element list and an index map for O(log n) lookup.
+#
+# Hot-loop optimisation: the original implementation built `omegas` as k
+# separate HAP closures and called each per (a, b) triple, doing the same
+# Syzygy(R, [...]) chain encoding k times redundantly. Profile on the
+# stalled E_+(3) run (/tmp/a3a_sample.txt) showed 75 % of CPU in `PosPlist`
+# inside HAP's Syzygy. HAP's StandardCocycle(R, f, n, q) computes
+#     Syzygy(R, [g, h, k]) -> signed integer list S over [1..R.dim(n)]
+#     v[|x|] += sign(x)                                  (length-R.dim(n))
+#     return (v * f) mod q.
+# Hoisting Syzygy out of the i-loop reduces the call count k-fold (here
+# k = 35 H^3 generators for E_+(3)). The dot product `contrib * basis[i]`
+# replaces a fresh Syzygy + sum.
 BuildPerClassCocycleBasis := function(setup, gRep, C)
-    local elts, n, basis, k, exp, omegas, table, idx_map, a, b, r, i;
+    local elts, n, basis, k, exp, R, ncells, table, idx_map,
+          a, b, r, i, ChainAt, v1, v2, v3, contrib;
     elts := AsList(C);
     n := Length(elts);
     basis := setup.UCT.cocyclebasis;
     k := Length(basis);
     exp := setup.UCT.exponent;
-    omegas := List([1..k],
-                   i -> StandardCocycle(setup.R, basis[i], 3, exp));
+    R := setup.R;
+    ncells := R!.dimension(3);
+
+    # Chain-level encoding of a triple: same `v` StandardCocycle builds
+    # internally, before the dot product with the cocycle vector.
+    ChainAt := function(g, h, kk)
+        local S, v, x;
+        S := Syzygy(R, [g, h, kk]);
+        Apply(S, x -> x[1]);
+        v := ListWithIdenticalEntries(ncells, 0);
+        for x in S do
+            v[AbsoluteValue(x)] := v[AbsoluteValue(x)] + SignInt(x);
+        od;
+        return v;
+    end;
+
     table := List([1..n*n], r -> List([1..k], i -> 0));
     for a in [1..n] do
         for b in [1..n] do
             r := (a-1)*n + b;
+            v1 := ChainAt(gRep, elts[a], elts[b]);
+            v2 := ChainAt(elts[a], gRep, elts[b]);
+            v3 := ChainAt(elts[a], elts[b], gRep);
+            contrib := v1 - v2 + v3;   # in Z^ncells
             for i in [1..k] do
-                table[r][i] := omegas[i](gRep, elts[a], elts[b])
-                             - omegas[i](elts[a], gRep, elts[b])
-                             + omegas[i](elts[a], elts[b], gRep);
+                table[r][i] := (contrib * basis[i]) mod exp;
             od;
         od;
     od;
