@@ -296,10 +296,26 @@ end;;
 #                     M_y is a well-defined endomorphism of prod Z/d_i.
 # ---------------------------------------------------------------------
 
+# P-5 (#114): module-level cache. BRWH3Action(m) is independent of the
+# H^3 generator index being tested, but the driver `run_e_plus_3_kernel.g`
+# calls PerGeneratorTransgressionBRW(G, i) for i in [1..35], and the
+# original implementation rebuilt the whole action from scratch each
+# time -- including ~35 SolutionIntMat calls per BRW generator in
+# H3MatrixOfAutomorphism. The profile (perf/reports/eplus3_per_generator_brw_one_gen.md)
+# showed 50 % GC + 21 % LtPlist + 14 % EqPlist all inside that HNF /
+# integer-solve machinery. We cache by m so the action builds once
+# per GAP session.
+_brw_h3_action_cache := rec();;
+
 BRWH3Action := function(m)
-    local em, brw, setup, torsion, k, brw_gens, matrices, i, y, phi,
-          M_y, valid_endos;
+    local key, em, brw, setup, torsion, k, brw_gens, matrices, i, y, phi,
+          M_y, valid_endos, result;
     Assert(0, m >= 1, "m must be a positive integer");
+
+    key := Concatenation("m", String(m));
+    if IsBound(_brw_h3_action_cache.(key)) then
+        return _brw_h3_action_cache.(key);
+    fi;
 
     em := EmGroup(m);
     brw := BRW(m);
@@ -319,7 +335,7 @@ BRWH3Action := function(m)
         Add(valid_endos, IsValidH3Endomorphism(M_y, torsion));
     od;
 
-    return rec(
+    result := rec(
         m := m,
         em := em,
         brw := brw,
@@ -330,4 +346,6 @@ BRWH3Action := function(m)
         matrices := matrices,
         valid_endos := valid_endos
     );
+    _brw_h3_action_cache.(key) := result;
+    return result;
 end;;

@@ -132,11 +132,21 @@ end;;
 #   .image_subgroup : Group(perms) ⊆ Sym(n_classes)
 # ---------------------------------------------------------------------
 
+# P-5 (#114): module-level cache, mirroring BRWH3Action. Independent
+# of the H^3 generator index; rebuilt 35x by the driver in the
+# original implementation.
+_brw_conjugacy_action_cache := rec();;
+
 BRWConjugacyAction := function(m)
-    local em, brw, classes, reps, class_sizes, class_orders,
+    local key, em, brw, classes, reps, class_sizes, class_orders,
           class_elements, types, orbit_partition, gens, perms,
-          image_lists, y, p, image_list, image_subgroup, n, i;
+          image_lists, y, p, image_list, image_subgroup, n, i, result;
     Assert(0, m >= 1, "m must be a positive integer");
+
+    key := Concatenation("m", String(m));
+    if IsBound(_brw_conjugacy_action_cache.(key)) then
+        return _brw_conjugacy_action_cache.(key);
+    fi;
 
     em := EmGroup(m);
     brw := BRW(m);
@@ -169,7 +179,7 @@ BRWConjugacyAction := function(m)
 
     image_subgroup := Group(perms);
 
-    return rec(
+    result := rec(
         m := m,
         em := em,
         brw := brw,
@@ -186,6 +196,8 @@ BRWConjugacyAction := function(m)
         image_lists := image_lists,
         image_subgroup := image_subgroup
     );
+    _brw_conjugacy_action_cache.(key) := result;
+    return result;
 end;;
 
 # ---------------------------------------------------------------------
