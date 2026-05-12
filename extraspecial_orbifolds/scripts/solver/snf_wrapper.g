@@ -91,35 +91,66 @@ BuildPerClassCocycleBasis := function(setup, gRep, C)
     R := setup.R;
     ncells := R!.dimension(3);
 
-    # Pre-build a position dictionary on R!.elts so the inner Position
-    # scans in Syzygy go from O(|R.elts|) to O(log).  Memoised per call;
-    # the cache is keyed off setup.R, so callers building multiple basis
-    # caches for the same G can avoid the rebuild by stashing R!.pos_dict.
+    # Pre-build a sorted-position table for R!.elts using explicit binary
+    # search.  The earlier NewDictionary attempt (commit 4c6f10c) chose a
+    # list-based backend, which devolved LookupDictionary to a Position
+    # scan -- profile (/tmp/a3a_sample_v3.txt) confirmed PosPlist still
+    # 75 % of CPU after that change.  Explicit binary search guarantees
+    # O(log |G|) per lookup independent of GAP's dictionary heuristics.
+    #
+    # `sorted_pairs[k] = [sorted_elt, original_position_in_R.elts]`,
+    # sorted by the first component.  A small inline binary search
+    # returns the original position for any x in R!.elts (or fail).
     R_elts := R!.elts;
-    if IsBound(R!.pos_dict) then
-        pos_dict := R!.pos_dict;
+    if IsBound(R!.sorted_pairs) then
+        pos_dict := R!.sorted_pairs;
     else
-        pos_dict := NewDictionary(R_elts[1], true, R_elts);
-        for i in [1..Length(R_elts)] do
-            AddDictionary(pos_dict, R_elts[i], i);
-        od;
-        R!.pos_dict := pos_dict;
+        pos_dict := List([1..Length(R_elts)], i -> [R_elts[i], i]);
+        Sort(pos_dict, function(a, b) return a[1] < b[1]; end);
+        R!.sorted_pairs := pos_dict;
     fi;
 
     FastElts := function(x)
-        return LookupDictionary(pos_dict, x);
+        local lo, hi, mid, key;
+        lo := 1; hi := Length(pos_dict);
+        while lo <= hi do
+            mid := QuoInt(lo + hi, 2);
+            key := pos_dict[mid][1];
+            if key < x then
+                lo := mid + 1;
+            elif x < key then
+                hi := mid - 1;
+            else
+                return pos_dict[mid][2];
+            fi;
+        od;
+        Error("FastElts: ", x, " not in R!.elts");
     end;
 
     FastMult := function(x, w)
-        local out, y, idx;
+        local out, y, lo, hi, mid, target, key, found;
         out := [];
         for y in w do
-            idx := LookupDictionary(pos_dict, x * R_elts[y[2]]);
-            if idx = fail then
+            target := x * R_elts[y[2]];
+            lo := 1; hi := Length(pos_dict);
+            found := fail;
+            while lo <= hi do
+                mid := QuoInt(lo + hi, 2);
+                key := pos_dict[mid][1];
+                if key < target then
+                    lo := mid + 1;
+                elif target < key then
+                    hi := mid - 1;
+                else
+                    found := pos_dict[mid][2];
+                    break;
+                fi;
+            od;
+            if found = fail then
                 Error("FastMult: x * R.elts[", y[2],
                       "] not in R.elts; group/resolution mismatch?");
             fi;
-            Add(out, [y[1], idx]);
+            Add(out, [y[1], found]);
         od;
         return out;
     end;
