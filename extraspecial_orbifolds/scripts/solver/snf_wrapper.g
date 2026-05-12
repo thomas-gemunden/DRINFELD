@@ -54,20 +54,35 @@ ChangeDirectoryCurrent(Filename(snf_wrapper_orig_dir, ""));;
 # where omega_i := StandardCocycle(setup.R, basis[i], 3, exp). The result rec
 # also stores the ordered element list and an index map for O(log n) lookup.
 #
-# Hot-loop optimisation: the original implementation built `omegas` as k
-# separate HAP closures and called each per (a, b) triple, doing the same
-# Syzygy(R, [...]) chain encoding k times redundantly. Profile on the
-# stalled E_+(3) run (/tmp/a3a_sample.txt) showed 75 % of CPU in `PosPlist`
-# inside HAP's Syzygy. HAP's StandardCocycle(R, f, n, q) computes
-#     Syzygy(R, [g, h, k]) -> signed integer list S over [1..R.dim(n)]
+# Hot-loop optimisations (two-stage):
+#
+# Stage 1 (k-fold reduction in Syzygy calls). The original implementation
+# built `omegas` as k separate HAP closures and called each per (a, b)
+# triple, doing the same Syzygy(R, [...]) chain encoding k times
+# redundantly. Profile on the stalled E_+(3) run (/tmp/a3a_sample.txt)
+# showed 75 % of CPU in `PosPlist` inside HAP's Syzygy. HAP's
+# StandardCocycle(R, f, n, q) computes
+#     Syzygy(R, [g, h, k]) -> signed integer list S
 #     v[|x|] += sign(x)                                  (length-R.dim(n))
 #     return (v * f) mod q.
-# Hoisting Syzygy out of the i-loop reduces the call count k-fold (here
-# k = 35 H^3 generators for E_+(3)). The dot product `contrib * basis[i]`
+# Hoisting Syzygy out of the i-loop reduces the call count k-fold (for
+# E_+(3) k = 35 H^3 generators). The dot product `contrib * basis[i]`
 # replaces a fresh Syzygy + sum.
+#
+# Stage 2 (Position-dict for R!.elts). A second sample (/tmp/a3a_sample_v2.txt)
+# after stage 1 showed PosPlist still dominant. HAP's Syzygy internals
+# (syzygy.gi) do Position(R!.elts, x) linear scans on every Elts/Mult call,
+# recursively for n=1,2,3. For E_+(3), |R!.elts| = 128 and each n=3 Syzygy
+# triggers ~12 scans. We replace those by a NewDictionary-based lookup
+# table (FastChainAt below), giving O(log|G|) instead of O(|G|/2) per
+# element resolution — a further ~|G|/(2 log|G|) ≈ 9x speedup at |G|=128.
+#
+# Combined: ~k * 9 = 315x at |G|=128, |C|=64, k=35.
 BuildPerClassCocycleBasis := function(setup, gRep, C)
-    local elts, n, basis, k, exp, R, ncells, table, idx_map,
-          a, b, r, i, ChainAt, v1, v2, v3, contrib;
+    local elts, n, basis, k, exp, R, ncells, table, idx_map, R_elts,
+          pos_dict, a, b, r, i, FastElts, FastMult, FastHomotopy,
+          FastSyzygy1, FastSyzygy2, FastSyzygy3, FastChainAt,
+          v1, v2, v3, contrib;
     elts := AsList(C);
     n := Length(elts);
     basis := setup.UCT.cocyclebasis;
@@ -76,11 +91,80 @@ BuildPerClassCocycleBasis := function(setup, gRep, C)
     R := setup.R;
     ncells := R!.dimension(3);
 
-    # Chain-level encoding of a triple: same `v` StandardCocycle builds
-    # internally, before the dot product with the cocycle vector.
-    ChainAt := function(g, h, kk)
+    # Pre-build a position dictionary on R!.elts so the inner Position
+    # scans in Syzygy go from O(|R.elts|) to O(log).  Memoised per call;
+    # the cache is keyed off setup.R, so callers building multiple basis
+    # caches for the same G can avoid the rebuild by stashing R!.pos_dict.
+    R_elts := R!.elts;
+    if IsBound(R!.pos_dict) then
+        pos_dict := R!.pos_dict;
+    else
+        pos_dict := NewDictionary(R_elts[1], true, R_elts);
+        for i in [1..Length(R_elts)] do
+            AddDictionary(pos_dict, R_elts[i], i);
+        od;
+        R!.pos_dict := pos_dict;
+    fi;
+
+    FastElts := function(x)
+        return LookupDictionary(pos_dict, x);
+    end;
+
+    FastMult := function(x, w)
+        local out, y, idx;
+        out := [];
+        for y in w do
+            idx := LookupDictionary(pos_dict, x * R_elts[y[2]]);
+            if idx = fail then
+                Error("FastMult: x * R.elts[", y[2],
+                      "] not in R.elts; group/resolution mismatch?");
+            fi;
+            Add(out, [y[1], idx]);
+        od;
+        return out;
+    end;
+
+    # AddFreeWords/NegateWord are HAP globals (lib/Words/*.gi). They take
+    # word lists [[sign, idx], ...]; the dict shim above keeps the same
+    # representation, so the originals work unchanged.
+    FastHomotopy := function(i, w)
+        local ans, x;
+        ans := [];
+        for x in w do
+            ans := AddFreeWords(ans, R!.homotopy(i, x));
+        od;
+        return ans;
+    end;
+
+    # Replicate the structure of HAP's Syzygy (lib/Homology/syzygy.gi)
+    # for n in {1, 2, 3} with dict-cached Position lookups.
+    FastSyzygy1 := function(g)
+        local Syz;
+        Syz := [[1, FastElts(g[1])]];
+        Syz := AddFreeWords(Syz, [[-1, FastElts(g[1] * g[1]^-1)]]);
+        return FastHomotopy(0, Syz);
+    end;
+
+    FastSyzygy2 := function(g)
+        local Syz;
+        Syz := FastSyzygy1([g[1]]);
+        Syz := AddFreeWords(Syz, FastMult(g[1], FastSyzygy1([g[2]])));
+        Syz := AddFreeWords(Syz, NegateWord(FastSyzygy1([g[1] * g[2]])));
+        return FastHomotopy(1, Syz);
+    end;
+
+    FastSyzygy3 := function(g)
+        local Syz;
+        Syz := FastMult(g[1], FastSyzygy2([g[2], g[3]]));
+        Syz := AddFreeWords(Syz, FastSyzygy2([g[1], g[2] * g[3]]));
+        Syz := AddFreeWords(Syz, NegateWord(FastSyzygy2([g[1] * g[2], g[3]])));
+        Syz := AddFreeWords(Syz, NegateWord(FastSyzygy2([g[1], g[2]])));
+        return FastHomotopy(2, Syz);
+    end;
+
+    FastChainAt := function(g, h, kk)
         local S, v, x;
-        S := Syzygy(R, [g, h, kk]);
+        S := FastSyzygy3([g, h, kk]);
         Apply(S, x -> x[1]);
         v := ListWithIdenticalEntries(ncells, 0);
         for x in S do
@@ -93,9 +177,9 @@ BuildPerClassCocycleBasis := function(setup, gRep, C)
     for a in [1..n] do
         for b in [1..n] do
             r := (a-1)*n + b;
-            v1 := ChainAt(gRep, elts[a], elts[b]);
-            v2 := ChainAt(elts[a], gRep, elts[b]);
-            v3 := ChainAt(elts[a], elts[b], gRep);
+            v1 := FastChainAt(gRep, elts[a], elts[b]);
+            v2 := FastChainAt(elts[a], gRep, elts[b]);
+            v3 := FastChainAt(elts[a], elts[b], gRep);
             contrib := v1 - v2 + v3;   # in Z^ncells
             for i in [1..k] do
                 table[r][i] := (contrib * basis[i]) mod exp;
