@@ -160,9 +160,17 @@ end;;
 
 
 # --- pivalues table --------------------------------------------------------
+#
+# P-3 (#112): the pi-values depend only on the context (G, omega), NOT
+# on the class g being tested. The original `FSIAllAtClass` rebuilt
+# this table on every call -- a length-|G| iteration through
+# ValuesOfPiSymbols per class. Cache it on the context.
 FSIPiValues := function(ctx)
-    return List(ctx.listG, x ->
-                ValuesOfPiSymbols(ctx.G, ctx.R, ctx.K, ctx.UCT, x, ctx.f));
+    if not IsBound(ctx.pi_values_cache) then
+        ctx.pi_values_cache := List(ctx.listG, x ->
+            ValuesOfPiSymbols(ctx.G, ctx.R, ctx.K, ctx.UCT, x, ctx.f));
+    fi;
+    return ctx.pi_values_cache;
 end;;
 
 
