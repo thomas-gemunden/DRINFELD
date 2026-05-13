@@ -3,7 +3,7 @@
 # BRWConjugacyAction rebuild entirely.
 
 ChangeDirectoryCurrent(
-    "/Users/thomasgemunden/Projects/group_cohomology/DRINFELD-wt-p5/extraspecial_orbifolds/scripts");
+    "/Users/thomasgemunden/Projects/group_cohomology/DRINFELD-wt-p5b/extraspecial_orbifolds/scripts");
 
 Read("transgression_kernel.g");
 Read("transgression_per_generator_brw.g");
