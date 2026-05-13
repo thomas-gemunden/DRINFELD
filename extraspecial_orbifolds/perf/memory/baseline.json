@@ -1,0 +1,26 @@
+{
+  "_meta": {
+    "comment": "P-7 (issue #115) memory baseline. Populate by running ./memory_runner.sh <workload> and then `python3 compare_memory.py record <workload> memory/<workload>.jsonl`. The values below are placeholders derived from the workloads' wall times in perf/reports/ — replace with real measurements before relying on CI regression checks.",
+    "machine": "TBD (record GAP version, OS, hardware)",
+    "gap_version": "TBD",
+    "recorded_utc": "TBD"
+  },
+  "eplus3_build_per_class_cocycle_basis": {
+    "peak_rss_mb": 0.0,
+    "end_rss_mb": 0.0,
+    "mean_rss_mb": 0.0,
+    "wall_s": 128
+  },
+  "eplus3_iscoboundary2_one_call": {
+    "peak_rss_mb": 0.0,
+    "end_rss_mb": 0.0,
+    "mean_rss_mb": 0.0,
+    "wall_s": 127
+  },
+  "eplus3_per_gen_brw_two_calls": {
+    "peak_rss_mb": 0.0,
+    "end_rss_mb": 0.0,
+    "mean_rss_mb": 0.0,
+    "wall_s": 1891
+  }
+}
