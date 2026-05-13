@@ -60,28 +60,45 @@
 # The output is a 3D list N[i][j][k]. Caller may verify integrality.
 
 FusionCoefficientsFromS := function(S)
-    local r, N, i, j, k, a, val, s1;
+    local r, N, i, Sbar_T, lambdas, a, s1, S_scaled, j;
     r := Length(S);
     if r = 0 then
         return [];
     fi;
     s1 := S[1];
-    N := List([1 .. r],
-              i -> List([1 .. r],
-                        j -> ListWithIdenticalEntries(r, 0)));
+
+    # P-4 (#113) optimisation. The original triple-nested-loop Verlinde
+    # sum was O(r^4) cyclotomic multiplications in GAP-interpreter loops,
+    # which V-5c hit on E_+(2) (r = 184, 1.15 billion ops, ~minutes wall).
+    # Reformulate as a triple matrix product per i:
+    #
+    #   M_i = S * D_i * Sbar^T,
+    #   where D_i = diag(lambda_i),  lambda_i[a] = S[i][a] / S[1][a].
+    #
+    # Then M_i[j][k] = sum_a S[j][a] * lambda_i[a] * Sbar[k][a] = N[i][j][k].
+    # Computed via GAP's native matrix multiply (much faster than the
+    # interpreter loop): scale each column of S by lambda_i[a]
+    # (a Hadamard row-wise pass, O(r^2)), then multiply by Sbar^T
+    # (O(r^3) with native code). Total per i: O(r^3); total all i:
+    # O(r^4) ops, but using BLAS-like primitives.
+
+    Sbar_T := TransposedMat(List(S, row -> List(row, ComplexConjugate)));
+    N := [];
+
     for i in [1 .. r] do
-        for j in [1 .. r] do
-            for k in [1 .. r] do
-                val := 0;
-                for a in [1 .. r] do
-                    if s1[a] <> 0 then
-                        val := val + S[i][a] * S[j][a]
-                                     * ComplexConjugate(S[k][a]) / s1[a];
-                    fi;
-                od;
-                N[i][j][k] := val;
-            od;
+        # lambda_i[a] = S[i][a] / s1[a] if s1[a] <> 0 else 0
+        lambdas := [];
+        for a in [1 .. r] do
+            if s1[a] <> 0 then
+                lambdas[a] := S[i][a] / s1[a];
+            else
+                lambdas[a] := 0;
+            fi;
         od;
+        # Scale each column of S by lambda_i, then multiply by Sbar^T.
+        S_scaled := List(S, row ->
+            List([1 .. r], a -> row[a] * lambdas[a]));
+        Add(N, S_scaled * Sbar_T);
     od;
     return N;
 end;
