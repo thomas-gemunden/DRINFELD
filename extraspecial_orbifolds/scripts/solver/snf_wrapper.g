@@ -65,9 +65,32 @@ ChangeDirectoryCurrent(Filename(snf_wrapper_orig_dir, ""));;
 # Hoisting Syzygy out of the i-loop reduces the call count k-fold (here
 # k = 35 H^3 generators for E_+(3)). The dot product `contrib * basis[i]`
 # replaces a fresh Syzygy + sum.
+_basis_cache_by_class := rec();;
+# Cache `BuildPerClassCocycleBasis` results across generator calls.
+# Profile (perf/raw/eplus3_per_gen_brw_two_calls.txt) showed the
+# `BRWH3Action` cache from P-5 (#119) only saved ~4 % of per-call wall,
+# because the dominant ~96 % is in 4x `BuildPerClassCocycleBasis` calls
+# (one per BRW orbit). The table built by this function depends only on
+# (setup, gRep, C) -- NOT on the H^3 generator index `i`. The driver
+# loops i in [1..35] and rebuilds the 4 tables every time, for 140
+# total builds vs the optimal 4.
+#
+# Cache key: a string concatenating identifiers of (G, gRep, C).
+# `String(gRep)` + `String(IdGroup(C))` is enough to disambiguate the
+# orbit reps within a fixed G; the driver always works with one G.
+
 BuildPerClassCocycleBasis := function(setup, gRep, C)
-    local elts, n, basis, k, exp, R, ncells, table, idx_map,
-          a, b, r, i, ChainAt, v1, v2, v3, contrib;
+    local key, elts, n, basis, k, exp, R, ncells, table, idx_map,
+          a, b, r, i, ChainAt, v1, v2, v3, contrib, result;
+
+    key := Concatenation("G", String(IdGroup(setup.group)),
+                         "_g", String(gRep),
+                         "_C", String(IdGroup(C)),
+                         "_n", String(Size(C)));
+    if IsBound(_basis_cache_by_class.(key)) then
+        return _basis_cache_by_class.(key);
+    fi;
+
     elts := AsList(C);
     n := Length(elts);
     basis := setup.UCT.cocyclebasis;
@@ -106,8 +129,10 @@ BuildPerClassCocycleBasis := function(setup, gRep, C)
     for a in [1..n] do
         AddDictionary(idx_map, elts[a], a);
     od;
-    return rec(C := C, table := table, elts := elts, n := n,
-               idx_map := idx_map);
+    result := rec(C := C, table := table, elts := elts, n := n,
+                  idx_map := idx_map);
+    _basis_cache_by_class.(key) := result;
+    return result;
 end;;
 
 # Make a c_g closure that does a fast dictionary lookup against the
