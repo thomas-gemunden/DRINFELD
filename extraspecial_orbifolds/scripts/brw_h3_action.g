@@ -134,6 +134,26 @@ ConjugationAutomorphism := function(em, y)
     return phi;
 end;;
 
+# P-11 (#130): when em is the PC-group form of EmGroup(m) and y is a
+# matrix in BRW(m), neither y * g_pc * y^{-1} nor GroupHomomorphismByImages
+# works directly because y and g_pc live in different parents. Translate
+# generators through iso_em (matrix -> pc) for the conjugation.
+#
+# Caller contract: `em_pc = Image(iso_em)`, `iso_em : em_matrix -> em_pc`.
+# `y` is an element of the (matrix-form) BRW group acting on em_matrix
+# by conjugation. The returned phi is an automorphism em_pc -> em_pc.
+ConjugationAutomorphismThroughIso := function(em_pc, iso_em, y)
+    local gens_pc, images_pc, phi;
+    gens_pc := GeneratorsOfGroup(em_pc);
+    images_pc := List(gens_pc, g_pc ->
+        Image(iso_em, y * PreImagesRepresentative(iso_em, g_pc) * y^(-1)));
+    phi := GroupHomomorphismByImages(em_pc, em_pc, gens_pc, images_pc);
+    if phi = fail then
+        Error("ConjugationAutomorphismThroughIso: y is not an automorphism");
+    fi;
+    return phi;
+end;;
+
 # ---------------------------------------------------------------------
 # Aut(prod Z/d_i): the abelian-group automorphisms of the product of
 # cyclic groups with orders torsion = [d_1, ..., d_k]. We use the
@@ -308,8 +328,8 @@ end;;
 _brw_h3_action_cache := rec();;
 
 BRWH3Action := function(m)
-    local key, em, brw, setup, torsion, k, brw_gens, matrices, i, y, phi,
-          M_y, valid_endos, result;
+    local key, em_mat, iso_em, em, brw, setup, torsion, k, brw_gens,
+          matrices, i, y, phi, M_y, valid_endos, result;
     Assert(0, m >= 1, "m must be a positive integer");
 
     key := Concatenation("m", String(m));
@@ -317,10 +337,18 @@ BRWH3Action := function(m)
         return _brw_h3_action_cache.(key);
     fi;
 
-    em := EmGroup(m);
-    brw := BRW(m);
+    # P-11 (#130): EmGroup(m) returns a matrix group. HAP's resolution
+    # and centraliser machinery are ~3000x slower on matrix groups than
+    # on pc-groups of the same size (we measured >10 h vs ~2 min on
+    # E_+(3) BuildPerClassCocycleBasis). Convert via IsomorphismPcGroup
+    # once and use the pc-form for ALL HAP-bound work; BRW itself stays
+    # a matrix group (it isn't naturally a pc-group).
+    em_mat := EmGroup(m);
+    iso_em := IsomorphismPcGroup(em_mat);
+    em := Image(iso_em);   # pc-group form of E_+(m)
+    brw := BRW(m);         # matrix group; acts on em_mat by conjugation
 
-    setup := SetupCohomology3(em);
+    setup := SetupCohomology3(em);  # builds HAP resolution on em (pc) -- fast
     torsion := setup.torsion;
     k := setup.num_generators;
 
@@ -329,7 +357,8 @@ BRWH3Action := function(m)
     valid_endos := [];
     for i in [1..Length(brw_gens)] do
         y := brw_gens[i];
-        phi := ConjugationAutomorphism(em, y);
+        # y is a matrix; em is pc. Conjugate through iso_em.
+        phi := ConjugationAutomorphismThroughIso(em, iso_em, y);
         M_y := H3MatrixOfAutomorphism(setup, phi);
         Add(matrices, M_y);
         Add(valid_endos, IsValidH3Endomorphism(M_y, torsion));
@@ -338,6 +367,8 @@ BRWH3Action := function(m)
     result := rec(
         m := m,
         em := em,
+        em_matrix := em_mat,
+        iso_em := iso_em,
         brw := brw,
         setup := setup,
         torsion := torsion,

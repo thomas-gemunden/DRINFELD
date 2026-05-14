@@ -138,9 +138,10 @@ end;;
 _brw_conjugacy_action_cache := rec();;
 
 BRWConjugacyAction := function(m)
-    local key, em, brw, classes, reps, class_sizes, class_orders,
-          class_elements, types, orbit_partition, gens, perms,
-          image_lists, y, p, image_list, image_subgroup, n, i, result;
+    local key, em_mat, iso_em, em, brw, classes, reps, class_sizes,
+          class_orders, class_elements, types, orbit_partition, gens,
+          perms, image_lists, y, p, image_list, image_subgroup, n, i,
+          result;
     Assert(0, m >= 1, "m must be a positive integer");
 
     key := Concatenation("m", String(m));
@@ -148,7 +149,13 @@ BRWConjugacyAction := function(m)
         return _brw_conjugacy_action_cache.(key);
     fi;
 
-    em := EmGroup(m);
+    # P-11 (#130): em is the pc-group form of EmGroup(m). HAP's
+    # downstream work (resolutions, centralisers) is ~3000x faster on
+    # pc-groups than on matrix groups. BRW(m) stays a matrix group; its
+    # conjugation action on em (pc) is translated through iso_em.
+    em_mat := EmGroup(m);
+    iso_em := IsomorphismPcGroup(em_mat);
+    em := Image(iso_em);
     brw := BRW(m);
 
     classes := ConjugacyClasses(em);
@@ -167,11 +174,14 @@ BRWConjugacyAction := function(m)
     image_lists := [];
     for i in [1..Length(gens)] do
         y := gens[i];
-        # Inline computation so we share precomputed lookup data
-        # (class_elements/class_orders) across all i values.
+        # y is a matrix in BRW; classes are pc-group classes. Translate:
+        # iso_em(y * iso_em^{-1}(rep_pc) * y^{-1}) is the pc-image of the
+        # conjugate.
         image_list := List([1..n], k ->
-            ClassIndexOf(y * reps[k] * y^(-1),
-                         class_elements, class_orders));
+            ClassIndexOf(
+                Image(iso_em,
+                      y * PreImagesRepresentative(iso_em, reps[k]) * y^(-1)),
+                class_elements, class_orders));
         Add(image_lists, image_list);
         p := PermList(image_list);
         Add(perms, p);
@@ -182,6 +192,8 @@ BRWConjugacyAction := function(m)
     result := rec(
         m := m,
         em := em,
+        em_matrix := em_mat,
+        iso_em := iso_em,
         brw := brw,
         classes := classes,
         reps := reps,
