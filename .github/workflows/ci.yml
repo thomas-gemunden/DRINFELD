@@ -24,13 +24,23 @@ jobs:
       - name: Install HAP
         run: gap -q -b -c 'LoadPackage("hap"); QUIT;'
 
-      - name: Make runner executable
-        run: chmod +x ./run_tests.sh
+      - name: Make scripts executable
+        run: chmod +x ./run_tests.sh ./extraspecial_orbifolds/perf/compare_timings.py
 
       - name: Run regression suite
         run: ./run_tests.sh
         env:
           FAST: "1"
+          TIMING_DIR: "/tmp"
+
+      - name: Perf-regression gate (P-8)
+        # Compare per-test wall times against
+        # extraspecial_orbifolds/perf/test_baselines.json. Fails the
+        # workflow if any test regresses >20% vs the committed median.
+        # Tests with placeholder baselines (wall_s_median <= 0) are
+        # skipped with a WARN, not a FAIL -- so unpopulated entries are
+        # safe.
+        run: python3 ./extraspecial_orbifolds/perf/compare_timings.py compare /tmp
 
       - name: Upload test logs on failure
         if: failure()
@@ -38,4 +48,12 @@ jobs:
         with:
           name: test-logs
           path: /tmp/test_*.log
+          if-no-files-found: ignore
+
+      - name: Upload timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-timings
+          path: /tmp/test_*.timing
           if-no-files-found: ignore
