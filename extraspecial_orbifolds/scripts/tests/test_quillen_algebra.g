@@ -130,12 +130,18 @@ CheckEqual("distributive (x+y)*x", prod, expected);
 #   deg 0: {1}                 dim 1
 #   deg 1: {y_1, y_2}          dim 2
 #   deg 2: {y_1 y_2, c}; with relation y_1 y_2 = c, basis = {c}, dim 1.
-#   deg 3: {c y_1, c y_2}; (y_1 y_2 y_1 = 0 since y_1^2 = 0; same for
-#          y_1 y_2 y_2)          dim 2
-#   deg 4: {c^2, c y_1 y_2}; with y_1 y_2 = c, c y_1 y_2 = c^2; basis
-#          = {c^2}              dim 1
-#   deg 5: {c^2 y_1, c^2 y_2}; (c y_1 y_2 y_1 = 0 etc.) dim 2
-#   pattern: 1, 2, 1, 2, 1, 2, ...
+#   deg 3: c y_1 = y_1 y_2 · y_1 = y_1^2 y_2 = 0 (exterior). Same for
+#          c y_2. So dim 0.
+#   deg 4: c^2 = c · y_1 y_2 = y_1 y_2 · y_1 y_2 = y_1^2 y_2^2 = 0.
+#          Likewise c y_1 y_2 = c · c = 0. dim 0.
+#   deg 5+: all monomials reduce to 0 via similar applications.  dim 0.
+#   Sequence: [1, 2, 1, 0, 0, 0, 0, ...].
+#
+# (The algebra is genuinely finite-dim: F_2[c] ⊗ Λ(y_1, y_2) is
+# 4-dim over the F_2-span {1, y_1, y_2, c, c y_1, c y_2, ...},
+# i.e. has Hilbert series (1+t)^2 / (1-t^2) = (1+t)/(1-t); modulo the
+# regular element c + y_1 y_2 the Hilbert series multiplies by
+# (1 - t^2), giving (1+t)^2 = 1 + 2t + t^2.)
 
 Print("\nSmoke 2: Lambda(y1, y2) tensor F_2[c] with deg(c)=2, ");
 Print("relation y1 y2 = c.\n");
@@ -151,10 +157,10 @@ A2 := PolynomialTimesExterior(
 CheckEqual("smoke2 dim 0", DimensionInDegree(A2, 0), 1);
 CheckEqual("smoke2 dim 1", DimensionInDegree(A2, 1), 2);
 CheckEqual("smoke2 dim 2", DimensionInDegree(A2, 2), 1);
-CheckEqual("smoke2 dim 3", DimensionInDegree(A2, 3), 2);
-CheckEqual("smoke2 dim 4", DimensionInDegree(A2, 4), 1);
-CheckEqual("smoke2 dim 5", DimensionInDegree(A2, 5), 2);
-CheckEqual("smoke2 dim 6", DimensionInDegree(A2, 6), 1);
+CheckEqual("smoke2 dim 3", DimensionInDegree(A2, 3), 0);
+CheckEqual("smoke2 dim 4", DimensionInDegree(A2, 4), 0);
+CheckEqual("smoke2 dim 5", DimensionInDegree(A2, 5), 0);
+CheckEqual("smoke2 dim 6", DimensionInDegree(A2, 6), 0);
 
 # Basis in deg 2 should be a 1-element list whose element reduces to c.
 B2_2 := BasisInDegree(A2, 2);;

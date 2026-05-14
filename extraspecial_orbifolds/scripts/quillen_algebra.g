@@ -36,11 +36,20 @@
 # appropriate multiple of r from f. This terminates because every
 # subtraction strictly decreases the largest monomial (in the graded
 # order) of f, and within bounded degree the monomial set is finite.
-# For correctness of `BasisInDegree`, the user-supplied relations need
-# not form a Gröbner basis: we reduce every degree-d monomial against
-# the given relations and then take the F_2 row span of the results.
-# Over F_2 this gives the correct basis dimension regardless of
-# whether the relations are Gröbner-reduced.
+# `QuillenReduce` gives a normal form modulo the leading-term reduction
+# rule, NOT a canonical form modulo the whole ideal; the two coincide
+# only when the relations form a Gröbner basis.
+#
+# `BasisInDegree`, however, IS correct for arbitrary (non-Gröbner)
+# relations. It uses the ideal-span method: directly enumerate
+# {r · μ : r ∈ relations, deg(r · μ) = d}, row-reduce them, and read
+# off the basis of the quotient as the non-pivot monomials of S_d.
+# This works regardless of whether the relations are Gröbner-reduced;
+# the Q-2a canonical Quillen presentation and the Q-2a Jena
+# transcription both rely on this property (their relations are
+# regular sequences in S(V*) per [Q4] Cor 2.6 but NOT Gröbner bases —
+# e.g. for E_+(2) the S-polynomial S(Q, B(x,x²)) generates a new
+# ideal element).
 
 # ---- F_2 linear algebra (local copy; we do NOT pull in qforms_f2.g
 # to keep this module self-contained) ---------------------------------
@@ -412,45 +421,40 @@ QuillenMultiply := function(A, e1, e2)
 end;;
 
 # Return an F_2-basis of the degree-d component of A. Each basis
-# element is an element (sorted list of monomials).
+# element is the singleton [m_i] where m_i is a representative monomial.
 #
-# Strategy: enumerate every degree-d monomial m, reduce m mod the
-# ideal, collect the resulting reduced elements as rows of an F_2
-# matrix indexed by monomials, RREF, return the span basis.
+# Strategy (ideal-span method): the degree-d component of S/J is
+# S_d / (J ∩ S_d), so we compute J ∩ S_d directly by enumerating
+# {r · μ : r ∈ relations, deg(r · μ) = d}, expressing each as a row
+# vector indexed by S_d's monomial basis, and RREF'ing to find the
+# pivot positions. Non-pivot monomials of S_d form a basis of the
+# quotient.
+#
+# Why not the per-monomial-reduce-then-row-reduce approach: that gives
+# correct dims only when the relations are Gröbner-reduced. The Q-2a
+# canonical Quillen presentation and the Jena transcription both
+# supply minimal relation sets that are regular sequences but NOT
+# Gröbner bases (the S-polynomial S(Q, B(x,x²)) generates a new
+# normal-form monomial not detected by per-monomial reduction). The
+# ideal-span method handles this correctly because it never relies
+# on reductions being unique.
 #
 # Assumes relations are HOMOGENEOUS (which the constructor expects),
-# so each reduction preserves total degree d.
+# so each r·μ has total degree d.
 BasisInDegree := function(A, d)
-    local mons, all_mons, idx_of, reduced_elts, m, r, row,
-          row_matrix, basis_elts, mon, all_set, rref, i, lt;
+    local mons, idx_of, lt, row_matrix, r, deg_r, mu_deg, mu, scaled,
+          row, mon, rref, pivot_cols, basis_elts, i;
 
     mons := QuillenAllMonomialsOfDegree(A, d);
     if Length(mons) = 0 then return []; fi;
 
-    reduced_elts := [];
-    all_set := [];
-    for m in mons do
-        r := QuillenReduce(A, [m], A.relations);
-        Add(reduced_elts, r);
-        for mon in r do
-            if not (mon in all_set) then Add(all_set, mon); fi;
-        od;
-    od;
-
-    if Length(all_set) = 0 then
-        return [];
-    fi;
-
     lt := QuillenLTMonomial(A);
-    all_mons := ShallowCopy(all_set);
-    Sort(all_mons, lt);
-
     idx_of := function(target)
         local lo, hi, mid, c;
-        lo := 1; hi := Length(all_mons);
+        lo := 1; hi := Length(mons);
         while lo <= hi do
             mid := QuoInt(lo + hi, 2);
-            c := QuillenCompareMonomials(A, all_mons[mid], target);
+            c := QuillenCompareMonomials(A, mons[mid], target);
             if   c = 0 then return mid;
             elif c < 0 then lo := mid + 1;
             else            hi := mid - 1;
@@ -459,22 +463,40 @@ BasisInDegree := function(A, d)
         return fail;
     end;
 
+    # Build the matrix W whose rows span J ∩ S_d: for each relation r
+    # and each monomial μ with deg(r · μ) = d, the product r · μ
+    # becomes one row.
     row_matrix := [];
-    for r in reduced_elts do
-        row := List([1..Length(all_mons)], k -> 0);
-        for mon in r do
-            row[idx_of(mon)] := 1;
+    for r in A.relations do
+        # Relations are homogeneous; degree = degree of any monomial.
+        deg_r := QuillenMonomialDegree(A, r[1]);
+        mu_deg := d - deg_r;
+        if mu_deg < 0 then continue; fi;
+        for mu in QuillenAllMonomialsOfDegree(A, mu_deg) do
+            scaled := QuillenScaleByMonomial(A, r, mu);
+            if Length(scaled) = 0 then continue; fi;
+            row := List([1..Length(mons)], k -> 0);
+            for mon in scaled do row[idx_of(mon)] := 1; od;
+            Add(row_matrix, row);
         od;
-        Add(row_matrix, row);
     od;
 
+    if Length(row_matrix) = 0 then
+        return List(mons, m -> [m]);
+    fi;
+
     rref := QuillenF2RREF(row_matrix);
-    basis_elts := [];
+    pivot_cols := [];
     for i in [1..rref.rank] do
         row := rref.rref[i];
-        Add(basis_elts,
-            List(Filtered([1..Length(row)], j -> row[j] = 1),
-                 j -> all_mons[j]));
+        Add(pivot_cols, First([1..Length(row)], j -> row[j] = 1));
+    od;
+
+    basis_elts := [];
+    for i in [1..Length(mons)] do
+        if not (i in pivot_cols) then
+            Add(basis_elts, [mons[i]]);
+        fi;
     od;
     return basis_elts;
 end;;
