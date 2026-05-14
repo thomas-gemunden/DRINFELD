@@ -65,10 +65,16 @@ if [[ ${#TESTS[@]} -eq 0 ]]; then
     exit 2
 fi
 
+# Per-test wall-time recording. P-8 (#116) writes /tmp/<name>.timing
+# (a single decimal number = seconds) so a downstream `compare_timings.py`
+# can flag regressions against `extraspecial_orbifolds/perf/test_baselines.json`.
+TIMING_DIR="${TIMING_DIR:-/tmp}"
+
 for t in "${TESTS[@]}"; do
     base=$(basename "$t")
     name="${base%.g}"
-    log="/tmp/${name}.log"
+    log="${TIMING_DIR}/${name}.log"
+    timing="${TIMING_DIR}/${name}.timing"
 
     if [[ "$FAST" = "1" ]] && is_slow "$base"; then
         echo "SKIP  $name"
@@ -77,11 +83,20 @@ for t in "${TESTS[@]}"; do
     fi
 
     echo "RUN   $name"
+    # `date +%s.%N` -- macOS may not support nanoseconds. Fall back to %s.
+    t_start=$(python3 -c 'import time; print("%.3f" % time.time())' 2>/dev/null || date +%s)
     if "${GAP_BIN}" -q -b "$t" > "$log" 2>&1; then
-        echo "PASS  $name"
+        t_end=$(python3 -c 'import time; print("%.3f" % time.time())' 2>/dev/null || date +%s)
+        wall=$(python3 -c "print('%.3f' % ($t_end - $t_start))" 2>/dev/null \
+               || echo "$((t_end - t_start))")
+        printf "%s\n" "$wall" > "$timing"
+        echo "PASS  $name  (${wall} s)"
         PASS=$((PASS + 1))
     else
-        echo "FAIL  $name"
+        t_end=$(python3 -c 'import time; print("%.3f" % time.time())' 2>/dev/null || date +%s)
+        wall=$(python3 -c "print('%.3f' % ($t_end - $t_start))" 2>/dev/null \
+               || echo "$((t_end - t_start))")
+        echo "FAIL  $name  (${wall} s)"
         FAIL=$((FAIL + 1))
         FAILED_TESTS+=("$name")
         echo "---- last 20 lines of $log ----"
