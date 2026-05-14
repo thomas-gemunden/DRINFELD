@@ -125,8 +125,19 @@ end;;
 # choice per class element — the formula is independent of the choice
 # because chi_i is a class function on C_G(g_i)).
 ProjectorFormula := function(W_g1, W_g2, intertwiner_data)
-    local idx, transport, i, j, total, ord, elts_i, elts_j, ts_i, ts_j,
-          ai, bi, a, b, t_a, s_b, b_in_C1, a_in_C2, eps, chi1_val, chi2_val;
+    local idx, transport, i, j, total, ord, elts_i, elts_j,
+          ts_i, ts_j, ai, bi, a, b, t_a, s_b, b_in_C1, a_in_C2,
+          eps, chi1_val, chi2_val, cen_i_elts, c, elt_to_idx_j;
+    # P-9 (#126): we have two ways to enumerate commuting (a, b)
+    # pairs in class_i × class_j:
+    #   (A) iterate a ∈ class_i, b ∈ class_j, commutation test.
+    #       Cost: |class_i| × |class_j| pair iterations, each one
+    #       pc-group commutation test.
+    #   (B) iterate a ∈ class_i, c ∈ C_G(g_i); set b = t_a c t_a^{-1};
+    #       dictionary-test b ∈ class_j.
+    #       Cost: |class_i| × |C_G(g_i)| = |G| pair iterations.
+    # (A) is faster when |class_j| < |C_G(g_i)| (smaller j-class than
+    # i-centraliser); (B) is faster otherwise. Dispatch.
     idx := intertwiner_data.idx;
     transport := intertwiner_data.transport;
     i := W_g1.class_idx;
@@ -135,26 +146,52 @@ ProjectorFormula := function(W_g1, W_g2, intertwiner_data)
     elts_j := transport[j].elements;
     ts_i := transport[i].t_of;
     ts_j := transport[j].t_of;
+    cen_i_elts := AsList(idx.centralisers[i]);
+    elt_to_idx_j := transport[j].elt_to_idx;
     ord := idx.order;
     total := 0;
-    for ai in [1..Length(elts_i)] do
-        a := elts_i[ai];
-        t_a := ts_i[ai];
-        for bi in [1..Length(elts_j)] do
-            b := elts_j[bi];
-            if a * b <> b * a then continue; fi;
-            s_b := ts_j[bi];
-            b_in_C1 := t_a^-1 * b * t_a;     # ∈ C_G(g_1)
-            a_in_C2 := s_b^-1 * a * s_b;     # ∈ C_G(g_2)
-            eps := intertwiner_data.epsilon(W_g1.g, W_g2.g, a, b);
-            chi1_val := intertwiner_data.trace_on_W(i, W_g1.irrep_idx, b_in_C1);
-            chi2_val := intertwiner_data.trace_on_W(j, W_g2.irrep_idx, a_in_C2);
-            total := total
-                     + eps
-                     * ComplexConjugate(chi1_val)
-                     * ComplexConjugate(chi2_val);
+    if Length(elts_j) <= Length(cen_i_elts) then
+        # Path (A): iterate class_j directly.
+        for ai in [1..Length(elts_i)] do
+            a := elts_i[ai];
+            t_a := ts_i[ai];
+            for bi in [1..Length(elts_j)] do
+                b := elts_j[bi];
+                if a * b <> b * a then continue; fi;
+                s_b := ts_j[bi];
+                b_in_C1 := t_a^-1 * b * t_a;     # ∈ C_G(g_1)
+                a_in_C2 := s_b^-1 * a * s_b;     # ∈ C_G(g_2)
+                eps := intertwiner_data.epsilon(W_g1.g, W_g2.g, a, b);
+                chi1_val := intertwiner_data.trace_on_W(i, W_g1.irrep_idx, b_in_C1);
+                chi2_val := intertwiner_data.trace_on_W(j, W_g2.irrep_idx, a_in_C2);
+                total := total
+                         + eps
+                         * ComplexConjugate(chi1_val)
+                         * ComplexConjugate(chi2_val);
+            od;
         od;
-    od;
+    else
+        # Path (B): iterate C_G(g_i) and conjugate by t_a.
+        for ai in [1..Length(elts_i)] do
+            a := elts_i[ai];
+            t_a := ts_i[ai];
+            for c in cen_i_elts do
+                b := t_a * c * t_a^(-1);
+                bi := LookupDictionary(elt_to_idx_j, b);
+                if bi = fail then continue; fi;
+                s_b := ts_j[bi];
+                b_in_C1 := c;                    # = t_a^{-1} * b * t_a
+                a_in_C2 := s_b^-1 * a * s_b;     # ∈ C_G(g_2)
+                eps := intertwiner_data.epsilon(W_g1.g, W_g2.g, a, b);
+                chi1_val := intertwiner_data.trace_on_W(i, W_g1.irrep_idx, b_in_C1);
+                chi2_val := intertwiner_data.trace_on_W(j, W_g2.irrep_idx, a_in_C2);
+                total := total
+                         + eps
+                         * ComplexConjugate(chi1_val)
+                         * ComplexConjugate(chi2_val);
+            od;
+        od;
+    fi;
     return total / ord;
 end;;
 

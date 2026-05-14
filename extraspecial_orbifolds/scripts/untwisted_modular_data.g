@@ -146,7 +146,7 @@ end;;
 # AsSSortedList(class) result, .t_of is parallel.
 BuildTransports := function(idx)
     local transport, i, elts, rep, gens, t_by_elt, queue, head,
-          a, t_a, g, b, ts;
+          a, t_a, g, b, ts, k, elt_to_idx;
     transport := [];
     gens := GeneratorsOfGroup(idx.group);
     for i in [1..Length(idx.classes)] do
@@ -175,7 +175,15 @@ BuildTransports := function(idx)
         if ForAny(ts, t -> t = fail) then
             Error("BuildTransports: BFS did not cover class ", i);
         fi;
-        Add(transport, rec(elements := elts, t_of := ts));
+        # P-9 (#126): for ProjectorFormula's centraliser-intersection
+        # path, build a `b -> bi` lookup so we can find the transport
+        # index of a candidate b in O(log |class|) instead of O(|class|).
+        elt_to_idx := NewDictionary(rep, true);
+        for k in [1..Length(elts)] do
+            AddDictionary(elt_to_idx, elts[k], k);
+        od;
+        Add(transport, rec(elements := elts, t_of := ts,
+                           elt_to_idx := elt_to_idx));
     od;
     return transport;
 end;;
@@ -185,34 +193,70 @@ end;;
 # =================================================================
 
 # Compute the S-block for class pair (i, j) — a |Irr(C_i)|×|Irr(C_j)| matrix.
+#
+# P-9 (#126): enumerate commuting (a, b) pairs via the centraliser
+# directly, not by iterating the full class_i × class_j Cartesian
+# product. For each a ∈ class_i, C_G(a) = t_a · C_G(g_i) · t_a^{-1};
+# the commuting b ∈ class_j are exactly the elements of class_j ∩
+# C_G(a). Iterate `c ∈ C_G(g_i)`, conjugate `b := t_a c t_a^{-1}`,
+# membership-test against the precomputed `class_j` dictionary.
+# Total iterations per (i, j) block: |class_i| × |C_G(g_i)| = |G|
+# vs the original |class_i| × |class_j|, saving a factor
+# |class_j| / |C_G(g_i)| (~10^3 - 10^4 for E_+(7) typical classes).
 ComputeSBlock := function(idx, transport, i, j)
     local M, Ni, Nj, elts_i, elts_j, ts_i, ts_j, ai, bi, a, b, t_a, s_b,
-          b_tilde, a_tilde, k, l, ord;
+          b_tilde, a_tilde, k, l, ord, cen_i_elts, c, elt_to_idx_j;
     Ni := idx.num_irreps[i]; Nj := idx.num_irreps[j];
     M := List([1..Ni], k -> List([1..Nj], l -> 0));
     elts_i := transport[i].elements;
     elts_j := transport[j].elements;
     ts_i := transport[i].t_of;
     ts_j := transport[j].t_of;
+    cen_i_elts := AsList(idx.centralisers[i]);
+    elt_to_idx_j := transport[j].elt_to_idx;
     ord := idx.order;
-    for ai in [1..Length(elts_i)] do
-        a := elts_i[ai];
-        t_a := ts_i[ai];
-        for bi in [1..Length(elts_j)] do
-            b := elts_j[bi];
-            if a * b <> b * a then continue; fi;
-            s_b := ts_j[bi];
-            b_tilde := t_a^-1 * b * t_a;     # in C_G(g_i)
-            a_tilde := s_b^-1 * a * s_b;     # in C_G(g_j)
-            for k in [1..Ni] do
-                for l in [1..Nj] do
-                    M[k][l] := M[k][l]
-                        + ComplexConjugate(EvalIrr(idx, i, k, b_tilde))
-                        * ComplexConjugate(EvalIrr(idx, j, l, a_tilde));
+    if Length(elts_j) <= Length(cen_i_elts) then
+        # Path (A): iterate class_j directly (smaller of the two).
+        for ai in [1..Length(elts_i)] do
+            a := elts_i[ai];
+            t_a := ts_i[ai];
+            for bi in [1..Length(elts_j)] do
+                b := elts_j[bi];
+                if a * b <> b * a then continue; fi;
+                s_b := ts_j[bi];
+                b_tilde := t_a^-1 * b * t_a;     # in C_G(g_i)
+                a_tilde := s_b^-1 * a * s_b;     # in C_G(g_j)
+                for k in [1..Ni] do
+                    for l in [1..Nj] do
+                        M[k][l] := M[k][l]
+                            + ComplexConjugate(EvalIrr(idx, i, k, b_tilde))
+                            * ComplexConjugate(EvalIrr(idx, j, l, a_tilde));
+                    od;
                 od;
             od;
         od;
-    od;
+    else
+        # Path (B): iterate C_G(g_i) and conjugate by t_a.
+        for ai in [1..Length(elts_i)] do
+            a := elts_i[ai];
+            t_a := ts_i[ai];
+            for c in cen_i_elts do
+                b := t_a * c * t_a^(-1);
+                bi := LookupDictionary(elt_to_idx_j, b);
+                if bi = fail then continue; fi;
+                s_b := ts_j[bi];
+                b_tilde := c;                    # = t_a^{-1} * b * t_a
+                a_tilde := s_b^-1 * a * s_b;     # in C_G(g_j)
+                for k in [1..Ni] do
+                    for l in [1..Nj] do
+                        M[k][l] := M[k][l]
+                            + ComplexConjugate(EvalIrr(idx, i, k, b_tilde))
+                            * ComplexConjugate(EvalIrr(idx, j, l, a_tilde));
+                    od;
+                od;
+            od;
+        od;
+    fi;
     return M / ord;
 end;;
 
