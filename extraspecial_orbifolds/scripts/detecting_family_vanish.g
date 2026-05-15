@@ -86,17 +86,24 @@ end;;
 
 # Public entry point.
 #
+# D-VAN-FIX (#151): applies the FULL detecting family — restrict ω to
+# every conjugacy class rep of max elementary abelians AND to the
+# pinned D_8 section. [omega] = 0 iff every restriction vanishes.
+#
 # Returns rec(
-#   trivial    : bool        — [omega] = 0 in H^3(E_+(m); U(1))?
-#   res_E_vec  : coord vector of omega|_E  in H^3(E;   U(1)) mod torsion_E
-#   res_D8_vec : coord vector of omega|_D8 in H^3(D_8; U(1)) mod torsion_D8
-#   f_E        : callable cocycle E^3   -> Z/exp_E
-#   f_D8       : callable cocycle D_8^3 -> Z/exp_D8
-#   source     : "hap" | "quillen"
+#   trivial          : bool — [omega] = 0 in H^3(E_+(m); U(1))?
+#   res_EA_vec_list  : list of coord vectors (one per max-EA conj class),
+#                      each mod its EA's torsion
+#   res_D8_vec       : coord vector of omega|_D_8 mod torsion_D8
+#   f_EA_list        : list of callable cocycles, one per EA in H_EA_list
+#   f_D8             : callable cocycle D_8^3 -> Z/exp_D8
+#   source           : "hap" | "quillen"
+#   Backward-compat aliases res_E_vec and f_E point at the FIRST EA.
 # ).
 ResIsTrivialOnDetectingFamily := function(m, omega_vec)
-    local rec_m, hom_omega, res_E_vec_int, res_D8_vec_int,
-          res_E_vec, res_D8_vec, trivial, f_E, f_D8, source;
+    local rec_m, hom_omega, source, res_EA_vec_list, f_EA_list, i,
+          torsion_EA_i, res_EA_i, vec_int, vec_modH,
+          res_D8_vec_int, res_D8_vec, f_D8, all_EA_zero, trivial;
 
     if not (IsInt(m) and m >= 1) then
         Error("ResIsTrivialOnDetectingFamily: m must be a positive ",
@@ -107,37 +114,46 @@ ResIsTrivialOnDetectingFamily := function(m, omega_vec)
     rec_m := BuildRestrictionMatrices(m, source);
     hom_omega := NormaliseOmegaToHomBasis(rec_m, omega_vec);
 
-    # Apply restriction matrices. Convention: res_E[i][j] = j-th coord
-    # of the image of hombasis_G[i]. So a hom_omega in (Z/torsion_G[i])^k_G
-    # maps via:
-    #   res_E_vec[j] = sum_i hom_omega[i] * res_E[i][j]  mod torsion_E[j].
-    res_E_vec_int := List([1..Length(rec_m.torsion_E)], j ->
-        Sum([1..Length(hom_omega)], i ->
-            hom_omega[i] * rec_m.res_E[i][j]));
+    # Per-EA restriction: res_EA_list[i] applied to hom_omega gives the
+    # i-th EA's image in coords mod torsion_EA_list[i].
+    res_EA_vec_list := [];
+    f_EA_list := [];
+    for i in [1..Length(rec_m.res_EA_list)] do
+        torsion_EA_i := rec_m.torsion_EA_list[i];
+        res_EA_i := rec_m.res_EA_list[i];
+        vec_int := List([1..Length(torsion_EA_i)], j ->
+            Sum([1..Length(hom_omega)], k ->
+                hom_omega[k] * res_EA_i[k][j]));
+        vec_modH := List([1..Length(vec_int)], j ->
+            vec_int[j] mod torsion_EA_i[j]);
+        Add(res_EA_vec_list, vec_modH);
+        Add(f_EA_list,
+            _DVAN_BuildHCocycleFromHomVec(rec_m.ctx_EA_list[i], vec_modH));
+    od;
+
+    # D_8 restriction.
     res_D8_vec_int := List([1..Length(rec_m.torsion_D8)], j ->
         Sum([1..Length(hom_omega)], i ->
             hom_omega[i] * rec_m.res_D8[i][j]));
-
-    res_E_vec := List([1..Length(res_E_vec_int)], j ->
-        res_E_vec_int[j] mod rec_m.torsion_E[j]);
     res_D8_vec := List([1..Length(res_D8_vec_int)], j ->
         res_D8_vec_int[j] mod rec_m.torsion_D8[j]);
-
-    trivial := ForAll(res_E_vec, x -> x = 0)
-               and ForAll(res_D8_vec, x -> x = 0);
-
-    # Build callable cocycles on E and D_8 from the coordinate vectors
-    # via each subgroup's UCT.cocyclebasis (the V-4a-fixed lift idiom).
-    f_E  := _DVAN_BuildHCocycleFromHomVec(rec_m.ctx_E,  res_E_vec);
     f_D8 := _DVAN_BuildHCocycleFromHomVec(rec_m.ctx_D8, res_D8_vec);
 
+    # [omega] = 0 iff ALL restrictions vanish.
+    all_EA_zero := ForAll(res_EA_vec_list, v -> ForAll(v, x -> x = 0));
+    trivial := all_EA_zero and ForAll(res_D8_vec, x -> x = 0);
+
     return rec(
-        trivial     := trivial,
-        res_E_vec   := res_E_vec,
-        res_D8_vec  := res_D8_vec,
-        f_E         := f_E,
-        f_D8        := f_D8,
-        source      := source
+        trivial          := trivial,
+        res_EA_vec_list  := res_EA_vec_list,
+        res_D8_vec       := res_D8_vec,
+        f_EA_list        := f_EA_list,
+        f_D8             := f_D8,
+        source           := source,
+
+        # Backward-compat aliases.
+        res_E_vec        := res_EA_vec_list[1],
+        f_E              := f_EA_list[1]
     );
 end;;
 
