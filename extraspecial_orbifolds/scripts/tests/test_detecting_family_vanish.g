@@ -117,6 +117,71 @@ r_z8_half := ResIsTrivialOnDetectingFamily(2, e_z8_half);;
 AssertOrLog("2*e_{Z/8} verdict matches HAP",
             r_z8_half.trivial = in_hap_half);
 
+Print("\n--- Task 2.6: f_D8 satisfies bar 3-cocycle equation ---\n");
+
+# Pick a non-trivial omega (the Z/8 generator from Task 2.5) and verify
+# f_D8 satisfies the bar 3-cocycle equation on D_8.
+r_z8_check := ResIsTrivialOnDetectingFamily(2, e_z8);;
+D8_grp := rec_m2.H_D8;;
+elts_D8 := AsList(D8_grp);;
+n_viol_D8 := 0;;
+for g0 in elts_D8 do for g1 in elts_D8 do
+    for g2 in elts_D8 do for g3 in elts_D8 do
+        val := (r_z8_check.f_D8(g1, g2, g3)
+                - r_z8_check.f_D8(g0*g1, g2, g3)
+                + r_z8_check.f_D8(g0, g1*g2, g3)
+                - r_z8_check.f_D8(g0, g1, g2*g3)
+                + r_z8_check.f_D8(g0, g1, g2)) mod rec_m2.exp_D8;
+        if val <> 0 then n_viol_D8 := n_viol_D8 + 1; fi;
+    od; od;
+od; od;;
+AssertOrLog("f_D8 is a strict bar 3-cocycle on D_8 (0 violations)",
+            n_viol_D8 = 0);
+Print("    f_D8 violations: ", n_viol_D8, " / ",
+      Length(elts_D8)^4, "\n");
+
+Print("\n--- Task 2.7: D_8-section choice invariance smoke ---\n");
+
+# Choose two distinct D_8 sections of E_+(2) and verify D-VAN's
+# `trivial` verdict is identical on the 10 unit generators (the
+# witness vectors differ but the trivial bit is class-invariant).
+# Re-use rec_m2.G — the SAME EPlusGroup(2) instance the cached
+# restriction matrices were built against.
+all_subs := List(ConjugacyClassesSubgroups(rec_m2.G), Representative);;
+d8_candidates := Filtered(all_subs,
+                          S -> Order(S) = 8
+                              and not IsAbelian(S)
+                              and IdGroup(S) = [8, 3]);;
+AssertOrLog("E_+(2) has at least 2 distinct D_8-section conjugacy classes",
+            Length(d8_candidates) >= 2);
+
+if Length(d8_candidates) >= 2 then
+    H_d8_alt := d8_candidates[2];
+    ctx_d8_alt := SubgroupCohomologyContext(H_d8_alt);
+    phi_d8_alt := SubgroupInclusion(H_d8_alt, rec_m2.G);
+    res_D8_alt := RestrictionMatrixViaHAP(rec_m2.setup_G,
+                                            ctx_d8_alt, phi_d8_alt);
+    mismatch_count := 0;
+    for i in [1..10] do
+        e_i := List([1..10], j -> If_(j = i, 1, 0));
+        primary := ResIsTrivialOnDetectingFamily(2, e_i).trivial;
+        # alt verdict: re-use rec_m2's E-side, swap in alt D_8-side.
+        primary_E_vec := List([1..7], j ->
+            Sum([1..10], k -> e_i[k] * rec_m2.res_E[k][j]) mod 2);
+        alt_D8_int := List([1..Length(ctx_d8_alt.torsion)], j ->
+            Sum([1..10], k -> e_i[k] * res_D8_alt[k][j]));
+        alt_D8_vec := List([1..Length(alt_D8_int)], j ->
+            alt_D8_int[j] mod ctx_d8_alt.torsion[j]);
+        alt_trivial := ForAll(primary_E_vec, x -> x = 0)
+                       and ForAll(alt_D8_vec, x -> x = 0);
+        if alt_trivial <> primary then
+            mismatch_count := mismatch_count + 1;
+        fi;
+    od;
+    AssertOrLog("trivial verdict is invariant under D_8-section choice",
+                mismatch_count = 0);
+fi;
+
 if IsEmpty(testFailures) then
     Print("\n=== test_detecting_family_vanish: PASS ===\n");
 else
