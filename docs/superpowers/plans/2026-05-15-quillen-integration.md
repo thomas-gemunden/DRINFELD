@@ -4,6 +4,33 @@
 
 **Goal:** Make `SetupCohomology3(E_+(m))` work for m=7 without OOM. The current HAP path (`ResolutionFiniteGroup(E_+(7), 4)` → `TensorWithIntegers` → `UniversalCoefficientsTheorem`) consumes 60 GB and dies.
 
+**2026-05-15 plan revision (post V-4a investigation):** Stage B's
+original framing was "derive closed-form bar 3-cocycles via Quillen +
+Pontryagin square because HAP's `StandardCocycle` fails the bar
+3-cocycle equation". This was based on a misdiagnosis of V-4a (#81).
+
+Empirically (this session): HAP's `StandardCocycle(R, vec, 3, exp)`
+gives a **strict bar 3-cocycle (0 violations)** when `vec` is the
+proper cohomology representative `UCT.cocyclebasis[i]`, and gives the
+buggy 1105/4096-violation behaviour only when `vec` is a raw R-basis
+vector. The kernel pipeline (`transgression_kernel.g::StandardCocycleOf`)
+correctly uses `UCT.cocyclebasis`; the V-3 wrapper
+(`fsi_wrapper.g::FSI_LiftIfHom`) incorrectly used `UCT.lift` which is
+shape-mismatched and gives wrong R^3 vectors.
+
+**Implication for the plan:** Stages B2-followup (Pontryagin square)
+and Stage B (closed-form bar 3-cocycles via Quillen) are **no longer
+required for the cocycle-construction side of the m=7 unlock**. HAP
+already gives valid Z/exp-cocycles via the UCT.cocyclebasis path.
+The remaining work is purely about **getting HAP's resolution at
+m=7** (where `ResolutionFiniteGroup` OOMs), not about constructing
+cocycles once we have the resolution.
+
+The closed-form cup-product machinery built in Stages B1+B2 remains
+useful as an independent ω-evaluator (no HAP-resolution dependency)
+and as a cross-check for the F_2-part of H^3 at any m, but is not
+on the critical path for the m=7 unlock.
+
 **Architecture.** Two pieces of HAP work are being replaced:
 
 1. **H^3 structure** (`torsion, exponent, num_generators`) — analytical via Quillen's [Q4] Theorem 4.6 + Bockstein spectral sequence on the canonical presentation from Q-2a (issue #133).
