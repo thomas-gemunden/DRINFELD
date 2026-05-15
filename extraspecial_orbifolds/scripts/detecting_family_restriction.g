@@ -45,14 +45,8 @@ If_ := function(c, a, b) if c then return a; else return b; fi; end;;
 
 _DETF_CACHE := rec();;
 
-# Forward declaration of the public entry point. The real implementation
-# is appended in Task 1.5; this stub guarantees IsBoundGlobal returns
-# true from the moment the scaffold is read, matching the file-scaffold
-# contract.
-BuildRestrictionMatrices := function(m, source)
-    Error("BuildRestrictionMatrices: implementation not yet loaded ",
-          "(forward stub). At m = ", m, ", source = ", source, ".");
-end;;
+# Forward declaration; real implementation appended below the helpers.
+BuildRestrictionMatrices := fail;;
 
 # --- helpers ----------------------------------------------------------
 
@@ -170,3 +164,113 @@ RestrictionMatrixViaHAP := function(setup_G, ctx_H, phi_HG)
 
     return res_mat;
 end;;
+
+# Find a D_8 section inside a GIVEN G (matching the quillen_detecting_subgroup
+# logic but parameterised by the parent so callers can pin both H_E and H_D8
+# inside the same instance of E_+(m); each call to EPlusGroup(m) builds a
+# fresh GAP group, so re-using one ea_rec.parent throughout is necessary
+# for SubgroupInclusion to work).
+_DETF_FindD8In := function(G, m)
+    local maxsub, candidates;
+    if m = 1 then return G; fi;
+    maxsub := List(ConjugacyClassesSubgroups(G), Representative);
+    candidates := Filtered(maxsub,
+                           S -> Order(S) = 8
+                                and not IsAbelian(S)
+                                and IdGroup(S) = [8, 3]);
+    if Length(candidates) = 0 then
+        Error("_DETF_FindD8In: no D_8 section in G for m = ", m);
+    fi;
+    return candidates[1];
+end;;
+
+# Public entry point. Phase 1 supports source = "hap" for m in {2, 3, 5}.
+# m = 7 + "hap" errors (would invoke ResolutionFiniteGroup(E_+(7), 4) which
+# OOMs). source = "quillen" is Phase 2, gated on Q-int A2/A3 (#136), and
+# currently errors.
+#
+# Returns rec(
+#   m, source ("hap" | "quillen"),
+#   res_E       : k_G x k_E integer matrix, entries in [0..torsion_E[j]-1]
+#   res_D8      : k_G x k_D8 integer matrix, entries in [0..torsion_D8[j]-1]
+#   torsion_G, torsion_E, torsion_D8,
+#   exp_G,     exp_E,     exp_D8,
+#   setup_G,                # SetupCohomology3(G) record (for omega lifting)
+#   ctx_E, ctx_D8,          # SubgroupCohomologyContext recs
+#   H_E, H_D8,              # the pinned GAP subgroups
+#   G                       # the parent E_+(m), pinned across both H_E, H_D8
+# ). Cached at module level by (m, source) in _DETF_CACHE.
+BuildRestrictionMatrices := function(m, source)
+    local key, ea_rec, G, H_E, H_D8, setup_G, ctx_E, ctx_D8,
+          phi_E, phi_D8, res_E, res_D8, result;
+
+    if not (IsInt(m) and m >= 1) then
+        Error("BuildRestrictionMatrices: m must be a positive integer; got ",
+              m);
+    fi;
+    if not (source in ["hap", "quillen"]) then
+        Error("BuildRestrictionMatrices: source must be \"hap\" or ",
+              "\"quillen\"; got ", source);
+    fi;
+
+    # Phase 1 supports source = hap for m <= 5; m = 7 + hap is the trap we
+    # explicitly want to prevent (would invoke ResolutionFiniteGroup(E_+(7), 4)).
+    if source = "hap" and m > 5 then
+        Error("BuildRestrictionMatrices: source=\"hap\" is not supported ",
+              "for m > 5 because ResolutionFiniteGroup(E_+(", m, "), 4) ",
+              "OOMs. Use source=\"quillen\" (Phase 2, gated on Q-int ",
+              "A2/A3, issue #136). At m = ", m, ".");
+    fi;
+    if source = "quillen" then
+        Error("BuildRestrictionMatrices: source=\"quillen\" is Phase 2 ",
+              "and not yet implemented. Gated on Q-int A2/A3 (issue ",
+              "#136). At m = ", m, ".");
+    fi;
+
+    key := Concatenation("m", String(m), "_", source);
+    if IsBound(_DETF_CACHE.(key)) then
+        return _DETF_CACHE.(key);
+    fi;
+
+    # Pin a single G instance (each EPlusGroup(m) call builds a fresh
+    # group with non-overlapping element families; mixing instances breaks
+    # GroupHomomorphismByImages).
+    ea_rec := MaximalElementaryAbelian_E_plus(m);
+    G := ea_rec.parent;
+    H_E := ea_rec.subgroup;
+    H_D8 := _DETF_FindD8In(G, m);
+
+    setup_G := SetupCohomology3(G);
+    ctx_E := SubgroupCohomologyContext(H_E);
+    ctx_D8 := SubgroupCohomologyContext(H_D8);
+
+    phi_E := SubgroupInclusion(H_E, G);
+    phi_D8 := SubgroupInclusion(H_D8, G);
+
+    res_E  := RestrictionMatrixViaHAP(setup_G, ctx_E, phi_E);
+    res_D8 := RestrictionMatrixViaHAP(setup_G, ctx_D8, phi_D8);
+
+    result := rec(
+        m            := m,
+        source       := source,
+        res_E        := res_E,
+        res_D8       := res_D8,
+        torsion_G    := setup_G.torsion,
+        torsion_E    := ctx_E.torsion,
+        torsion_D8   := ctx_D8.torsion,
+        exp_G        := setup_G.exponent,
+        exp_E        := ctx_E.exponent,
+        exp_D8       := ctx_D8.exponent,
+        setup_G      := setup_G,
+        ctx_E        := ctx_E,
+        ctx_D8       := ctx_D8,
+        H_E          := H_E,
+        H_D8         := H_D8,
+        G            := G
+    );
+
+    _DETF_CACHE.(key) := result;
+    return result;
+end;;
+
+Print("Loaded detecting_family_restriction.g (D-VAN-2: BuildRestrictionMatrices).\n");

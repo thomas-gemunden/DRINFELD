@@ -90,9 +90,81 @@ all_reduced := ForAll(res_mat, row -> ForAll(row, x -> x >= 0 and x <= 3));
 AssertOrLog("all entries reduced mod max(torsion_H) = 4",
             all_reduced);
 
+Print("\n--- Task 1.5: BuildRestrictionMatrices public API ---\n");
+
+# Plan correction (per the first dispatched agent's diagnostic): the
+# plan's original assertions for `res_E` dimensions (10 x 3 at m=2,
+# 35 x 4 at m=3) conflated the rank of the elementary abelian E with
+# the rank of H^3(E; U(1)). The latter comes from the full UCT and is
+# LARGER: 7 at m=2 (k=3 EA), 14 at m=3 (k=4 EA). Empirically verified
+# via SetupCohomology3 on each EA before writing this test.
+rec_m2 := BuildRestrictionMatrices(2, "hap");;
+
+AssertOrLog("rec.m = 2", rec_m2.m = 2);
+AssertOrLog("rec.source = hap", rec_m2.source = "hap");
+AssertOrLog("rec.res_E is a 10 x 7 matrix (m=2 EA H^3 has 7 invariant factors)",
+            Length(rec_m2.res_E) = 10
+            and Length(rec_m2.res_E[1]) = 7);
+AssertOrLog("rec.res_D8 is a 10 x 3 matrix (D_8 H^3 has 3 invariant factors)",
+            Length(rec_m2.res_D8) = 10
+            and Length(rec_m2.res_D8[1]) = 3);
+AssertOrLog("rec.torsion_G = E_+(2) torsion ([(Z/2)^9, Z/8])",
+            SortedList(rec_m2.torsion_G)
+                = Concatenation(List([1..9], i -> 2), [8]));
+AssertOrLog("rec.torsion_E sorted = [2,2,2,2,2,2,2] (m=2 EA = (Z/2)^3)",
+            SortedList(rec_m2.torsion_E)
+                = ListWithIdenticalEntries(7, 2));
+AssertOrLog("rec.torsion_D8 sorted = [2,2,4]",
+            SortedList(rec_m2.torsion_D8) = [2, 2, 4]);
+AssertOrLog("rec.exp_E = 2",  rec_m2.exp_E = 2);
+AssertOrLog("rec.exp_D8 = 4", rec_m2.exp_D8 = 4);
+AssertOrLog("rec.H_E is a GAP group of order 8 (rank 3 EA)",
+            IsGroup(rec_m2.H_E) and Order(rec_m2.H_E) = 8);
+AssertOrLog("rec.H_D8 is a GAP group of order 8 (D_8 section)",
+            IsGroup(rec_m2.H_D8) and Order(rec_m2.H_D8) = 8);
+AssertOrLog("rec.G is the pinned parent E_+(2) of order 32",
+            IsGroup(rec_m2.G) and Order(rec_m2.G) = 32);
+
+# Entries reduced mod torsion_H[j].
+all_res_E_reduced := ForAll([1..Length(rec_m2.res_E)], i ->
+    ForAll([1..Length(rec_m2.res_E[i])], j ->
+        rec_m2.res_E[i][j] >= 0
+        and rec_m2.res_E[i][j] < rec_m2.torsion_E[j]));
+AssertOrLog("res_E entries reduced mod per-column torsion_E",
+            all_res_E_reduced);
+
+all_res_D8_reduced := ForAll([1..Length(rec_m2.res_D8)], i ->
+    ForAll([1..Length(rec_m2.res_D8[i])], j ->
+        rec_m2.res_D8[i][j] >= 0
+        and rec_m2.res_D8[i][j] < rec_m2.torsion_D8[j]));
+AssertOrLog("res_D8 entries reduced mod per-column torsion_D8",
+            all_res_D8_reduced);
+
+# Caching: second call returns identical-reference rec.
+rec_m2_again := BuildRestrictionMatrices(2, "hap");;
+AssertOrLog("second call returns cached rec (identical reference)",
+            IsIdenticalObj(rec_m2, rec_m2_again));
+
+# source=quillen errors (Phase 2 not yet shipped).
+err := CALL_WITH_CATCH(BuildRestrictionMatrices, [2, "quillen"]);;
+AssertOrLog("source=quillen at m=2 errors (Phase 2 not implemented)",
+            not err[1]);
+
+# m=7 with source=hap errors (would invoke the OOM trap).
+err := CALL_WITH_CATCH(BuildRestrictionMatrices, [7, "hap"]);;
+AssertOrLog("source=hap at m=7 errors (m > 5 not supported in hap path)",
+            not err[1]);
+
+# Bad m and bad source.
+err := CALL_WITH_CATCH(BuildRestrictionMatrices, [0, "hap"]);;
+AssertOrLog("m = 0 errors", not err[1]);
+err := CALL_WITH_CATCH(BuildRestrictionMatrices, [2, "garbage"]);;
+AssertOrLog("unknown source errors", not err[1]);
+
 if IsEmpty(testFailures) then
     Print("\n=== test_detecting_family_restriction: PASS ===\n");
 else
-    Print("\n=== test_detecting_family_restriction: FAIL ===\n");
+    Print("\n=== test_detecting_family_restriction: FAIL (",
+          Length(testFailures), ") ===\n");
     for f in testFailures do Print("  - ", f, "\n"); od;
 fi;
