@@ -53,3 +53,12 @@ BuildRestrictionMatrices := function(m, source)
     Error("BuildRestrictionMatrices: implementation not yet loaded ",
           "(forward stub). At m = ", m, ", source = ", source, ".");
 end;;
+
+# --- helpers ----------------------------------------------------------
+
+# Build the cohomology context (R, K, UCT) for a subgroup. Thin wrapper
+# around SetupCohomology3 that documents the intent. Returns the same
+# rec shape so downstream code is uniform.
+SubgroupCohomologyContext := function(H)
+    return SetupCohomology3(H);
+end;;
