@@ -107,6 +107,60 @@ Print("  (HAP StandardCocycle on Q_8 had 448/4096 violations at q=2 ",
 AssertOrLog("x_1*x_1*x_1 strict bar 3-cocycle", v_xxx = 0);
 
 # --------------------------------------------------------------------
+# Stage B2: cup-of-two product Cup1x1 is a bar 2-cocycle.
+# --------------------------------------------------------------------
+
+Print("\n--- Cup1x1(x_1, x_2): bar 2-cocycle equation (mod 2) ---\n");
+f2 := Cup1x1(x, y);;
+n_viol_2 := VerifyBar2CocycleEquation(G, f2, 2);
+AssertOrLog("Cup1x1(x_1, x_2) bar 2-cocycle equation",
+            n_viol_2 = 0);
+
+# --------------------------------------------------------------------
+# Stage B2: Cochain-level Bockstein at degree 1.
+# β(x) = x ∪ x. Verify the closed-form formula and that it gives a
+# bar 2-cocycle.
+# --------------------------------------------------------------------
+
+Print("\n--- BocksteinAt1(x_1): bar 2-cocycle equation ---\n");
+beta_x := BocksteinAt1(G, x);;
+AssertOrLog("BocksteinAt1(x_1) is a bar 2-cocycle",
+            VerifyBar2CocycleEquation(G, beta_x, 2) = 0);
+
+# Verify the formula β(x) = x ∪ x as functions on G × G.
+Print("\n--- β(x_1) = x_1 ∪ x_1 (pointwise equality) ---\n");
+xux := Cup1x1(x, x);;
+match := true;;
+for g1 in elts do for g2 in elts do
+    if beta_x(g1, g2) <> xux(g1, g2) then match := false; break; fi;
+od; if not match then break; fi; od;
+AssertOrLog("β(x_1) and x_1 ∪ x_1 agree on all of G × G", match);
+
+# --------------------------------------------------------------------
+# Stage B2: Cochain-level Bockstein at degree 2.
+# Verify β(x ∪ y) = x²·y + x·y² (the derivation formula).
+# --------------------------------------------------------------------
+
+Print("\n--- BocksteinAt2(x_1 ∪ x_2) is a bar 3-cocycle ---\n");
+xuy := Cup1x1(x, y);;
+beta_xuy := BocksteinAt2(G, xuy);;
+AssertOrLog("BocksteinAt2(x_1 ∪ x_2) is a bar 3-cocycle (mod 2)",
+            VerifyBar3CocycleEquation(G, beta_xuy, 2) = 0);
+
+# β(x ∪ y) = x²·y + x·y² = (x∪x∪y) + (x∪y∪y) pointwise.
+Print("\n--- β(x ∪ y) = x∪x∪y + x∪y∪y pointwise ---\n");
+xxy := Cup1x1x1(x, x, y);;
+xyy := Cup1x1x1(x, y, y);;
+match := true;;
+for g1 in elts do for g2 in elts do for g3 in elts do
+    if beta_xuy(g1, g2, g3) <> (xxy(g1, g2, g3) + xyy(g1, g2, g3)) mod 2 then
+        match := false; break;
+    fi;
+od; if not match then break; fi; od; if not match then break; fi; od;
+AssertOrLog("β(x_1 ∪ x_2) = (x_1∪x_1∪x_2) + (x_1∪x_2∪x_2) on G^3",
+            match);
+
+# --------------------------------------------------------------------
 # Summary
 # --------------------------------------------------------------------
 

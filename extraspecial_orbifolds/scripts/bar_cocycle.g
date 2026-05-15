@@ -115,27 +115,150 @@ Cup1x1x1 := function(x, y, z)
 end;;
 
 # ---------------------------------------------------------------------
-# Next research milestone (Stage B2): Bockstein at the cochain level.
+# Stage B2: cochain-level Bockstein and related operations.
 #
-# H^3(E_+(m); F_2) contains classes that are NOT triple cup products
-# of degree-1 classes -- e.g. for D_8 = E_+(1), the classes x_1·w and
-# x_2·w where w in H^2 is the Bockstein image of a degree-1 class.
-# To represent these as bar 3-cocycles we need:
+# The Bockstein β : H^n(G; F_2) -> H^{n+1}(G; F_2) is induced by the
+# short exact sequence of coefficient groups
+#     0 -> Z/2 -> Z/4 -> Z/2 -> 0.
 #
-#   1. The cochain-level Bockstein operation β: C^n(G; F_2) ->
-#      C^{n+1}(G; F_2) computed via the short exact sequence
-#         0 -> Z/2 -> Z/4 -> Z/2 -> 0.
-#      Explicit formula: for f: G^n -> F_2 a 2-cocycle, lift to
-#      f~: G^n -> Z/4, then β(f) = (1/2) δ f~ : G^{n+1} -> Z/2.
+# At the cochain level: given a cocycle f : G^n -> F_2 (values in
+# {0, 1}), choose any lift f-tilde : G^n -> Z/4 with f-tilde(σ) ∈
+# {0, 1} ⊂ Z/4. Then δ(f-tilde) takes values in 2 · Z/4 (since f is
+# a Z/2-cocycle, so δf ≡ 0 mod 2), and we set
+#     β(f)(σ) := (1/2) · δ(f-tilde)(σ)  mod 2.
 #
-#   2. Pontryagin square or P_2 -> Z/4 lift for the order-4 generator
-#      of H^4(D_8; Z) = H^3(D_8; U(1)).
+# This gives a cocycle β(f) : G^{n+1} -> F_2 whose class in
+# H^{n+1}(G; F_2) is the Bockstein image.
 #
-# These are the math next steps. The cup-product machinery here is
-# Stage B1's deliverable and is independently useful (it confirms the
-# bar 3-cocycle equation can be satisfied strictly, validating the
-# whole Stage B path -- bypassing the V-4a obstacle).
+# Specialised formulas (derived in B2 research notes):
+#   * β(x) = x ∪ x  for x ∈ H^1(G; F_2).
+#   * β(x ∪ y) = x² · y + x · y²  for x, y ∈ H^1.  (β is a derivation
+#     in F_2 cohomology.)
+# These are all expressible as triple cup products, so for E_+(m)'s
+# degree-3 F_2 cohomology (m ≥ 2: only deg-1 generators × Quillen
+# relations), nothing beyond `Cup1x1x1` is needed.
+#
+# The genuine novelty at Stage B2 is for higher integer torsion:
+# Z/4-valued bar 3-cocycles (the order-4 class in H^3(D_8; U(1)) and
+# in H^3(E_+(3); U(1))) and Z/8-valued (H^3(E_+(2); U(1))). These
+# come from the Pontryagin square P : H²(G; F_2) -> H⁴(G; Z/4) and
+# its higher analogues; see Stage B2 follow-up tasks in the plan.
+
+# ---------------------------------------------------------------------
+# Cup product of two degree-1 classes.
+#
+# For x, y : G -> F_2 group homomorphisms (= bar 1-cocycles), the cup
+# product (x ∪ y)(g_1, g_2) := x(g_1) · y(g_2) is a bar 2-cochain.
+# It IS a bar 2-cocycle (the bar 2-cocycle equation δ(x∪y) = 0 mod 2
+# reduces to bilinearity of x · y over the homomorphism property of
+# x and y).
 # ---------------------------------------------------------------------
 
-Print("Loaded bar_cocycle.g (Stage B1: VerifyBar3CocycleEquation, ",
-      "F2HomFromImages, Cup1x1x1).\n");
+Cup1x1 := function(x, y)
+    return function(g1, g2)
+        return (x(g1) * y(g2)) mod 2;
+    end;
+end;;
+
+# ---------------------------------------------------------------------
+# Bar 2-cocycle equation (brute-force check, mod q).
+#
+# δf(g_0, g_1, g_2) = f(g_1, g_2) - f(g_0 g_1, g_2)
+#                    + f(g_0, g_1 g_2) - f(g_0, g_1)
+# Returns the violation count on G × G × G.
+# ---------------------------------------------------------------------
+
+VerifyBar2CocycleEquation := function(G, f, q)
+    local elts, n_viol, g0, g1, g2, val;
+    elts := Elements(G);
+    n_viol := 0;
+    for g0 in elts do
+        for g1 in elts do
+            for g2 in elts do
+                val := (f(g1, g2) - f(g0*g1, g2) + f(g0, g1*g2)
+                        - f(g0, g1)) mod q;
+                if val <> 0 then n_viol := n_viol + 1; fi;
+            od;
+        od;
+    od;
+    return n_viol;
+end;;
+
+# ---------------------------------------------------------------------
+# Cochain-level Bockstein for a 2-cocycle f : G^2 -> F_2.
+#
+# Input: G a group; f a function G^2 -> {0, 1} (a Z/2-valued 2-cocycle
+# of the bar complex).
+#
+# Output: a function G^3 -> {0, 1} (the Bockstein image, a Z/2-valued
+# 3-cocycle).
+#
+# Algorithm: lift f to f-tilde : G^2 -> {0, 1} ⊂ Z (the trivial lift),
+# compute δ(f-tilde) : G^3 -> Z (which by f being a F_2-cocycle has
+# all values in {-2, 0, 2}), divide by 2, reduce mod 2.
+# ---------------------------------------------------------------------
+
+BocksteinAt2 := function(G, f)
+    return function(g0, g1, g2)
+        local delta_int;
+        delta_int := f(g1, g2) - f(g0*g1, g2) + f(g0, g1*g2) - f(g0, g1);
+        # delta_int ∈ {-2, 0, 2} when f is an F_2-cocycle. (1/2) δ mod 2:
+        return (delta_int / 2) mod 2;
+    end;
+end;;
+
+# ---------------------------------------------------------------------
+# Cochain-level Bockstein for a 1-cocycle x : G -> F_2 (i.e. a hom).
+#
+# For a hom, β(x)(g_0, g_1) := (1/2)·(x(g_1) - x(g_0 g_1) + x(g_0)).
+# Closed form: β(x) = x · x, i.e. (x ∪ x)(g_0, g_1) = x(g_0) · x(g_1).
+# We expose this as a primitive in case callers want to use it as
+# a 2-cocycle to compose further (e.g. cup with a degree-1 class).
+# ---------------------------------------------------------------------
+
+BocksteinAt1 := function(G, x)
+    # = Cup1x1(x, x), but written via the Bockstein formula for clarity.
+    return function(g0, g1)
+        local delta_int;
+        delta_int := x(g1) - x(g0*g1) + x(g0);
+        return (delta_int / 2) mod 2;
+    end;
+end;;
+
+# ---------------------------------------------------------------------
+# Next research milestone (Stage B2 follow-up): Pontryagin square.
+#
+# For F_2-cohomology at H^3, the cup-product + Bockstein machinery
+# here suffices (since β is a derivation and is expressible in cup
+# products of degree-1 classes).
+#
+# The genuine novelty needed for the full Quillen integration is the
+# Pontryagin square P : H²(G; F_2) -> H⁴(G; Z/4), which builds the
+# Z/4-valued bar cocycles representing the order-4 generators of
+# H⁴(G; Z) = H³(G; U(1)). For E_+(m):
+#   * m = 1 (D_8): order-4 generator (1 class).
+#   * m = 3: order-4 generator (1 class).
+#   * m = 2: order-8 generator (1 class) -- requires the iterated
+#     Bockstein (or higher Pontryagin construction).
+#
+# Implementation sketch (Steenrod's 1952 formula; see Brown
+# "Cohomology of Groups" §V.6 for a treatment specialised to groups):
+# For u : G^2 -> F_2 a 2-cocycle, the Pontryagin square is
+#   P(u)(g_0, g_1, g_2, g_3) :=
+#     u-tilde(g_0, g_1) · u-tilde(g_2, g_3)
+#       + u-tilde(g_0, g_1·g_2) · u-tilde(g_2, g_3)
+#       + lower-order correction terms involving ∪_1 products
+# where u-tilde is the trivial {0, 1} ⊂ Z/4 lift. Reading this off
+# gives P(u) : G^4 -> Z/4 satisfying the bar 4-cocycle equation
+# mod 4. Under the deg-shift iso H^4(G; Z) ≅ H^3(G; U(1)) we then
+# extract a bar 3-cocycle ω : G^3 -> Z/4.
+#
+# The shift G^4 -> G^3 corresponds to the connecting map of the
+# coefficient SES 0 -> Z -> R -> U(1) -> 0; concretely it sets g_0
+# to identity and reads off (g_1, g_2, g_3) -> P(u)(1, g_1, g_2, g_3)
+# (or a similar normalised form). Verifying the bar 3-cocycle
+# equation is the acceptance gate.
+# ---------------------------------------------------------------------
+
+Print("Loaded bar_cocycle.g (Stage B1+B2: cup products, ",
+      "F_2 Bockstein, bar 2/3 cocycle equation verifiers).\n");
