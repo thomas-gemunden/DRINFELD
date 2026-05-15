@@ -85,24 +85,41 @@ end;;
 #
 # Why this matches H3MatrixOfAutomorphism's structure:
 #
-#   * EquivariantChainMap(R_H, R_G, phi) builds a chain map R_H -> R_G
-#     above phi.
-#   * TensorWithIntegers(...) descends to a Z-chain map K_H -> K_G.
+#   * EquivariantChainMap(R_H, R_G, phi) builds a chain map R_H -> R_G.
+#   * TensorWithIntegers descends to a Z-chain map K_H -> K_G.
 #   * GroupCohomologyFunctor(K_H, K_G, chainmap, 3) gives F such that
-#     F acts on adapted Z_3 cycle coords. On hom-vectors (length |ZZ_H|),
-#     the pullback phi^* acts via right-multiplication by TransposedMat(F),
-#     producing an image in H^3(G; Z/exp_G).
-#   * IMPORTANT: the source/target swap for the inclusion case is just
-#     the choice of R_H as source and R_G as target. The cohomology
-#     functor is contravariant, so phi^* maps cocycles on G to cocycles
-#     on H (correct direction for our restriction).
-#   * The projection onto hombasis_H uses exp_H (not exp_G) for the
-#     slack since the target lives in H^3(H; Z/exp_H).
+#     F[i] is the image of Z_3(K_H)[i] in Z_3(K_G) coords.
+#   * On hom-vectors phi^* acts by right-mult by TransposedMat(F):
+#     phi^*(hombasis_G[i]) has length |ZZ_H|, integer-valued.
+#
+# CRITICAL DETAIL — coefficient ring (D-VAN-FIX, #151):
+#
+#   The autom case has exp_G = exp_H = exp, so the same exponent is
+#   used for image reduction AND for hombasis-H slack. For subgroup
+#   inclusion exp_G != exp_H (e.g., m=2: exp_G = 8, exp_E = 2). The
+#   original D-VAN-2 code reduced image_vec mod exp_H, which KILLED
+#   the Z/2 classes of H^3(G; Z/exp_G) that are represented by
+#   entries divisible by exp_G/exp_H (= 4 mod 8 for the Z/2 part of
+#   Z/8). Empirically 9 of 10 m=2 unit generators were lost this way.
+#
+#   Fix: work in Z/exp_G uniformly. The hombasis_H is given in
+#   Z/exp_H representation (entries in [0..exp_H)). Rescale by
+#   (exp_G/exp_H) so each entry x becomes x * (exp_G/exp_H) in
+#   [0..exp_G); this is the Z/exp_G representation of the same
+#   class. The augmented matrix's slack rows become exp_G * I.
+#   After solving x * aug = image mod exp_G, the j-th coordinate
+#   x[j] is in [0..exp_G) and reduces to the desired Z/torsion_H[j]
+#   value by taking mod torsion_H[j].
+#
+#   This works because for our 2-group cases exp_H | exp_G always
+#   (H is a subgroup of a 2-group), and H^3(H; Z) is all 2-torsion
+#   so Hom(H_3(H; Z), Z/exp_G) ≅ Hom(H_3(H; Z), Z/exp_H) via the
+#   natural inclusion Z/exp_H -> Z/exp_G (multiply by exp_G/exp_H).
 RestrictionMatrixViaHAP := function(setup_G, ctx_H, phi_HG)
     local R_G, K_G, UCT_G, exp_G, k_G, hombasis_G,
           R_H, K_H, UCT_H, exp_H, k_H, torsion_H, hombasis_H, hb_len_H,
-          chainmap, gcf, F, autmat,
-          aug_matrix, i, image_vec, image_modH, sol, col_coeffs,
+          chainmap, gcf, F, autmat, rescale, hombasis_H_rescaled,
+          aug_matrix, i, image_vec, image_modG, sol, col_coeffs,
           res_mat, j;
 
     R_G := setup_G.R;
@@ -121,40 +138,42 @@ RestrictionMatrixViaHAP := function(setup_G, ctx_H, phi_HG)
     hombasis_H := UCT_H.hombasis;
     hb_len_H := Length(hombasis_H[1]);
 
+    if exp_G mod exp_H <> 0 then
+        Error("RestrictionMatrixViaHAP: exp_H (", exp_H,
+              ") must divide exp_G (", exp_G,
+              "); rescale strategy assumes exp_H | exp_G.");
+    fi;
+    rescale := exp_G / exp_H;
+
     # Equivariant chain map R_H -> R_G above phi: H -> G, then Z-tensored.
     chainmap := TensorWithIntegers(EquivariantChainMap(R_H, R_G, phi_HG));
-
-    # Matrix of phi on adapted Z_3 cycle coords. Same convention as in
-    # H3MatrixOfAutomorphism (brw_h3_action.g): GroupCohomologyFunctor
-    # returns F such that row-form cycle coords transform by right-
-    # multiplication by F. On hom-vectors, the dual action is right-mult
-    # by TransposedMat(F).
     gcf := GroupCohomologyFunctor(K_H, K_G, chainmap, 3);
     F := gcf!.matrix;
     autmat := TransposedMat(F);
 
-    # Augmented matrix for projecting any phi^*(hombasis_G[i]) onto
-    # hombasis_H mod exp_H. The first k_H rows are the H-side hom-basis;
-    # the last hb_len_H rows are exp_H * I_{hb_len_H} (slack for
-    # mod-exp_H equivalence). SolutionIntMat(aug, image) returns x with
-    # x * aug = image; x{[1..k_H]} are the desired H-side coords.
+    # Rescale hombasis_H to Z/exp_G representation: each entry in
+    # [0..exp_H) -> entry * (exp_G/exp_H) in [0..exp_G). Then build
+    # the augmented matrix with slack exp_G * I_{hb_len_H}.
+    hombasis_H_rescaled := List(hombasis_H,
+        h -> List(h, x -> x * rescale));
     aug_matrix := Concatenation(
-        hombasis_H,
+        hombasis_H_rescaled,
         List([1..hb_len_H], r -> List([1..hb_len_H], c ->
-            If_(r = c, exp_H, 0))));
+            If_(r = c, exp_G, 0))));
 
     res_mat := NullMat(k_G, k_H);
     for i in [1..k_G] do
-        # phi^*(hombasis_G[i]) as a length-hb_len_H vector mod exp_G.
-        image_vec := List(hombasis_G[i] * autmat, x -> x mod exp_G);
-        # Reduce mod exp_H since target is H^3(H; Z/exp_H).
-        image_modH := List(image_vec, x -> x mod exp_H);
-        sol := SolutionIntMat(aug_matrix, image_modH);
+        # phi^*(hombasis_G[i]) as length-hb_len_H vector mod exp_G.
+        image_vec := hombasis_G[i] * autmat;
+        image_modG := List(image_vec, x -> x mod exp_G);
+        sol := SolutionIntMat(aug_matrix, image_modG);
         if sol = fail then
             Error("RestrictionMatrixViaHAP: could not project image of ",
-                  "hombasis_G[", i, "] onto hombasis_H. ",
-                  "Possible cause: phi is not actually a homomorphism ",
-                  "or aug_matrix span is incorrect for this exp_H.");
+                  "hombasis_G[", i, "] onto hombasis_H_rescaled. ",
+                  "Possible causes: phi is not actually a homomorphism, ",
+                  "or hombasis_H doesn't span H^3(H; Z/exp_G) (would ",
+                  "indicate exp_H | exp_G assumption violated for some ",
+                  "torsion factor).");
         fi;
         col_coeffs := sol{[1..k_H]};
         for j in [1..k_H] do
@@ -184,25 +203,56 @@ _DETF_FindD8In := function(G, m)
     return candidates[1];
 end;;
 
+# Enumerate ALL conjugacy class representatives of maximal elementary
+# abelians (rank m+1) inside G. Per Quillen 1971, the family of these
+# conj-class reps is what detects H^*(G; F_2) mod nilpotents in low
+# degrees. Using a SINGLE representative (the prior simplification)
+# left a large kernel in the restriction map — D-VAN-FIX (#151).
+#
+# Implementation: ConjugacyClassesSubgroups + filter. At m=2 this gives
+# 6 reps; m=3 gives 30. For m >= 5 enumeration may be slow; that's a
+# future optimisation (Phase 2 / Quillen path uses isotropic-subspace
+# enumeration analytically).
+_DETF_AllMaxEAsIn := function(G, m)
+    local expected_order, reps, candidates;
+    expected_order := 2 ^ (m + 1);
+    reps := List(ConjugacyClassesSubgroups(G), Representative);
+    candidates := Filtered(reps,
+                           S -> IsElementaryAbelian(S)
+                                and Order(S) = expected_order);
+    if Length(candidates) = 0 then
+        Error("_DETF_AllMaxEAsIn: no rank-", m + 1,
+              " elementary abelian in G");
+    fi;
+    return candidates;
+end;;
+
 # Public entry point. Phase 1 supports source = "hap" for m in {2, 3, 5}.
 # m = 7 + "hap" errors (would invoke ResolutionFiniteGroup(E_+(7), 4) which
 # OOMs). source = "quillen" is Phase 2, gated on Q-int A2/A3 (#136), and
 # currently errors.
 #
+# D-VAN-FIX (#151): uses the FULL detecting family — all conjugacy
+# class representatives of maximal elementary abelians (rank m+1) plus
+# the pinned D_8 section. A single max EA leaves a large kernel in
+# the restriction map (verified empirically at m=2: 9/10 unit gens
+# map to zero with just one EA).
+#
 # Returns rec(
 #   m, source ("hap" | "quillen"),
-#   res_E       : k_G x k_E integer matrix, entries in [0..torsion_E[j]-1]
-#   res_D8      : k_G x k_D8 integer matrix, entries in [0..torsion_D8[j]-1]
-#   torsion_G, torsion_E, torsion_D8,
-#   exp_G,     exp_E,     exp_D8,
-#   setup_G,                # SetupCohomology3(G) record (for omega lifting)
-#   ctx_E, ctx_D8,          # SubgroupCohomologyContext recs
-#   H_E, H_D8,              # the pinned GAP subgroups
-#   G                       # the parent E_+(m), pinned across both H_E, H_D8
+#   H_EA_list       : list of GAP subgroups, one per conj class of max EA
+#   ctx_EA_list     : parallel list of SubgroupCohomologyContext recs
+#   res_EA_list     : parallel list of k_G x k_{E_i} restriction matrices
+#   torsion_EA_list : parallel list of subgroup torsion vectors
+#   exp_EA_list     : parallel list of subgroup exponents
+#   H_D8, ctx_D8, res_D8, torsion_D8, exp_D8 : the pinned D_8 section
+#   torsion_G, exp_G, setup_G, G  : G-side data
+#   Backward-compat aliases (point at the FIRST EA, equal to the old
+#   single-EA result at this index): res_E, ctx_E, torsion_E, exp_E, H_E.
 # ). Cached at module level by (m, source) in _DETF_CACHE.
 BuildRestrictionMatrices := function(m, source)
-    local key, ea_rec, G, H_E, H_D8, setup_G, ctx_E, ctx_D8,
-          phi_E, phi_D8, res_E, res_D8, result;
+    local key, ea_rec, G, H_D8, setup_G, ctx_D8, phi_D8, res_D8,
+          H_EA_list, ctx_EA_list, res_EA_list, i, result;
 
     if not (IsInt(m) and m >= 1) then
         Error("BuildRestrictionMatrices: m must be a positive integer; got ",
@@ -232,41 +282,67 @@ BuildRestrictionMatrices := function(m, source)
         return _DETF_CACHE.(key);
     fi;
 
-    # Pin a single G instance (each EPlusGroup(m) call builds a fresh
-    # group with non-overlapping element families; mixing instances breaks
-    # GroupHomomorphismByImages).
+    # Pin a single G instance via the first MaximalElementaryAbelian_E_plus
+    # call. The returned ea_rec.parent is the EPlusGroup(m) we'll use for
+    # ALL subsequent subgroup constructions and chain maps.
     ea_rec := MaximalElementaryAbelian_E_plus(m);
     G := ea_rec.parent;
-    H_E := ea_rec.subgroup;
+
+    # Enumerate all conjugacy class reps of max EAs inside G, AND the
+    # pinned D_8 section. Both filters traverse ConjugacyClassesSubgroups(G)
+    # — at m=2 that's ~50 subgroups, at m=3 ~700 subgroups, still tractable.
+    H_EA_list := _DETF_AllMaxEAsIn(G, m);
     H_D8 := _DETF_FindD8In(G, m);
 
     setup_G := SetupCohomology3(G);
-    ctx_E := SubgroupCohomologyContext(H_E);
+
+    # Per-EA: build cohomology context and restriction matrix.
+    ctx_EA_list := [];
+    res_EA_list := [];
+    for i in [1..Length(H_EA_list)] do
+        Add(ctx_EA_list, SubgroupCohomologyContext(H_EA_list[i]));
+        Add(res_EA_list, RestrictionMatrixViaHAP(
+            setup_G,
+            ctx_EA_list[i],
+            SubgroupInclusion(H_EA_list[i], G)));
+    od;
+
+    # D_8 side.
     ctx_D8 := SubgroupCohomologyContext(H_D8);
-
-    phi_E := SubgroupInclusion(H_E, G);
     phi_D8 := SubgroupInclusion(H_D8, G);
-
-    res_E  := RestrictionMatrixViaHAP(setup_G, ctx_E, phi_E);
     res_D8 := RestrictionMatrixViaHAP(setup_G, ctx_D8, phi_D8);
 
     result := rec(
-        m            := m,
-        source       := source,
-        res_E        := res_E,
-        res_D8       := res_D8,
-        torsion_G    := setup_G.torsion,
-        torsion_E    := ctx_E.torsion,
-        torsion_D8   := ctx_D8.torsion,
-        exp_G        := setup_G.exponent,
-        exp_E        := ctx_E.exponent,
-        exp_D8       := ctx_D8.exponent,
-        setup_G      := setup_G,
-        ctx_E        := ctx_E,
-        ctx_D8       := ctx_D8,
-        H_E          := H_E,
-        H_D8         := H_D8,
-        G            := G
+        m               := m,
+        source          := source,
+
+        # Full detecting family.
+        H_EA_list       := H_EA_list,
+        ctx_EA_list     := ctx_EA_list,
+        res_EA_list     := res_EA_list,
+        torsion_EA_list := List(ctx_EA_list, c -> c.torsion),
+        exp_EA_list     := List(ctx_EA_list, c -> c.exponent),
+
+        # D_8 section.
+        H_D8            := H_D8,
+        ctx_D8          := ctx_D8,
+        res_D8          := res_D8,
+        torsion_D8      := ctx_D8.torsion,
+        exp_D8          := ctx_D8.exponent,
+
+        # G-side data.
+        torsion_G       := setup_G.torsion,
+        exp_G           := setup_G.exponent,
+        setup_G         := setup_G,
+        G               := G,
+
+        # Backward-compat aliases pointing at the first EA in the list.
+        # New code should iterate over H_EA_list/ctx_EA_list/res_EA_list.
+        res_E           := res_EA_list[1],
+        ctx_E           := ctx_EA_list[1],
+        torsion_E       := ctx_EA_list[1].torsion,
+        exp_E           := ctx_EA_list[1].exponent,
+        H_E             := H_EA_list[1]
     );
 
     _DETF_CACHE.(key) := result;
