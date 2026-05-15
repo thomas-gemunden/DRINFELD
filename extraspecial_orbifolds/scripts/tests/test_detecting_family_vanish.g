@@ -18,3 +18,49 @@ end;;
 Print("\n--- Task 2.1: scaffold ---\n");
 AssertOrLog("ResIsTrivialOnDetectingFamily is bound",
             IsBoundGlobal("ResIsTrivialOnDetectingFamily"));
+
+Print("\n--- Task 2.2: NormaliseOmegaToHomBasis ---\n");
+
+rec_m2 := BuildRestrictionMatrices(2, "hap");;
+
+# Hom-basis input (length 10 for E_+(2)). Should pass through unchanged.
+hom_vec_id := List([1..10], i -> If_(i = 1, 1, 0));;
+normalised := NormaliseOmegaToHomBasis(rec_m2, hom_vec_id);;
+AssertOrLog("hom-basis input passes through",
+            normalised = hom_vec_id);
+
+# Cocycle-form input (length K_G!.dimension(3)) is recognised and
+# rejected in Phase 1. (Full cocycle-form path needs a UCT.cyclebasis
+# pairing step that's deferred to a follow-up.)
+cocycle_vec_id := ListWithIdenticalEntries(
+    rec_m2.setup_G.K!.dimension(3), 0);;
+err := CALL_WITH_CATCH(NormaliseOmegaToHomBasis,
+                       [rec_m2, cocycle_vec_id]);;
+AssertOrLog("cocycle-form input errors (Phase 1 deferred)",
+            not err[1]);
+
+# Bad length input.
+err := CALL_WITH_CATCH(NormaliseOmegaToHomBasis, [rec_m2, [1, 2, 3]]);;
+AssertOrLog("bad-length input errors", not err[1]);
+
+Print("\n--- Task 2.3: ResIsTrivialOnDetectingFamily basic API ---\n");
+
+# Zero omega: trivially in the kernel.
+omega_zero := List([1..10], i -> 0);;
+r_zero := ResIsTrivialOnDetectingFamily(2, omega_zero);;
+AssertOrLog("omega=0 is trivial", r_zero.trivial = true);
+AssertOrLog("res_E_vec is zero (length k_E = 7)",
+            r_zero.res_E_vec = ListWithIdenticalEntries(7, 0));
+AssertOrLog("res_D8_vec is zero (length k_D8 = 3)",
+            r_zero.res_D8_vec = [0, 0, 0]);
+AssertOrLog("f_E is a function", IsFunction(r_zero.f_E));
+AssertOrLog("f_D8 is a function", IsFunction(r_zero.f_D8));
+AssertOrLog("source = hap", r_zero.source = "hap");
+
+if IsEmpty(testFailures) then
+    Print("\n=== test_detecting_family_vanish: PASS ===\n");
+else
+    Print("\n=== test_detecting_family_vanish: FAIL (",
+          Length(testFailures), ") ===\n");
+    for f in testFailures do Print("  - ", f, "\n"); od;
+fi;
