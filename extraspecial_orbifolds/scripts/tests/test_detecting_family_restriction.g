@@ -161,6 +161,29 @@ AssertOrLog("m = 0 errors", not err[1]);
 err := CALL_WITH_CATCH(BuildRestrictionMatrices, [2, "garbage"]);;
 AssertOrLog("unknown source errors", not err[1]);
 
+Print("\n--- Task 1.6: m=3 smoke ---\n");
+
+# Larger group: E_+(3) = order 128, k_G = 35, EA at m=3 has rank 4
+# (gives k_E = 14 invariant factors per UCT), D_8 unchanged (k_D8 = 3).
+# This call exercises HAP resolution on E_+(3) (~10 s) plus two
+# EquivariantChainMap builds (E -> G and D_8 -> G); total ~30-60 s wall.
+rec_m3 := BuildRestrictionMatrices(3, "hap");;
+AssertOrLog("rec_m3.m = 3", rec_m3.m = 3);
+AssertOrLog("res_E is 35 x 14 (m=3 EA k=4 -> H^3 has 14 invariant factors)",
+            Length(rec_m3.res_E) = 35
+            and Length(rec_m3.res_E[1]) = 14);
+AssertOrLog("res_D8 is 35 x 3",
+            Length(rec_m3.res_D8) = 35
+            and Length(rec_m3.res_D8[1]) = 3);
+AssertOrLog("torsion_E sorted = [2,2,2,2,2,2,2,2,2,2,2,2,2,2]",
+            SortedList(rec_m3.torsion_E)
+                = ListWithIdenticalEntries(14, 2));
+AssertOrLog("torsion_D8 sorted = [2,2,4]",
+            SortedList(rec_m3.torsion_D8) = [2, 2, 4]);
+AssertOrLog("torsion_G sorted = (Z/2)^34 + Z/4 (per A-3a kernel.g)",
+            SortedList(rec_m3.torsion_G)
+                = Concatenation(ListWithIdenticalEntries(34, 2), [4]));
+
 if IsEmpty(testFailures) then
     Print("\n=== test_detecting_family_restriction: PASS ===\n");
 else
