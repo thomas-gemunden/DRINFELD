@@ -265,8 +265,15 @@ Append to `test_detecting_family_restriction.g`:
 ```gap
 Print("\n--- Task 1.3: SubgroupInclusion ---\n");
 
-G_22 := EPlusGroup(2);;     # E_+(2), order 32
+# IMPORTANT: each call to EPlusGroup(m) builds a fresh GAP group with
+# non-overlapping element families. GroupHomomorphismByImages will fail
+# if H comes from one EPlusGroup(2) call and we pass a different
+# EPlusGroup(2) call as the target G. Pin G to whatever EPlusGroup(2)
+# the subgroup constructor used (= H_d8_rec.parent), NOT a fresh
+# EPlusGroup(2). The original plan called EPlusGroup(2) here directly;
+# replaced with H_d8_rec.parent based on Task 1.3 implementation finding.
 H_d8_rec := D8Section_E_plus(2);;
+G_22 := H_d8_rec.parent;;    # SAME EPlusGroup(2) as inside H_d8_rec
 H_d8 := H_d8_rec.subgroup;;
 
 phi := SubgroupInclusion(H_d8, G_22);;
@@ -506,17 +513,21 @@ rec_m2 := BuildRestrictionMatrices(2, "hap");;
 
 AssertOrLog("rec.m = 2", rec_m2.m = 2);
 AssertOrLog("rec.source = hap", rec_m2.source = "hap");
-AssertOrLog("rec.res_E is a 10 x 3 matrix",
+# NOTE: H^3((Z/2)^k; U(1)) from UCT has 7 invariant factors at k=3
+# (m=2 EA), NOT 3. The 3 is the rank of the EA itself, not the rank
+# of its degree-3 cohomology. Empirically verified via SetupCohomology3.
+AssertOrLog("rec.res_E is a 10 x 7 matrix (m=2 EA H^3 has 7 invariant factors)",
             Length(rec_m2.res_E) = 10
-            and Length(rec_m2.res_E[1]) = 3);
+            and Length(rec_m2.res_E[1]) = 7);
 AssertOrLog("rec.res_D8 is a 10 x 3 matrix",
             Length(rec_m2.res_D8) = 10
             and Length(rec_m2.res_D8[1]) = 3);
 AssertOrLog("rec.torsion_G = E_+(2) torsion",
             SortedList(rec_m2.torsion_G)
                 = Concatenation(List([1..9], i -> 2), [8]));
-AssertOrLog("rec.torsion_E sorted = [2,2,2]",
-            SortedList(rec_m2.torsion_E) = [2, 2, 2]);
+AssertOrLog("rec.torsion_E sorted = [2]^7",
+            SortedList(rec_m2.torsion_E)
+                = ListWithIdenticalEntries(7, 2));
 AssertOrLog("rec.torsion_D8 sorted = [2,2,4]",
             SortedList(rec_m2.torsion_D8) = [2, 2, 4]);
 AssertOrLog("rec.H_E is a GAP group",
@@ -671,14 +682,17 @@ Print("\n--- Task 1.6: m=3 smoke ---\n");
 
 rec_m3 := BuildRestrictionMatrices(3, "hap");;
 AssertOrLog("rec_m3.m = 3", rec_m3.m = 3);
-AssertOrLog("rec.res_E is 35 x 4 (E_+(3) k_G = 35; max-EA rank 4 gives k_E = 4)",
+# m=3 EA = (Z/2)^4 (rank 4); UCT-derived H^3 has 14 invariant factors,
+# not 4. The 4 is the EA rank.
+AssertOrLog("rec.res_E is 35 x 14 (m=3 EA k=4 -> H^3 has 14 invariant factors)",
             Length(rec_m3.res_E) = 35
-            and Length(rec_m3.res_E[1]) = 4);
+            and Length(rec_m3.res_E[1]) = 14);
 AssertOrLog("rec.res_D8 is 35 x 3",
             Length(rec_m3.res_D8) = 35
             and Length(rec_m3.res_D8[1]) = 3);
-AssertOrLog("torsion_E sorted = [2,2,2,2]",
-            SortedList(rec_m3.torsion_E) = [2, 2, 2, 2]);
+AssertOrLog("torsion_E sorted = [2]^14",
+            SortedList(rec_m3.torsion_E)
+                = ListWithIdenticalEntries(14, 2));
 AssertOrLog("torsion_D8 sorted = [2,2,4]",
             SortedList(rec_m3.torsion_D8) = [2, 2, 4]);
 ```
@@ -719,7 +733,7 @@ Closes (issue TBD-D-VAN-2). Implements the restriction-matrix builder for the AM
 ## What this PR ships
 
 - `extraspecial_orbifolds/scripts/detecting_family_restriction.g` with public `BuildRestrictionMatrices(m, source)`, helpers `SubgroupCohomologyContext`, `SubgroupInclusion`, `RestrictionMatrixViaHAP`, module-level `_DETF_CACHE`.
-- `tests/test_detecting_family_restriction.g` with shape and smoke assertions at m=2 (10×3 res_D8, 10×3 res_E with rank-3 EA) and m=3 (35×4, 35×3).
+- `tests/test_detecting_family_restriction.g` with shape and smoke assertions at m=2 (10×3 res_D8, 10×7 res_E — UCT-derived H^3 rank for the rank-3 EA) and m=3 (35×3, 35×14 — H^3 rank for the rank-4 EA).
 
 ## Implementation notes
 
@@ -962,8 +976,8 @@ Print("\n--- Task 2.3: ResIsTrivialOnDetectingFamily basic API ---\n");
 omega_zero := List([1..10], i -> 0);;
 r_zero := ResIsTrivialOnDetectingFamily(2, omega_zero);;
 AssertOrLog("omega=0 is trivial", r_zero.trivial = true);
-AssertOrLog("res_E_vec is zero (length k_E = 3)",
-            r_zero.res_E_vec = [0, 0, 0]);
+AssertOrLog("res_E_vec is zero (length k_E = 7)",
+            r_zero.res_E_vec = ListWithIdenticalEntries(7, 0));
 AssertOrLog("res_D8_vec is zero (length k_D8 = 3)",
             r_zero.res_D8_vec = [0, 0, 0]);
 AssertOrLog("f_E is a function", IsFunction(r_zero.f_E));
@@ -1249,8 +1263,11 @@ Print("\n--- Task 2.7: D_8-section choice invariance smoke ---\n");
 # `trivial` verdict is identical on the 10 unit generators (the
 # witness vectors differ but the trivial bit is class-invariant).
 
-G_22 := EPlusGroup(2);;
-all_subs := List(ConjugacyClassesSubgroups(G_22), Representative);;
+# IMPORTANT: re-use rec_m2.G (the SAME EPlusGroup(2) instance the
+# cached restriction matrices were built against). EquivariantChainMap
+# requires H and G to share an element family; calling EPlusGroup(2)
+# afresh would mismatch.
+all_subs := List(ConjugacyClassesSubgroups(rec_m2.G), Representative);;
 d8_candidates := Filtered(all_subs,
                           S -> Order(S) = 8
                               and not IsAbelian(S)
@@ -1266,7 +1283,7 @@ AssertOrLog("E_+(2) has at least 2 distinct D_8-section conjugacy classes",
 if Length(d8_candidates) >= 2 then
     H_d8_alt := d8_candidates[2];
     ctx_d8_alt := SubgroupCohomologyContext(H_d8_alt);
-    phi_d8_alt := SubgroupInclusion(H_d8_alt, G_22);
+    phi_d8_alt := SubgroupInclusion(H_d8_alt, rec_m2.G);
     res_D8_alt := RestrictionMatrixViaHAP(rec_m2.setup_G,
                                             ctx_d8_alt, phi_d8_alt);
     mismatch_count := 0;
