@@ -43,6 +43,31 @@ AssertOrLog("ctx_d8.num_generators = 3 (D_8 H^3 rank)",
 AssertOrLog("ctx_d8.torsion = [2, 2, 4] (sorted)",
             SortedList(ctx_d8.torsion) = [2, 2, 4]);
 
+Print("\n--- Task 1.3: SubgroupInclusion ---\n");
+
+# Each call to EPlusGroup(m) builds a fresh GAP group (no caching),
+# so H_d8_rec.parent and an independent EPlusGroup(2) call produce
+# DIFFERENT groups with non-overlapping element families. The plan's
+# original test used a separate EPlusGroup(2); we use H_d8_rec.parent
+# here to keep H and G in the same family, which is what GAP's
+# GroupHomomorphismByImages actually needs. Plan deviation: docs only.
+H_d8_rec := D8Section_E_plus(2);;
+G_22 := H_d8_rec.parent;;   # E_+(2), order 32, same family as H_d8
+H_d8 := H_d8_rec.subgroup;;
+
+phi := SubgroupInclusion(H_d8, G_22);;
+AssertOrLog("SubgroupInclusion returns a homomorphism",
+            IsGroupHomomorphism(phi));
+AssertOrLog("Source(phi) = H",
+            Source(phi) = H_d8);
+AssertOrLog("Range(phi) = G",
+            Range(phi) = G_22);
+AssertOrLog("phi is injective",
+            IsInjective(phi));
+AssertOrLog("phi(h) = h for the first generator of H",
+            Image(phi, GeneratorsOfGroup(H_d8)[1])
+                = GeneratorsOfGroup(H_d8)[1]);
+
 if IsEmpty(testFailures) then
     Print("\n=== test_detecting_family_restriction: PASS ===\n");
 else

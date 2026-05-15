@@ -62,3 +62,20 @@ end;;
 SubgroupCohomologyContext := function(H)
     return SetupCohomology3(H);
 end;;
+
+# Build the inclusion homomorphism phi: H -> G where H <= G.
+# GAP's GroupHomomorphismByImages handles this when given the
+# generators of H mapped to themselves (as elements of G).
+#
+# This is the homomorphism object that HAP's EquivariantChainMap needs.
+SubgroupInclusion := function(H, G)
+    local gens_H, phi;
+    gens_H := GeneratorsOfGroup(H);
+    phi := GroupHomomorphismByImages(H, G, gens_H, gens_H);
+    if phi = fail then
+        Error("SubgroupInclusion: H = ", H,
+              " is not a subgroup of G = ", G,
+              " (GroupHomomorphismByImages returned fail)");
+    fi;
+    return phi;
+end;;
