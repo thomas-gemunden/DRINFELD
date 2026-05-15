@@ -26,12 +26,20 @@
 # Per CLAUDE.md the parent file uses globals `i`, `hom` inside UniversalCoefficientsTheorem;
 # we accept that (single-load only).
 #
-# IMPORTANT MATHEMATICAL CAVEAT
-# ----------------------------
-# The wrapper produces correct results at omega = 0 (Stage 1 + Stage 2 of the smoke
-# test recover the classical Frobenius-Schur indicators [+1,+1,+1,+1,-1] for Q_8 and
-# total Z(Vec_Q_8) rank 22).  For NON-trivial omega the wrapper's output is currently
-# UNRELIABLE because:
+# MATHEMATICAL CAVEAT (V-4a, #81) -- RESOLVED 2026-05-15
+# ------------------------------------------------------
+# The original wrapper produced incorrect results at omega != 0 because
+# FSI_LiftIfHom used `UCT.lift * vec` to convert hom-basis coordinates to
+# R^3 cocycle vectors. That call has a dimension-mismatch silently
+# papered over by GAP's vector-auto-padding, producing an R^3 vector
+# that does NOT satisfy the bar 3-cocycle equation -- the same 1105/4096
+# violations on Q_8 ω = order-8 that gave V-4a its name. The transgression
+# kernel pipeline uses UCT.cocyclebasis correctly (so it was never affected);
+# the bug was confined to fsi_wrapper.g. Fix: use UCT.cocyclebasis (see
+# FSI_LiftIfHom below). After the fix Q_8 ω = order-8 gives 0/4096
+# violations of the bar 3-cocycle equation mod 8.
+#
+# Historical context (now obsolete):
 #
 #   - HAP's StandardCocycle(R, omega_vec, 3, n) on R = ResolutionFiniteGroup(Q_8, 4)
 #     does NOT satisfy the inhomogeneous bar-resolution 3-cocycle equation
@@ -110,17 +118,30 @@ end;;
 
 # --- omega_vec sanitisation -----------------------------------------------
 # A user can pass either:
-#   * an orbit representative as written by AutomorphismOrbits (the H^3 hom vector),
-#     in which case we first lift it to a cocycle vector via UCT.lift, OR
+#   * a hom-basis coordinate vector of length Length(UCT.hombasis), OR
 #   * an already-lifted cocycle vector of length R!.dimension(3).
 #
-# We detect by length: a hom-vector has length = Size(UCT.hombasis), a lifted cocycle
-# has length = R!.dimension(3).  If neither matches, we error.
+# V-4a (#81) fix: for the hom-basis input, build the cocycle representative
+# by linear combination of UCT.cocyclebasis — NOT via UCT.lift. UCT.lift in
+# Gruen's UCT helper has shape (R!.dimension(3) × dim-aux) where the aux
+# dimension is NOT Length(UCT.hombasis) in general (e.g. for Q_8 it's
+# 3 × 2 with hombasis-length 1). Doing `UCT.lift * vec` for a length-1
+# hom-vec triggers GAP's silent vector-auto-padding and produces a wrong
+# R^3 vector that does NOT satisfy the bar 3-cocycle equation
+# (1105/4096 violations on Q_8 with the order-8 generator, mod 8).
+#
+# Using UCT.cocyclebasis matches the kernel-pipeline convention in
+# transgression_kernel.g's StandardCocycleOf and gives a strict bar
+# 3-cocycle (0/4096 violations).
 FSI_LiftIfHom := function(R, UCT, vec)
-    local n;
+    local n, v, i;
     n := UCT!.exponent;
     if Length(vec) = Length(UCT!.hombasis) then
-        return (UCT!.lift * vec) mod n;
+        v := ListWithIdenticalEntries(R!.dimension(3), 0);
+        for i in [1..Length(vec)] do
+            v := v + vec[i] * UCT!.cocyclebasis[i];
+        od;
+        return v mod n;
     elif Length(vec) = R!.dimension(3) then
         return vec mod n;
     else
