@@ -16,11 +16,17 @@
 # spectral sequence applied to the canonical F_2 cohomology
 # presentation (Q-2a, issue #133).
 #
-# Current implementation: hardcoded torsion vectors anchored at the
-# HAP-verified values for m = 1, 2, 3 (cross-checked against the
-# kernel.g files in `computed/transgression/{2,3}/`). For m = 5, 7
-# the structure is documented as TODO pending the Stage A2/A3 work
-# (Bockstein spectral sequence derivation).
+# Current implementation:
+#   * m in {1, 2, 3}: hardcoded torsion vectors anchored at HAP-verified
+#     values (cross-checked against kernel.g files in
+#     `computed/transgression/{2,3}/`).
+#   * m >= 3 (analytical fallback): derived via Harada-Kono 1987 Thm 1.1
+#     (A(4) = Z/4 a priori) + Bockstein analysis of the Q-2a canonical
+#     presentation (see quillen_h4_torsion.g). Loaded lazily.
+#
+# The m=3 derivation is verified against the hardcoded value by
+# tests/test_quillen_h3_structure.g. m=5 cross-validates against A-5b's
+# empirical k=165 H^3 generators (HAP-based).
 #
 # Generator order. Inside each entry the torsion list is sorted with
 # Z/2 components first and the maximum-order component (where the
@@ -42,40 +48,54 @@ _QH3S_TORSION_TABLE := rec(
     m1 := [2, 2, 4],
     m2 := [2, 2, 2, 2, 2, 2, 2, 2, 2, 8],
     m3 := Concatenation(ListWithIdenticalEntries(34, 2), [4])
-    # m5, m7 deliberately omitted -- pending Stage A2 derivation via the
-    # Bockstein spectral sequence on the Q-2a canonical presentation.
+    # m >= 5: derived analytically via _QH3S_DerivedTorsion below.
 );;
 
-# Public entry point. Returns rec(m, torsion, exponent, num_generators).
+# Lazy loader for the Bockstein-derived torsion (Q-int A2 / #136).
+# Lives in quillen_h4_torsion.g; loaded on first non-hardcoded call.
+_QH3S_DerivedTorsion := function(m)
+    if not IsBoundGlobal("QuillenH4TorsionFromBockstein") then
+        Read("quillen_h4_torsion.g");
+    fi;
+    return QuillenH4TorsionFromBockstein(m);
+end;;
+
+# Public entry point. Returns rec(m, torsion, exponent, num_generators,
+# source). Source = "hardcoded" for m in {1, 2, 3}; "bockstein-derived"
+# for m >= 5.
 QuillenH3Structure := function(m)
-    local key, torsion;
+    local key, torsion, source;
     if not (IsInt(m) and m >= 1) then
         Error("QuillenH3Structure: m must be a positive integer");
     fi;
     key := Concatenation("m", String(m));
-    if not IsBound(_QH3S_TORSION_TABLE.(key)) then
-        Error(Concatenation(
-            "QuillenH3Structure: torsion for m = ", String(m),
-            " not yet derived. ",
-            "Available: m in {1, 2, 3}. ",
-            "See docs/superpowers/plans/2026-05-15-quillen-integration.md ",
-            "Stage A2 for the derivation work."));
+    if IsBound(_QH3S_TORSION_TABLE.(key)) then
+        torsion := ShallowCopy(_QH3S_TORSION_TABLE.(key));
+        source  := "hardcoded";
+    elif m >= 3 then
+        torsion := _QH3S_DerivedTorsion(m);
+        source  := "bockstein-derived";
+    else
+        Error("QuillenH3Structure: cannot derive torsion at m = ", m,
+              " (m=2 needs β(w) which is not yet in the table; ",
+              "m=1 is hardcoded). See ",
+              "docs/superpowers/research/2026-05-15-integer-cohomology-extraspecial-2-groups.md");
     fi;
-    torsion := _QH3S_TORSION_TABLE.(key);
     return rec(
         m              := m,
-        torsion        := ShallowCopy(torsion),
+        torsion        := torsion,
         exponent       := Maximum(torsion),
         num_generators := Length(torsion),
-        source         := "quillen_h3_structure (hardcoded m=1..3)"
+        source         := source
     );
 end;;
 
-# Predicate: is m supported by the analytical path? Lets callers fall
-# back to HAP gracefully when not.
+# Predicate: is m supported (hardcoded OR derivable via Bockstein)?
 QuillenH3StructureAvailable := function(m)
-    return IsBound(_QH3S_TORSION_TABLE.(Concatenation("m", String(m))));
+    if not (IsInt(m) and m >= 1) then return false; fi;
+    return IsBound(_QH3S_TORSION_TABLE.(Concatenation("m", String(m))))
+           or m >= 3;
 end;;
 
 Print("Loaded quillen_h3_structure.g ",
-      "(QuillenH3Structure 1..3; m=5,7 pending).\n");
+      "(QuillenH3Structure 1..3 hardcoded; m>=3 via Bockstein).\n");
