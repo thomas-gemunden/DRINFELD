@@ -13,7 +13,10 @@
 #
 # E_+(5) = central product of 5 copies of D_8, order 2^11 = 2048.
 # SmallGroup library does not reach order 2048, so we use
-# ExtraspecialGroup(2048, "+").
+# ExtraspecialGroup(2048, "+"). That already returns a pc-group
+# (verified: IsPcGroup = true), so the ~3000x matrix-vs-pc HAP slowdown
+# documented in brw_h3_action.g for EmGroup(m) does NOT apply here —
+# no IsomorphismPcGroup conversion is needed.
 
 LoadPackage("hap");;
 LoadPackage("io");;
