@@ -79,3 +79,94 @@ SubgroupInclusion := function(H, G)
     fi;
     return phi;
 end;;
+
+# Compute the restriction matrix H^3(G; U(1)) -> H^3(H; U(1)) using
+# HAP's EquivariantChainMap. Pattern mirrors H3MatrixOfAutomorphism
+# (brw_h3_action.g) but with phi: H -> G (subgroup inclusion) replacing
+# phi: G -> G (automorphism).
+#
+# Returns a k_G x k_H integer matrix whose (i, j) entry is the j-th
+# H-side hom-basis coordinate of the image of the i-th G-side hom-basis
+# generator under restriction. Entries are reduced mod torsion_H[j].
+#
+# Why this matches H3MatrixOfAutomorphism's structure:
+#
+#   * EquivariantChainMap(R_H, R_G, phi) builds a chain map R_H -> R_G
+#     above phi.
+#   * TensorWithIntegers(...) descends to a Z-chain map K_H -> K_G.
+#   * GroupCohomologyFunctor(K_H, K_G, chainmap, 3) gives F such that
+#     F acts on adapted Z_3 cycle coords. On hom-vectors (length |ZZ_H|),
+#     the pullback phi^* acts via right-multiplication by TransposedMat(F),
+#     producing an image in H^3(G; Z/exp_G).
+#   * IMPORTANT: the source/target swap for the inclusion case is just
+#     the choice of R_H as source and R_G as target. The cohomology
+#     functor is contravariant, so phi^* maps cocycles on G to cocycles
+#     on H (correct direction for our restriction).
+#   * The projection onto hombasis_H uses exp_H (not exp_G) for the
+#     slack since the target lives in H^3(H; Z/exp_H).
+RestrictionMatrixViaHAP := function(setup_G, ctx_H, phi_HG)
+    local R_G, K_G, UCT_G, exp_G, k_G, hombasis_G,
+          R_H, K_H, UCT_H, exp_H, k_H, torsion_H, hombasis_H, hb_len_H,
+          chainmap, gcf, F, autmat,
+          aug_matrix, i, image_vec, image_modH, sol, col_coeffs,
+          res_mat, j;
+
+    R_G := setup_G.R;
+    K_G := setup_G.K;
+    UCT_G := setup_G.UCT;
+    exp_G := setup_G.exponent;
+    k_G := setup_G.num_generators;
+    hombasis_G := UCT_G.hombasis;
+
+    R_H := ctx_H.R;
+    K_H := ctx_H.K;
+    UCT_H := ctx_H.UCT;
+    exp_H := ctx_H.exponent;
+    k_H := ctx_H.num_generators;
+    torsion_H := ctx_H.torsion;
+    hombasis_H := UCT_H.hombasis;
+    hb_len_H := Length(hombasis_H[1]);
+
+    # Equivariant chain map R_H -> R_G above phi: H -> G, then Z-tensored.
+    chainmap := TensorWithIntegers(EquivariantChainMap(R_H, R_G, phi_HG));
+
+    # Matrix of phi on adapted Z_3 cycle coords. Same convention as in
+    # H3MatrixOfAutomorphism (brw_h3_action.g): GroupCohomologyFunctor
+    # returns F such that row-form cycle coords transform by right-
+    # multiplication by F. On hom-vectors, the dual action is right-mult
+    # by TransposedMat(F).
+    gcf := GroupCohomologyFunctor(K_H, K_G, chainmap, 3);
+    F := gcf!.matrix;
+    autmat := TransposedMat(F);
+
+    # Augmented matrix for projecting any phi^*(hombasis_G[i]) onto
+    # hombasis_H mod exp_H. The first k_H rows are the H-side hom-basis;
+    # the last hb_len_H rows are exp_H * I_{hb_len_H} (slack for
+    # mod-exp_H equivalence). SolutionIntMat(aug, image) returns x with
+    # x * aug = image; x{[1..k_H]} are the desired H-side coords.
+    aug_matrix := Concatenation(
+        hombasis_H,
+        List([1..hb_len_H], r -> List([1..hb_len_H], c ->
+            If_(r = c, exp_H, 0))));
+
+    res_mat := NullMat(k_G, k_H);
+    for i in [1..k_G] do
+        # phi^*(hombasis_G[i]) as a length-hb_len_H vector mod exp_G.
+        image_vec := List(hombasis_G[i] * autmat, x -> x mod exp_G);
+        # Reduce mod exp_H since target is H^3(H; Z/exp_H).
+        image_modH := List(image_vec, x -> x mod exp_H);
+        sol := SolutionIntMat(aug_matrix, image_modH);
+        if sol = fail then
+            Error("RestrictionMatrixViaHAP: could not project image of ",
+                  "hombasis_G[", i, "] onto hombasis_H. ",
+                  "Possible cause: phi is not actually a homomorphism ",
+                  "or aug_matrix span is incorrect for this exp_H.");
+        fi;
+        col_coeffs := sol{[1..k_H]};
+        for j in [1..k_H] do
+            res_mat[i][j] := col_coeffs[j] mod torsion_H[j];
+        od;
+    od;
+
+    return res_mat;
+end;;

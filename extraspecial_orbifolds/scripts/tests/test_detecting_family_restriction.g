@@ -68,6 +68,28 @@ AssertOrLog("phi(h) = h for the first generator of H",
             Image(phi, GeneratorsOfGroup(H_d8)[1])
                 = GeneratorsOfGroup(H_d8)[1]);
 
+Print("\n--- Task 1.4: RestrictionMatrixViaHAP ---\n");
+
+setup_G_22 := SetupCohomology3(G_22);;
+ctx_H_d8 := SubgroupCohomologyContext(H_d8);;
+phi_d8 := SubgroupInclusion(H_d8, G_22);;
+
+# Build the restriction matrix H^3(G) -> H^3(D_8) for G = E_+(2).
+res_mat := RestrictionMatrixViaHAP(setup_G_22, ctx_H_d8, phi_d8);;
+
+AssertOrLog("RestrictionMatrixViaHAP returns a matrix",
+            IsMatrix(res_mat));
+AssertOrLog("matrix has k_G = 10 rows (E_+(2) H^3 rank)",
+            Length(res_mat) = 10);
+AssertOrLog("matrix has k_H = 3 columns (D_8 H^3 rank)",
+            Length(res_mat[1]) = 3);
+
+# Entries should be reduced mod the H-side torsion. torsion_H = [2, 2, 4]
+# in some order; every entry must be in [0..3].
+all_reduced := ForAll(res_mat, row -> ForAll(row, x -> x >= 0 and x <= 3));
+AssertOrLog("all entries reduced mod max(torsion_H) = 4",
+            all_reduced);
+
 if IsEmpty(testFailures) then
     Print("\n=== test_detecting_family_restriction: PASS ===\n");
 else
