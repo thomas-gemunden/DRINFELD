@@ -57,6 +57,35 @@ AssertOrLog("f_E is a function", IsFunction(r_zero.f_E));
 AssertOrLog("f_D8 is a function", IsFunction(r_zero.f_D8));
 AssertOrLog("source = hap", r_zero.source = "hap");
 
+Print("\n--- Task 2.4: Gate 1A m=2 (10 generators vs HAP) ---\n");
+
+# Load the HAP-computed kernel of Tr for E_+(2): 2048 vectors of length
+# 10 in Z/2^9 (+) Z/8.
+ker_data := ReadAsFunction(
+    "../../computed/transgression/2/kernel.g")();;
+ker_vecs := ker_data.kernel_vecs;;
+AssertOrLog("loaded 2048 HAP kernel vectors",
+            Length(ker_vecs) = 2048);
+
+# For each of the 10 unit generators, check whether D-VAN's verdict
+# matches "is e_i in HAP's kernel?". If any mismatch, the AM04
+# detecting-family injectivity is violated empirically — STOP.
+mismatches := [];;
+for i in [1..10] do
+    e_i := List([1..10], j -> If_(j = i, 1, 0));
+    in_hap_ker := e_i in ker_vecs;
+    r := ResIsTrivialOnDetectingFamily(2, e_i);
+    if r.trivial <> in_hap_ker then
+        Add(mismatches, rec(i := i, dvan := r.trivial,
+                             hap := in_hap_ker));
+    fi;
+od;
+AssertOrLog("Gate 1A: D-VAN matches HAP on all 10 m=2 generators",
+            IsEmpty(mismatches));
+if not IsEmpty(mismatches) then
+    Print("    mismatches: ", mismatches, "\n");
+fi;
+
 if IsEmpty(testFailures) then
     Print("\n=== test_detecting_family_vanish: PASS ===\n");
 else
