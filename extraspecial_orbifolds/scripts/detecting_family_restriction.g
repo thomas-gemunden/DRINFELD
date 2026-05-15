@@ -92,34 +92,33 @@ end;;
 #   * On hom-vectors phi^* acts by right-mult by TransposedMat(F):
 #     phi^*(hombasis_G[i]) has length |ZZ_H|, integer-valued.
 #
-# CRITICAL DETAIL — coefficient ring (D-VAN-FIX, #151):
+# CRITICAL DETAIL — coefficient ring (D-VAN-FIX #151 + Q_8 extension #154):
 #
-#   The autom case has exp_G = exp_H = exp, so the same exponent is
-#   used for image reduction AND for hombasis-H slack. For subgroup
-#   inclusion exp_G != exp_H (e.g., m=2: exp_G = 8, exp_E = 2). The
-#   original D-VAN-2 code reduced image_vec mod exp_H, which KILLED
-#   the Z/2 classes of H^3(G; Z/exp_G) that are represented by
-#   entries divisible by exp_G/exp_H (= 4 mod 8 for the Z/2 part of
-#   Z/8). Empirically 9 of 10 m=2 unit generators were lost this way.
+#   The autom case has exp_G = exp_H. For subgroup inclusion the two
+#   can differ either way:
 #
-#   Fix: work in Z/exp_G uniformly. The hombasis_H is given in
-#   Z/exp_H representation (entries in [0..exp_H)). Rescale by
-#   (exp_G/exp_H) so each entry x becomes x * (exp_G/exp_H) in
-#   [0..exp_G); this is the Z/exp_G representation of the same
-#   class. The augmented matrix's slack rows become exp_G * I.
-#   After solving x * aug = image mod exp_G, the j-th coordinate
-#   x[j] is in [0..exp_G) and reduces to the desired Z/torsion_H[j]
-#   value by taking mod torsion_H[j].
+#     * Max EA / D_8: exp_H | exp_G (typically). E.g., m=2:
+#       exp_G = 8, exp_E = 2.
+#     * Q_8 sections at m=3: exp_G = 4, exp_H = 8 — exp_G | exp_H,
+#       the OPPOSITE direction. The earlier exp_H | exp_G assertion
+#       blocked this case, which is exactly the one needed to close
+#       the integer-cohomology detection gap (#153, #154).
 #
-#   This works because for our 2-group cases exp_H | exp_G always
-#   (H is a subgroup of a 2-group), and H^3(H; Z) is all 2-torsion
-#   so Hom(H_3(H; Z), Z/exp_G) ≅ Hom(H_3(H; Z), Z/exp_H) via the
-#   natural inclusion Z/exp_H -> Z/exp_G (multiply by exp_G/exp_H).
+#   Unified fix: work in Z/L where L = Lcm(exp_G, exp_H). Rescale
+#   hombasis_G by L/exp_G and hombasis_H by L/exp_H so both live in
+#   Z/L representation. The augmented matrix's slack is L * I. Solving
+#   `x * aug = image mod L` gives coords; reduce by torsion_H[j].
+#
+#   For exp_H | exp_G this gives L = exp_G, rescale_G = 1, rescale_H =
+#   exp_G/exp_H — recovers the prior partial-fix arithmetic exactly.
+#   For exp_G | exp_H this gives L = exp_H, rescale_G = exp_H/exp_G,
+#   rescale_H = 1 — the new Q_8 case.
 RestrictionMatrixViaHAP := function(setup_G, ctx_H, phi_HG)
     local R_G, K_G, UCT_G, exp_G, k_G, hombasis_G,
           R_H, K_H, UCT_H, exp_H, k_H, torsion_H, hombasis_H, hb_len_H,
-          chainmap, gcf, F, autmat, rescale, hombasis_H_rescaled,
-          aug_matrix, i, image_vec, image_modG, sol, col_coeffs,
+          L, rescale_G, rescale_H,
+          chainmap, gcf, F, autmat, hombasis_H_rescaled,
+          aug_matrix, i, hom_G_rescaled, image_modL, sol, col_coeffs,
           res_mat, j;
 
     R_G := setup_G.R;
@@ -138,42 +137,48 @@ RestrictionMatrixViaHAP := function(setup_G, ctx_H, phi_HG)
     hombasis_H := UCT_H.hombasis;
     hb_len_H := Length(hombasis_H[1]);
 
-    if exp_G mod exp_H <> 0 then
-        Error("RestrictionMatrixViaHAP: exp_H (", exp_H,
-              ") must divide exp_G (", exp_G,
-              "); rescale strategy assumes exp_H | exp_G.");
-    fi;
-    rescale := exp_G / exp_H;
+    # Work in Z/L where L = lcm(exp_G, exp_H). Generalises the prior
+    # `exp_H | exp_G` rescale strategy to cover all cases:
+    #
+    #   * exp_H | exp_G  (max EA / D_8 sections at m=2,3,5):
+    #     L = exp_G, rescale_G = 1, rescale_H = exp_G/exp_H. Recovers
+    #     the prior partial-fix arithmetic exactly.
+    #   * exp_G | exp_H  (Q_8 sections at m=3: exp_G=4, exp_H=8):
+    #     L = exp_H, rescale_G = exp_H/exp_G, rescale_H = 1. Q_8 has
+    #     H^3 = Z/8 which natively holds order-4 elements; restriction
+    #     to Q_8 distinguishes them from the order-2 sub-element. The
+    #     prior `exp_H | exp_G` assertion erroneously blocked this case.
+    #   * neither divides the other: L = Lcm. Both rescales nontrivial.
+    L := Lcm(exp_G, exp_H);
+    rescale_G := L / exp_G;
+    rescale_H := L / exp_H;
 
-    # Equivariant chain map R_H -> R_G above phi: H -> G, then Z-tensored.
     chainmap := TensorWithIntegers(EquivariantChainMap(R_H, R_G, phi_HG));
     gcf := GroupCohomologyFunctor(K_H, K_G, chainmap, 3);
     F := gcf!.matrix;
     autmat := TransposedMat(F);
 
-    # Rescale hombasis_H to Z/exp_G representation: each entry in
-    # [0..exp_H) -> entry * (exp_G/exp_H) in [0..exp_G). Then build
-    # the augmented matrix with slack exp_G * I_{hb_len_H}.
+    # Rescale hombasis_H to Z/L; build augmented matrix with slack L * I.
     hombasis_H_rescaled := List(hombasis_H,
-        h -> List(h, x -> x * rescale));
+        h -> List(h, x -> x * rescale_H));
     aug_matrix := Concatenation(
         hombasis_H_rescaled,
         List([1..hb_len_H], r -> List([1..hb_len_H], c ->
-            If_(r = c, exp_G, 0))));
+            If_(r = c, L, 0))));
 
     res_mat := NullMat(k_G, k_H);
     for i in [1..k_G] do
-        # phi^*(hombasis_G[i]) as length-hb_len_H vector mod exp_G.
-        image_vec := hombasis_G[i] * autmat;
-        image_modG := List(image_vec, x -> x mod exp_G);
-        sol := SolutionIntMat(aug_matrix, image_modG);
+        # Rescale G-side hom from Z/exp_G to Z/L, restrict via autmat,
+        # reduce mod L, project onto hombasis_H_rescaled.
+        hom_G_rescaled := List(hombasis_G[i], x -> x * rescale_G);
+        image_modL := List(hom_G_rescaled * autmat, x -> x mod L);
+        sol := SolutionIntMat(aug_matrix, image_modL);
         if sol = fail then
             Error("RestrictionMatrixViaHAP: could not project image of ",
-                  "hombasis_G[", i, "] onto hombasis_H_rescaled. ",
-                  "Possible causes: phi is not actually a homomorphism, ",
-                  "or hombasis_H doesn't span H^3(H; Z/exp_G) (would ",
-                  "indicate exp_H | exp_G assumption violated for some ",
-                  "torsion factor).");
+                  "hombasis_G[", i, "] onto hombasis_H_rescaled ",
+                  "(L = ", L, "). Possible cause: phi is not actually ",
+                  "a homomorphism, or hombasis_H doesn't span the right ",
+                  "submodule of H^3(H; Z/L).");
         fi;
         col_coeffs := sol{[1..k_H]};
         for j in [1..k_H] do
@@ -200,6 +205,35 @@ _DETF_FindD8In := function(G, m)
     if Length(candidates) = 0 then
         Error("_DETF_FindD8In: no D_8 section in G for m = ", m);
     fi;
+    return candidates[1];
+end;;
+
+# Find a Q_8 section inside G. Returns the first conj class rep with
+# IdGroup = [8, 4] (= Q_8). Returns `fail` if no Q_8 subgroup exists
+# (e.g., m=1: G = D_8 itself contains no Q_8).
+#
+# Why Q_8 matters (#154): per Harada & Kono 1987 Theorem 1.1, the
+# cyclic summand A(4) of H^3(E_+(m); U(1)) has order Z/4 at m≥3 (Z/8
+# at m=2). Restriction to D_8 sections fails to distinguish the
+# order-2 sub-element 2·A(4)_gen from 0 (8/8 D_8 spike at m=3 confirms
+# the structural ceiling from t∘r = 2^h). Q_8 has H^3(Q_8) = Z/8, is
+# NOT a Q-isotropic preimage, and empirically detects 2·A(4)_gen
+# faithfully: res(A(4)_gen) ∈ {2, 6} mod 8 across the 8 sampled Q_8
+# conj classes at m=3, so res(2·A(4)_gen) = 4 ≠ 0 = res(0).
+#
+# Empirical counts of Q_8 conj classes (via ConjugacyClassesSubgroups):
+#   m=1: 0 (D_8 itself; no Q_8)
+#   m=2: 2
+#   m=3: 56
+#   m=5, m=7: TBD via runtime check
+_DETF_FindQ8In := function(G, m)
+    local maxsub, candidates;
+    if m = 1 then return fail; fi;
+    maxsub := List(ConjugacyClassesSubgroups(G), Representative);
+    candidates := Filtered(maxsub,
+                           S -> Order(S) = 8
+                                and IdGroup(S) = [8, 4]);
+    if Length(candidates) = 0 then return fail; fi;
     return candidates[1];
 end;;
 
@@ -232,11 +266,23 @@ end;;
 # OOMs). source = "quillen" is Phase 2, gated on Q-int A2/A3 (#136), and
 # currently errors.
 #
-# D-VAN-FIX (#151): uses the FULL detecting family — all conjugacy
-# class representatives of maximal elementary abelians (rank m+1) plus
-# the pinned D_8 section. A single max EA leaves a large kernel in
-# the restriction map (verified empirically at m=2: 9/10 unit gens
-# map to zero with just one EA).
+# Iterative D-VAN-FIX (#151 → #154 → #153 closed):
+#
+#   #151: ALL max EA conj classes (not just one); detects F_2 part by
+#         Quillen. Closes the m=2/m=3 unit-generator failure.
+#   #154: Add the pinned D_8 section. Captures the cyclic A(4) summand
+#         for m=2 (where A(4) = Z/8 and D_8's H^3 Z/4 catches the order-4
+#         lift). Insufficient at m≥3 where A(4) = Z/4 — every D_8 conj
+#         class gives res_D8[exp_idx][Z/4 coord] ∈ {0, 2}, killing the
+#         order-2 sub-element on doubling.
+#   #153 closure: Add a pinned Q_8 section. Q_8 has H^3 = Z/8, is NOT a
+#         Q-isotropic preimage (so the Harada-Kono transfer-restriction
+#         t∘r = 2^{h(Q)} formula doesn't bind it), and empirically gives
+#         res(A(4)_gen) ∈ {2, 6} mod 8 → distinguishes 0 vs 2·A(4)_gen.
+#         The Q_8 section may not exist at m=1 (no Q_8 in D_8); in that
+#         degenerate case ctx_Q8 = fail and the trivial-class question
+#         at m=1 collapses to "is ω the zero class in H^3(D_8; U(1))?"
+#         answerable by the D_8 = G itself check anyway.
 #
 # Returns rec(
 #   m, source ("hap" | "quillen"),
@@ -245,14 +291,17 @@ end;;
 #   res_EA_list     : parallel list of k_G x k_{E_i} restriction matrices
 #   torsion_EA_list : parallel list of subgroup torsion vectors
 #   exp_EA_list     : parallel list of subgroup exponents
-#   H_D8, ctx_D8, res_D8, torsion_D8, exp_D8 : the pinned D_8 section
+#   H_D8, ctx_D8, res_D8, torsion_D8, exp_D8 : pinned D_8 section
+#   H_Q8, ctx_Q8, res_Q8, torsion_Q8, exp_Q8 : pinned Q_8 section
+#                                              (may be fail at m=1)
 #   torsion_G, exp_G, setup_G, G  : G-side data
 #   Backward-compat aliases (point at the FIRST EA, equal to the old
 #   single-EA result at this index): res_E, ctx_E, torsion_E, exp_E, H_E.
 # ). Cached at module level by (m, source) in _DETF_CACHE.
 BuildRestrictionMatrices := function(m, source)
     local key, ea_rec, G, H_D8, setup_G, ctx_D8, phi_D8, res_D8,
-          H_EA_list, ctx_EA_list, res_EA_list, i, result;
+          H_EA_list, ctx_EA_list, res_EA_list, i, result,
+          H_Q8, ctx_Q8, phi_Q8, res_Q8;
 
     if not (IsInt(m) and m >= 1) then
         Error("BuildRestrictionMatrices: m must be a positive integer; got ",
@@ -312,6 +361,22 @@ BuildRestrictionMatrices := function(m, source)
     phi_D8 := SubgroupInclusion(H_D8, G);
     res_D8 := RestrictionMatrixViaHAP(setup_G, ctx_D8, phi_D8);
 
+    # Q_8 side (optional — see _DETF_FindQ8In docstring for why).
+    # When present, closes the integer-cohomology detection gap by
+    # distinguishing 2·A(4)_gen from 0 via H^3(Q_8) = Z/8.
+    H_Q8 := _DETF_FindQ8In(G, m);
+    if H_Q8 = fail then
+        ctx_Q8 := fail;
+        res_Q8 := fail;
+        Print("[BuildRestrictionMatrices] no Q_8 section found at m = ", m,
+              "; Q_8 detection skipped (this leaves the integer-cohomology ",
+              "gap at m=", m, " open per #153)\n");
+    else
+        ctx_Q8 := SubgroupCohomologyContext(H_Q8);
+        phi_Q8 := SubgroupInclusion(H_Q8, G);
+        res_Q8 := RestrictionMatrixViaHAP(setup_G, ctx_Q8, phi_Q8);
+    fi;
+
     result := rec(
         m               := m,
         source          := source,
@@ -329,6 +394,13 @@ BuildRestrictionMatrices := function(m, source)
         res_D8          := res_D8,
         torsion_D8      := ctx_D8.torsion,
         exp_D8          := ctx_D8.exponent,
+
+        # Q_8 section (optional). May be fail if G has no Q_8 subgroup.
+        H_Q8            := H_Q8,
+        ctx_Q8          := ctx_Q8,
+        res_Q8          := res_Q8,
+        torsion_Q8      := If_(ctx_Q8 = fail, fail, ctx_Q8.torsion),
+        exp_Q8          := If_(ctx_Q8 = fail, fail, ctx_Q8.exponent),
 
         # G-side data.
         torsion_G       := setup_G.torsion,

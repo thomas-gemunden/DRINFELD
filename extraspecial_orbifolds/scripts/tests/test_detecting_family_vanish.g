@@ -136,18 +136,15 @@ AssertOrLog("Gate 1B: D-VAN reports Z/8 generator as non-trivial",
 AssertOrLog("Gate 1B witness: res_D8_vec is non-zero on Z/8 generator",
             not ForAll(r_z8.res_D8_vec, x -> x = 0));
 
-# DOCUMENTED GAP (#153): 2 * e_{Z/8} is the order-4 element of the Z/8
-# factor — a NON-ZERO class in H^3. D-VAN currently reports it as
-# trivial=true (false positive) because the order-4 element of Z/8
-# restricts to {0, 2} ⊂ Z/4 in our pinned D_8, and doubling kills it.
-# This is the higher-torsion detection gap; resolving it requires the
-# Quillen-stratification math research tracked in #154. Test left as
-# a print-only note so the suite stays green while the gap is recorded.
+# Q_8-extension assertion: 2 * e_{Z/8} is the order-4 element of the
+# Z/8 factor — a NON-ZERO class in H^3. With Q_8 in the detecting family
+# (#153 closed), D-VAN now correctly reports trivial = false.
+# At m=2 the D_8 section alone happens to work (partial fix sufficient),
+# but the Q_8 check provides a redundant cross-confirmation.
 e_z8_half := List([1..10], j -> If_(j = exp_index_m2, 2, 0));;
 r_z8_half := ResIsTrivialOnDetectingFamily(2, e_z8_half);;
-Print("  [#153 gap] 2*e_{Z/8} D-VAN trivial=",
-      r_z8_half.trivial,
-      " (expected false; partial detecting family misses this)\n");
+AssertOrLog("2*e_{Z/8} is non-trivial (m=2, full family)",
+            r_z8_half.trivial = false);
 
 Print("\n--- Task 2.6: f_D8 satisfies bar 3-cocycle equation ---\n");
 
@@ -265,9 +262,11 @@ fi;
 
 # Order-4 invariant factor checks. exp_index points at the unique
 # generator with torsion = 4 (the Z/4 piece of H^3 ≅ (Z/2)^34 ⊕ Z/4).
+# With the Q_8 section in the detecting family (#153 closed), ALL
+# three cases are now correctly classified:
 #
 # - e_{exp_index}     : non-zero class (order 4 in Z/4)  → trivial=false ✓
-# - 2 * e_{exp_index} : non-zero class (order 2 in Z/4)  → DOCUMENTED GAP (#153)
+# - 2 * e_{exp_index} : non-zero class (order 2 in Z/4)  → trivial=false ✓ (Q_8 catches it)
 # - 4 * e_{exp_index} : zero mod 4, i.e. the zero class  → trivial=true   ✓
 e_g := List([1..35], j -> If_(j = exp_index_m3, 1, 0));;
 half_g := List([1..35], j -> If_(j = exp_index_m3, 2, 0));;
@@ -275,9 +274,14 @@ zero_g := List([1..35], j -> If_(j = exp_index_m3, 4, 0));;
 AssertOrLog("e_{order-4 gen} (order 4) is non-trivial in H^3",
             ResIsTrivialOnDetectingFamily(3, e_g).trivial = false);
 r_half_g := ResIsTrivialOnDetectingFamily(3, half_g);;
-Print("  [#153 gap] 2*e_{order-4 gen} D-VAN trivial=",
-      r_half_g.trivial,
-      " (expected false; partial detecting family misses this)\n");
+AssertOrLog("2 * e_{order-4 gen} (order 2 in Z/4) is non-trivial (Q_8 catches)",
+            r_half_g.trivial = false);
+# Witness: the Q_8 restriction is what catches this (D_8's row was
+# [0, 0, 2] in torsion [2, 2, 4], doubling kills it; Q_8 gives
+# res(A(4)_gen) ∈ {2, 6} in Z/8 so res(2·A(4)_gen) = 4 ≠ 0).
+AssertOrLog("Q_8 witness present at m=3 (res_Q8_vec is non-zero on 2*e_g)",
+            r_half_g.res_Q8_vec <> fail
+            and not ForAll(r_half_g.res_Q8_vec, x -> x = 0));
 AssertOrLog("4 * e_{order-4 gen} = zero class is trivial",
             ResIsTrivialOnDetectingFamily(3, zero_g).trivial = true);
 
