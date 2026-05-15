@@ -86,6 +86,37 @@ if not IsEmpty(mismatches) then
     Print("    mismatches: ", mismatches, "\n");
 fi;
 
+Print("\n--- Task 2.5: Gate 1B m=2 (Z/8 witness) ---\n");
+
+# The order-8 generator is the unique generator with torsion[i] = 8.
+exp_index_m2 := Position(rec_m2.torsion_G, 8);;
+AssertOrLog("found unique torsion-8 generator at index",
+            exp_index_m2 <> fail);
+
+# e_{exp_index_m2} is the Z/8 generator. Verify it is NOT in the HAP
+# kernel (Tr is non-trivial on it).
+e_z8 := List([1..10], j -> If_(j = exp_index_m2, 1, 0));;
+AssertOrLog("Z/8 generator is NOT in HAP kernel",
+            not (e_z8 in ker_vecs));
+
+# D-VAN must report it as NOT trivial.
+r_z8 := ResIsTrivialOnDetectingFamily(2, e_z8);;
+AssertOrLog("Gate 1B: D-VAN reports Z/8 generator as non-trivial",
+            r_z8.trivial = false);
+
+# The D_8-side restriction is THE witness — single elementary abelian
+# alone (which has only 2-torsion in H^3) would miss this generator.
+AssertOrLog("Gate 1B witness: res_D8_vec is non-zero on Z/8 generator",
+            not ForAll(r_z8.res_D8_vec, x -> x = 0));
+
+# 2 * e_{Z/8} = order-2 element inside the Z/8 factor. D-VAN's verdict
+# must match HAP's verdict on this half-vector.
+e_z8_half := List([1..10], j -> If_(j = exp_index_m2, 2, 0));;
+in_hap_half := e_z8_half in ker_vecs;;
+r_z8_half := ResIsTrivialOnDetectingFamily(2, e_z8_half);;
+AssertOrLog("2*e_{Z/8} verdict matches HAP",
+            r_z8_half.trivial = in_hap_half);
+
 if IsEmpty(testFailures) then
     Print("\n=== test_detecting_family_vanish: PASS ===\n");
 else
