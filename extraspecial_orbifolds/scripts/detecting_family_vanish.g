@@ -86,24 +86,37 @@ end;;
 
 # Public entry point.
 #
-# D-VAN-FIX (#151): applies the FULL detecting family — restrict ω to
-# every conjugacy class rep of max elementary abelians AND to the
-# pinned D_8 section. [omega] = 0 iff every restriction vanishes.
+# Iterative D-VAN-FIX (#151 → #154 → #153 closed): applies the FULL
+# detecting family — restrict ω to (a) every conjugacy class rep of
+# max elementary abelians, (b) the pinned D_8 section, and (c) the
+# pinned Q_8 section (when present; absent only at m=1). [omega] = 0
+# iff every restriction vanishes.
+#
+# Q_8 inclusion closes the m≥3 detection gap (#153) by catching the
+# cyclic A(4) summand of H^3(E_+(m); U(1)); Q_8's H^3 = Z/8 natively
+# distinguishes 2·A(4)_gen from 0, which D_8 sections cannot at m≥3.
+# See docs/superpowers/research/2026-05-15-integer-cohomology-extraspecial-2-groups.md
+# for the Harada-Kono structure-theoretic explanation.
 #
 # Returns rec(
 #   trivial          : bool — [omega] = 0 in H^3(E_+(m); U(1))?
 #   res_EA_vec_list  : list of coord vectors (one per max-EA conj class),
 #                      each mod its EA's torsion
 #   res_D8_vec       : coord vector of omega|_D_8 mod torsion_D8
+#   res_Q8_vec       : coord vector of omega|_Q_8 mod torsion_Q8
+#                      (`fail` when G has no Q_8 — m=1 only)
 #   f_EA_list        : list of callable cocycles, one per EA in H_EA_list
 #   f_D8             : callable cocycle D_8^3 -> Z/exp_D8
+#   f_Q8             : callable cocycle Q_8^3 -> Z/exp_Q8 (or `fail`)
 #   source           : "hap" | "quillen"
 #   Backward-compat aliases res_E_vec and f_E point at the FIRST EA.
 # ).
 ResIsTrivialOnDetectingFamily := function(m, omega_vec)
     local rec_m, hom_omega, source, res_EA_vec_list, f_EA_list, i,
           torsion_EA_i, res_EA_i, vec_int, vec_modH,
-          res_D8_vec_int, res_D8_vec, f_D8, all_EA_zero, trivial;
+          res_D8_vec_int, res_D8_vec, f_D8,
+          res_Q8_vec_int, res_Q8_vec, f_Q8, all_Q8_zero,
+          all_EA_zero, trivial;
 
     if not (IsInt(m) and m >= 1) then
         Error("ResIsTrivialOnDetectingFamily: m must be a positive ",
@@ -139,16 +152,38 @@ ResIsTrivialOnDetectingFamily := function(m, omega_vec)
         res_D8_vec_int[j] mod rec_m.torsion_D8[j]);
     f_D8 := _DVAN_BuildHCocycleFromHomVec(rec_m.ctx_D8, res_D8_vec);
 
+    # Q_8 restriction (closes the m≥3 integer-cohomology gap; #154).
+    # rec_m.res_Q8 = fail when G has no Q_8 subgroup (m=1 only). In that
+    # degenerate case the Q_8 contribution to trivial-detection is
+    # vacuously satisfied.
+    if rec_m.res_Q8 = fail then
+        res_Q8_vec := fail;
+        f_Q8 := fail;
+        all_Q8_zero := true;
+    else
+        res_Q8_vec_int := List([1..Length(rec_m.torsion_Q8)], j ->
+            Sum([1..Length(hom_omega)], i ->
+                hom_omega[i] * rec_m.res_Q8[i][j]));
+        res_Q8_vec := List([1..Length(res_Q8_vec_int)], j ->
+            res_Q8_vec_int[j] mod rec_m.torsion_Q8[j]);
+        f_Q8 := _DVAN_BuildHCocycleFromHomVec(rec_m.ctx_Q8, res_Q8_vec);
+        all_Q8_zero := ForAll(res_Q8_vec, x -> x = 0);
+    fi;
+
     # [omega] = 0 iff ALL restrictions vanish.
     all_EA_zero := ForAll(res_EA_vec_list, v -> ForAll(v, x -> x = 0));
-    trivial := all_EA_zero and ForAll(res_D8_vec, x -> x = 0);
+    trivial := all_EA_zero
+               and ForAll(res_D8_vec, x -> x = 0)
+               and all_Q8_zero;
 
     return rec(
         trivial          := trivial,
         res_EA_vec_list  := res_EA_vec_list,
         res_D8_vec       := res_D8_vec,
+        res_Q8_vec       := res_Q8_vec,
         f_EA_list        := f_EA_list,
         f_D8             := f_D8,
+        f_Q8             := f_Q8,
         source           := source,
 
         # Backward-compat aliases.
