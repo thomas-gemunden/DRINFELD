@@ -57,34 +57,61 @@ AssertOrLog("f_E is a function", IsFunction(r_zero.f_E));
 AssertOrLog("f_D8 is a function", IsFunction(r_zero.f_D8));
 AssertOrLog("source = hap", r_zero.source = "hap");
 
-Print("\n--- Task 2.4: Gate 1A m=2 (10 generators vs HAP) ---\n");
+Print("\n--- Task 2.4: Gate 1A m=2 (10 unit generators are non-zero) ---\n");
 
-# Load the HAP-computed kernel of Tr for E_+(2): 2048 vectors of length
-# 10 in Z/2^9 (+) Z/8.
+# WHAT THIS GATE TESTS — and what it does NOT test.
+#
+# D-VAN's claim: ResIsTrivialOnDetectingFamily(m, omega) returns
+# trivial=true iff [omega] = 0 in H^3(E_+(m); U(1)). By the AM04 IV.7 +
+# Quillen 1971 injectivity theorem, this is equivalent to res(omega) = 0
+# under restriction to {E, D_8}.
+#
+# Each UCT.hombasis-indexed unit generator e_i is by construction a
+# NON-ZERO class in H^3(G; U(1)) (the hombasis is a Z-basis of H^3
+# modulo torsion). So D-VAN must report trivial=false for every e_i.
+# If any e_i had trivial=true, either (a) e_i = 0 in H^3 (false by
+# linear independence) or (b) res has non-trivial kernel (false by
+# AM04 IV.7). Either way, a violation flags an implementation bug or
+# a math premise failure.
+#
+# NOTE on a tempting (but WRONG) alternative gate: comparing
+# `r.trivial` against `e_i in HAP_kernel_of_Tr`. These conditions are
+# NOT equivalent — ker(Tr) is a generally larger set than the zero
+# class of H^3. At m=3, A-3a found ker(Tr) = the whole of H^3 (every
+# class has all c_g coboundaries), so every unit generator is in
+# ker(Tr) but none are zero classes — and D-VAN correctly reports
+# false on each. See PR #150 commit history for the corrected framing.
+
+# Load the HAP kernel data for context / cross-reference (the file is
+# still useful for the zero-class checks below).
 ker_data := ReadAsFunction(
     "../../computed/transgression/2/kernel.g")();;
 ker_vecs := ker_data.kernel_vecs;;
-AssertOrLog("loaded 2048 HAP kernel vectors",
+AssertOrLog("loaded 2048 HAP kernel-of-Tr vectors (context only)",
             Length(ker_vecs) = 2048);
 
-# For each of the 10 unit generators, check whether D-VAN's verdict
-# matches "is e_i in HAP's kernel?". If any mismatch, the AM04
-# detecting-family injectivity is violated empirically — STOP.
-mismatches := [];;
+# For each unit generator: D-VAN reports trivial=false.
+trivial_unit_gens_m2 := [];;
 for i in [1..10] do
     e_i := List([1..10], j -> If_(j = i, 1, 0));
-    in_hap_ker := e_i in ker_vecs;
     r := ResIsTrivialOnDetectingFamily(2, e_i);
-    if r.trivial <> in_hap_ker then
-        Add(mismatches, rec(i := i, dvan := r.trivial,
-                             hap := in_hap_ker));
+    if r.trivial then
+        Add(trivial_unit_gens_m2, i);
     fi;
 od;
-AssertOrLog("Gate 1A: D-VAN matches HAP on all 10 m=2 generators",
-            IsEmpty(mismatches));
-if not IsEmpty(mismatches) then
-    Print("    mismatches: ", mismatches, "\n");
+AssertOrLog("Gate 1A m=2: no unit generator gets trivial=true",
+            IsEmpty(trivial_unit_gens_m2));
+if not IsEmpty(trivial_unit_gens_m2) then
+    Print("    spurious-trivial generators: ", trivial_unit_gens_m2,
+          " (would indicate res has a non-trivial kernel)\n");
 fi;
+
+# Componentwise-zero classes round-trip: torsion_G[i] * e_i is the
+# zero class (mod torsion), so D-VAN must report trivial=true.
+zero_class_m2 := List([1..10], j ->
+    If_(j = 1, rec_m2.torsion_G[1], 0));;
+AssertOrLog("torsion_G[1] * e_1 is the zero class (trivial=true)",
+            ResIsTrivialOnDetectingFamily(2, zero_class_m2).trivial = true);
 
 Print("\n--- Task 2.5: Gate 1B m=2 (Z/8 witness) ---\n");
 
@@ -109,13 +136,15 @@ AssertOrLog("Gate 1B: D-VAN reports Z/8 generator as non-trivial",
 AssertOrLog("Gate 1B witness: res_D8_vec is non-zero on Z/8 generator",
             not ForAll(r_z8.res_D8_vec, x -> x = 0));
 
-# 2 * e_{Z/8} = order-2 element inside the Z/8 factor. D-VAN's verdict
-# must match HAP's verdict on this half-vector.
+# Q_8-extension assertion: 2 * e_{Z/8} is the order-4 element of the
+# Z/8 factor — a NON-ZERO class in H^3. With Q_8 in the detecting family
+# (#153 closed), D-VAN now correctly reports trivial = false.
+# At m=2 the D_8 section alone happens to work (partial fix sufficient),
+# but the Q_8 check provides a redundant cross-confirmation.
 e_z8_half := List([1..10], j -> If_(j = exp_index_m2, 2, 0));;
-in_hap_half := e_z8_half in ker_vecs;;
 r_z8_half := ResIsTrivialOnDetectingFamily(2, e_z8_half);;
-AssertOrLog("2*e_{Z/8} verdict matches HAP",
-            r_z8_half.trivial = in_hap_half);
+AssertOrLog("2*e_{Z/8} is non-trivial (m=2, full family)",
+            r_z8_half.trivial = false);
 
 Print("\n--- Task 2.6: f_D8 satisfies bar 3-cocycle equation ---\n");
 
@@ -161,18 +190,32 @@ if Length(d8_candidates) >= 2 then
     phi_d8_alt := SubgroupInclusion(H_d8_alt, rec_m2.G);
     res_D8_alt := RestrictionMatrixViaHAP(rec_m2.setup_G,
                                             ctx_d8_alt, phi_d8_alt);
+    # Build a primary "all-EA-zero" vector once: ω is in ker(res to EAs)
+    # iff every EA in the full family gives zero. Then the test
+    # "alt-D_8 swap doesn't change the verdict" checks: with the same
+    # EA outcomes, swapping the D_8 section preserves the verdict.
     mismatch_count := 0;
     for i in [1..10] do
-        e_i := List([1..10], j -> If_(j = i, 1, 0));
-        primary := ResIsTrivialOnDetectingFamily(2, e_i).trivial;
-        # alt verdict: re-use rec_m2's E-side, swap in alt D_8-side.
-        primary_E_vec := List([1..7], j ->
-            Sum([1..10], k -> e_i[k] * rec_m2.res_E[k][j]) mod 2);
+        e_i_test := List([1..10], j -> If_(j = i, 1, 0));
+        primary := ResIsTrivialOnDetectingFamily(2, e_i_test).trivial;
+        # "all EAs zero?" computed from the full family.
+        primary_EAs_zero := true;
+        for ea_idx in [1..Length(rec_m2.res_EA_list)] do
+            res_EA_i := rec_m2.res_EA_list[ea_idx];
+            tor_EA_i := rec_m2.torsion_EA_list[ea_idx];
+            ea_vec := List([1..Length(tor_EA_i)], j ->
+                Sum([1..10], k -> e_i_test[k] * res_EA_i[k][j])
+                    mod tor_EA_i[j]);
+            if not ForAll(ea_vec, x -> x = 0) then
+                primary_EAs_zero := false;
+                break;
+            fi;
+        od;
         alt_D8_int := List([1..Length(ctx_d8_alt.torsion)], j ->
-            Sum([1..10], k -> e_i[k] * res_D8_alt[k][j]));
+            Sum([1..10], k -> e_i_test[k] * res_D8_alt[k][j]));
         alt_D8_vec := List([1..Length(alt_D8_int)], j ->
             alt_D8_int[j] mod ctx_d8_alt.torsion[j]);
-        alt_trivial := ForAll(primary_E_vec, x -> x = 0)
+        alt_trivial := primary_EAs_zero
                        and ForAll(alt_D8_vec, x -> x = 0);
         if alt_trivial <> primary then
             mismatch_count := mismatch_count + 1;
@@ -181,6 +224,66 @@ if Length(d8_candidates) >= 2 then
     AssertOrLog("trivial verdict is invariant under D_8-section choice",
                 mismatch_count = 0);
 fi;
+
+Print("\n--- Task 3.1: Gate 1A m=3 (35 unit generators are non-zero, D-VAN-4) ---\n");
+
+# Same framing as Task 2.4: each UCT.hombasis unit generator e_i is
+# non-zero in H^3(E_+(3); U(1)), so D-VAN must report trivial=false.
+# At m=3, A-3a discovered ker(Tr) = full H^3 (kernel size 2^36 =
+# |H^3|), so EVERY class is in ker(Tr) — including all unit
+# generators. The "matches HAP kernel" framing would mark them all as
+# expected-trivial, which is wrong: they're non-zero classes (which
+# is what D-VAN actually tests). See PR #150 commit history.
+
+# Load kernel data for context (exp_index, torsion length).
+ker_data_m3 := ReadAsFunction(
+    "../../computed/transgression/3/kernel.g")();;
+exp_index_m3 := ker_data_m3.exp_index;;
+torsion_m3 := ker_data_m3.torsion;;
+
+AssertOrLog("E_+(3) torsion length is 35",
+            Length(torsion_m3) = 35);
+
+# For each unit generator: D-VAN reports trivial=false.
+trivial_unit_gens_m3 := [];;
+for i in [1..35] do
+    e_i_m3 := List([1..35], j -> If_(j = i, 1, 0));
+    r := ResIsTrivialOnDetectingFamily(3, e_i_m3);
+    if r.trivial then
+        Add(trivial_unit_gens_m3, i);
+    fi;
+od;
+AssertOrLog("Gate 1A m=3: no unit generator gets trivial=true",
+            IsEmpty(trivial_unit_gens_m3));
+if not IsEmpty(trivial_unit_gens_m3) then
+    Print("    spurious-trivial generators at m=3: ",
+          trivial_unit_gens_m3, "\n");
+fi;
+
+# Order-4 invariant factor checks. exp_index points at the unique
+# generator with torsion = 4 (the Z/4 piece of H^3 ≅ (Z/2)^34 ⊕ Z/4).
+# With the Q_8 section in the detecting family (#153 closed), ALL
+# three cases are now correctly classified:
+#
+# - e_{exp_index}     : non-zero class (order 4 in Z/4)  → trivial=false ✓
+# - 2 * e_{exp_index} : non-zero class (order 2 in Z/4)  → trivial=false ✓ (Q_8 catches it)
+# - 4 * e_{exp_index} : zero mod 4, i.e. the zero class  → trivial=true   ✓
+e_g := List([1..35], j -> If_(j = exp_index_m3, 1, 0));;
+half_g := List([1..35], j -> If_(j = exp_index_m3, 2, 0));;
+zero_g := List([1..35], j -> If_(j = exp_index_m3, 4, 0));;
+AssertOrLog("e_{order-4 gen} (order 4) is non-trivial in H^3",
+            ResIsTrivialOnDetectingFamily(3, e_g).trivial = false);
+r_half_g := ResIsTrivialOnDetectingFamily(3, half_g);;
+AssertOrLog("2 * e_{order-4 gen} (order 2 in Z/4) is non-trivial (Q_8 catches)",
+            r_half_g.trivial = false);
+# Witness: the Q_8 restriction is what catches this (D_8's row was
+# [0, 0, 2] in torsion [2, 2, 4], doubling kills it; Q_8 gives
+# res(A(4)_gen) ∈ {2, 6} in Z/8 so res(2·A(4)_gen) = 4 ≠ 0).
+AssertOrLog("Q_8 witness present at m=3 (res_Q8_vec is non-zero on 2*e_g)",
+            r_half_g.res_Q8_vec <> fail
+            and not ForAll(r_half_g.res_Q8_vec, x -> x = 0));
+AssertOrLog("4 * e_{order-4 gen} = zero class is trivial",
+            ResIsTrivialOnDetectingFamily(3, zero_g).trivial = true);
 
 if IsEmpty(testFailures) then
     Print("\n=== test_detecting_family_vanish: PASS ===\n");

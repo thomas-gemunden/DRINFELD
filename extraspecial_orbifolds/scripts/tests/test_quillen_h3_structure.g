@@ -67,21 +67,66 @@ for m_iter in [1, 2, 3] do
 od;
 
 # --------------------------------------------------------------------
-# Negative test: m = 5, 7 not yet supported -> raises informative error.
+# Q-int A2 (#136): m = 5, 7 now derived analytically via Harada-Kono
+# 1987 Thm 1.1 + Bockstein on the Q-2a canonical presentation.
+# Expected shape: [(Z/2)^r, Z/4] with r determined by dim ker β_4 - 1.
 # --------------------------------------------------------------------
 
-Print("\n--- m = 5, 7 (not yet derived; expect raise) ---\n");
-for m_iter in [5, 7] do
-    catch_result := CALL_WITH_CATCH(QuillenH3Structure, [m_iter]);
-    AssertOrLog(
-        Concatenation("m=", String(m_iter), " raises (TODO)"),
-        not catch_result[1]);
-    AssertOrLog(
-        Concatenation("m=", String(m_iter), " available-predicate is false"),
-        not QuillenH3StructureAvailable(m_iter));
-od;
+Print("\n--- m = 3 derived path matches hardcoded ---\n");
+
+if not IsBoundGlobal("QuillenH4TorsionFromBockstein") then
+    Read("quillen_h4_torsion.g");
+fi;
+derived_m3 := QuillenH4TorsionFromBockstein(3);;
+hardcoded_m3 := Concatenation(ListWithIdenticalEntries(34, 2), [4]);;
+AssertOrLog("m=3 Bockstein-derived torsion matches hardcoded",
+            derived_m3 = hardcoded_m3);
+
+Print("\n--- m = 5 (Bockstein-derived) ---\n");
+qstruct_m5 := QuillenH3Structure(5);;
+Print("  torsion length: ", qstruct_m5.num_generators, "\n");
+Print("  exponent:       ", qstruct_m5.exponent, "\n");
+Print("  source:         ", qstruct_m5.source, "\n");
+AssertOrLog("m=5 returns a record (no longer raises)",
+            IsRecord(qstruct_m5));
+AssertOrLog("m=5 source = bockstein-derived",
+            qstruct_m5.source = "bockstein-derived");
+AssertOrLog("m=5 num_generators = 165 (matches A-5b empirical k)",
+            qstruct_m5.num_generators = 165);
+AssertOrLog("m=5 exponent = 4 (Harada-Kono A(4) = Z/4 for m >= 3)",
+            qstruct_m5.exponent = 4);
+AssertOrLog("m=5 last torsion entry = 4 (cyclic Z/4 summand)",
+            qstruct_m5.torsion[Length(qstruct_m5.torsion)] = 4);
+AssertOrLog("m=5 all-but-last torsion entries = 2 (Z/2 summands)",
+            ForAll([1..Length(qstruct_m5.torsion)-1],
+                   i -> qstruct_m5.torsion[i] = 2));
+AssertOrLog("m=5 available-predicate is true",
+            QuillenH3StructureAvailable(5));
+
+Print("\n--- m = 7 (Bockstein-derived) ---\n");
+qstruct_m7 := QuillenH3Structure(7);;
+Print("  torsion length: ", qstruct_m7.num_generators, "\n");
+Print("  exponent:       ", qstruct_m7.exponent, "\n");
+Print("  source:         ", qstruct_m7.source, "\n");
+AssertOrLog("m=7 returns a record (no longer raises)",
+            IsRecord(qstruct_m7));
+AssertOrLog("m=7 source = bockstein-derived",
+            qstruct_m7.source = "bockstein-derived");
+AssertOrLog("m=7 num_generators = 455",
+            qstruct_m7.num_generators = 455);
+AssertOrLog("m=7 exponent = 4 (Harada-Kono A(4) = Z/4 for m >= 3)",
+            qstruct_m7.exponent = 4);
+AssertOrLog("m=7 last torsion entry = 4 (cyclic Z/4 summand)",
+            qstruct_m7.torsion[Length(qstruct_m7.torsion)] = 4);
+AssertOrLog("m=7 all-but-last torsion entries = 2 (Z/2 summands)",
+            ForAll([1..Length(qstruct_m7.torsion)-1],
+                   i -> qstruct_m7.torsion[i] = 2));
+AssertOrLog("m=7 available-predicate is true",
+            QuillenH3StructureAvailable(7));
 
 AssertOrLog("m=2 available-predicate is true", QuillenH3StructureAvailable(2));
+AssertOrLog("m=4 available-predicate is true (m>=3 covered)",
+            QuillenH3StructureAvailable(4));
 
 # --------------------------------------------------------------------
 # Summary.
