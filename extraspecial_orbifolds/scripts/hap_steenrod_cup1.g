@@ -187,49 +187,41 @@ end;;
 
 # HAP_SteenrodCup1_Int(R, alpha_vec, p, beta_vec, q)
 #
-# Integer-valued cup-1: same shape as HAP_SteenrodCup1_F2 but tracks
-# signs from HAP_PHI's signed coefficients. Used inside Pontryagin
-# square at the cochain level where Brumfiel-Morgan's formula
-# requires Z-arithmetic before reducing mod 4.
+# Integer-valued cup-1 product. Built from the level-1 cup-1 homotopy
+# h_1: R → (R⊗R)[+1] in `hap_cup1_homotopy.g`. h_1 is the chain
+# homotopy comparing Δ with τΔ (the Koszul-swapped diagonal) and is
+# defined inductively from R!.boundary + R!.homotopy via the standard
+# tensor-product contracting homotopy.
 #
-# CAVEAT: HAP_PHI is constructed from ResolutionPrimePowerGroup which
-# is characteristic-2. The signs of coefficients in phi's output are
-# present in the data structure but their semantic correctness for
-# integer Steenrod theory is not guaranteed by HAP's contract. The
-# value returned here is *some* integer cup-1 representative; tests
-# (mod-2 reduction equals F_2 cup-1, and the result is a Z-cocycle of
-# the appropriate degree) check correctness experimentally.
+# The cup-1 of α (degree p) and β (degree q) is the (p+q-1)-cochain:
+#   (α ∪₁ β)[i] = sum over r in h_1[p+q-1][i] of
+#                 [if r.p = p and r.q = q: r.sgn * α[r.jp] * β[r.jq]
+#                  else: 0]
+#
+# This is Z-bilinear in (α, β) and satisfies the cup-1 coboundary
+# identity over Z (verified at D_8 in test_hap_cup1_homotopy.g and
+# test_hap_pontryagin_square.g).
+#
+# Note: requires R to be the cached ResolutionFiniteGroup from
+# `HAP_PontryaginGetResolution`. We look up the h_1 cache by R!.group.
 HAP_SteenrodCup1_Int := function(R, alpha_vec, p, beta_vec, q)
-    local G, phi_data, phi, RC2G, RGG, one, result, m, v, j, k, a, x, w,
-          alpha_pos, beta_pos, total_deg, out_deg;
-    G := R!.group;
-    total_deg := p + q;
+    local cache, dim, result, i, val, r, out_deg, get_cache;
+    if not IsBoundGlobal("_HAP_Pontryagin_GetCacheForR") then
+        Read("hap_pontryagin_square.g");
+    fi;
+    get_cache := ValueGlobal("_HAP_Pontryagin_GetCacheForR");
     out_deg := p + q - 1;
-    phi_data := _HAP_GetPhi(G, total_deg);
-    phi  := phi_data.phi;
-    RC2G := phi_data.RC2G;
-    RGG  := phi_data.RGG;
-    one  := Identity(RC2G!.group);
-
-    result := ListWithIdenticalEntries(R!.dimension(out_deg), 0);
-    alpha_pos := Filtered([1..Length(alpha_vec)], i -> not IsZero(alpha_vec[i]));
-    beta_pos  := Filtered([1..Length(beta_vec)],  i -> not IsZero(beta_vec[i]));
-
-    for m in [1..R!.dimension(out_deg)] do
-        v := RC2G!.Vector2Int(1, out_deg, 1, m);
-        v := phi(total_deg, one, v);
-        a := 0;
-        for j in alpha_pos do
-            for k in beta_pos do
-                w := RGG!.Vector2Int(p, q, j, k);
-                for x in v do
-                    if AbsInt(x[1]) = w then
-                        a := a + SignInt(x[1]) * alpha_vec[j] * beta_vec[k];
-                    fi;
-                od;
-            od;
+    cache := get_cache(R, p + q);
+    dim := R!.dimension(out_deg);
+    result := ListWithIdenticalEntries(dim, 0);
+    for i in [1..dim] do
+        val := 0;
+        for r in cache.Cup1Hty[out_deg + 1][i] do
+            if r.p = p and r.q = q then
+                val := val + r.sgn * alpha_vec[r.jp] * beta_vec[r.jq];
+            fi;
         od;
-        result[m] := a;
+        result[i] := val;
     od;
     return result;
 end;;
