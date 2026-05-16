@@ -59,13 +59,35 @@ BoundaryMatrixGF2 := function(H)
     return A;
 end;;
 
+# Module-level cache for SemiEchelonMatTransformation(TransposedMat(A)).
+# A-5b's enumeration sweep at m=5 calls IsCoboundary2Mod2 ~170,000 times
+# with at most 4 distinct centralizer matrices A (one per BRW orbit).
+# The dominant per-call cost is GAP's internal Gaussian elimination
+# (O(rank^2 · cols) per call), which we hoist into a one-time factorisation
+# per A. Subsequent solves reuse the cached `sem` record for fast
+# subspace-membership testing.
+_IsCoboundary2Mod2_SemCache := [];;
+
+_GetCachedSemForAT := function(A)
+    local entry, sem;
+    for entry in _IsCoboundary2Mod2_SemCache do
+        if IsIdenticalObj(entry.A, A) then return entry.sem; fi;
+    od;
+    # Build sem for TransposedMat(A) once and cache.
+    sem := SemiEchelonMatTransformation(TransposedMat(A));
+    Add(_IsCoboundary2Mod2_SemCache, rec(A := A, sem := sem));
+    return sem;
+end;;
+
 IsCoboundary2Mod2 := function(H, c)
-    local elts, n, A, b, i, j, sol, one;
+    local elts, n, A, b, i, j, one, sem, z, sol_dim, sol, vno, x;
     elts := AsList(H);
     n := Length(elts);
-    one  := One(GF(2));
+    one := One(GF(2));
 
-    A := BoundaryMatrixGF2(H);
+    A := BoundaryMatrixGF2(H);             # cached via the prior patch
+    sem := _GetCachedSemForAT(A);          # cached factorisation
+
     b := List([1..n*n], i -> Zero(GF(2)));
     for i in [1..n] do
         for j in [1..n] do
@@ -74,10 +96,30 @@ IsCoboundary2Mod2 := function(H, c)
     od;
     ConvertToVectorRep(b, GF(2));
 
-    # SolutionMat solves x * M = b. We have A * beta = b, equivalent to
-    # beta * Transpose(A) = b. So:
-    sol := SolutionMat(TransposedMat(A), b);
-    return sol <> fail;
+    # Replicate SolutionMatDestructive's logic but with cached `sem`,
+    # so the Gaussian elimination is not redone per call. Mirrors
+    # /opt/homebrew/Cellar/gap/4.15.1/share/gap/lib/matrix.gi's
+    # SolutionMatDestructive method on `TransposedMat(A)` and vector b.
+    z := Zero(GF(2));
+    if Length(sem.coeffs) = 0 then
+        # Rank-0 edge case: only the zero cochain is a coboundary.
+        return IsZero(b);
+    fi;
+    sol_dim := Length(sem.coeffs[1]);
+    sol := ListWithIdenticalEntries(sol_dim, z);
+    ConvertToVectorRep(sol, GF(2));
+    b := ShallowCopy(b);
+    for i in [1..Length(b)] do
+        vno := sem.heads[i];
+        if vno <> 0 then
+            x := b[i];
+            if x <> z then
+                AddRowVector(b, sem.vectors[vno], -x);
+                AddRowVector(sol, sem.coeffs[vno], x);
+            fi;
+        fi;
+    od;
+    return IsZero(b);
 end;;
 
 # BocksteinH1ToH2(C) — image of the connecting homomorphism
