@@ -77,7 +77,7 @@ UniversalCoefficientsTheorem := function(K,n)
 
     homlist:= List(homlist, x -> ((C^(-1))*x) mod m);
 
-    r2 := ComplementIntMatWithTransforms(IdentityMat(K!.dimension(3)), ZZ);
+    r2 := ComplementIntMatWithTransforms(IdentityMat(K!.dimension(n)), ZZ);
     C1 := r2!.subtrans;
     R1 := r2!.fulltrans;
 
@@ -798,7 +798,7 @@ LoadModularData := function(n, m, i)
         return rec(S := data.S, T := DiagonalMat(data.T));
 
     else
-        Print("Error: There is no stored modular data for cocycle ", i, " for SmallGroup(", m, ", ", n, ")");
+        Print("Error: There is no stored modular data for cocycle ", i, " for SmallGroup(", n, ", ", m, ")");
     fi;
 end;
 
@@ -816,7 +816,7 @@ LoadTMatrix := function(n, m, i)
     if IsExistingFile(filename) then
         return ReadAsFunction(filename)();
     else
-        Print("Error: There is no stored T Matrix for cocycle ", i, " for SmallGroup(", m, ", ", n, "). Have you created these files yet?");
+        Print("Error: There is no stored T Matrix for cocycle ", i, " for SmallGroup(", n, ", ", m, "). Have you created these files yet?");
     fi;
 end;
 
