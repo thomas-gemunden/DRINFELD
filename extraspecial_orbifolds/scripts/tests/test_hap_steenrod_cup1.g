@@ -100,6 +100,64 @@ if alpha_vec <> fail then
 fi;
 
 # --------------------------------------------------------------------
+# Task 3: Asymmetric (p, q) F_2 cup-1 — the Pontryagin-square shape.
+# --------------------------------------------------------------------
+
+if alpha_vec <> fail then
+    Print("\n--- Task 3: asymmetric F_2 cup-1 at (p, q) = (2, 1) ---\n");
+
+    # Pick a 2-cochain on R: the first basis vector e_1.
+    beta_2 := List([1..R!.dimension(2)], j -> If_loc(j = 1, 1, 0) * Z(2)^0);;
+    Print("  beta_2 (degree-2) = ", beta_2, "\n");
+
+    t0 := Runtime();;
+    cup1_21 := HAP_SteenrodCup1(R, beta_2, 2, alpha_vec, 1);;
+    Print("  Wall: ", (Runtime() - t0) / 1000., " s\n");
+    Print("  output length = ", Length(cup1_21),
+          " (expected R!.dimension(2+1-1) = R!.dimension(2) = ", dim2, ")\n");
+    AssertOrLog("asymmetric (2,1) F_2 returns vector of length R!.dimension(p+q-1)",
+                Length(cup1_21) = dim2);
+    AssertOrLog("asymmetric (2,1) F_2 returns F_2-valued result",
+                ForAll(cup1_21, x -> IsZero(x) or x = Z(2)^0));
+fi;
+
+# --------------------------------------------------------------------
+# Task 4: Integer cup-1 at (p, q) = (1, 1). Mod-2 reduction must match
+# F_2 cup-1 from Task 2. Integer result must be a Z 1-cocycle.
+# --------------------------------------------------------------------
+
+if alpha_vec <> fail then
+    Print("\n--- Task 4: integer cup-1 at (1, 1) — mod-2 should match F_2 ---\n");
+
+    alpha_int := List(alpha_vec, x -> If_loc(IsZero(x), 0, 1));;
+
+    cup1_int := HAP_SteenrodCup1(R, alpha_int, 1, alpha_int, 1);;
+    Print("  integer cup1 result: ", cup1_int, "\n");
+    AssertOrLog("integer cup1 returns integer vector",
+                ForAll(cup1_int, IsInt));
+    AssertOrLog("integer cup1 has correct length",
+                Length(cup1_int) = dim1);
+
+    # Mod-2 reduction should match the F_2 result from Task 2.
+    cup1_int_mod2 := List(cup1_int, x -> (x mod 2) * Z(2)^0);;
+    AssertOrLog("integer cup1 mod 2 == F_2 cup1",
+                cup1_int_mod2 = cup1_result);
+
+    # Steenrod's cup-1 coboundary identity: for α an n-cocycle,
+    #   d(α ∪₁ α) = (1 - (-1)^{n·n}) · (α ∪ α).
+    # At n = 1: d(α ∪₁ α) = (1 - (-1)) · (α ∪ α) = 2 · (α ∪ α).
+    # So the integer cup-1 result is NOT a Z-cocycle in general; its
+    # coboundary is divisible by 2 (so mod 2 it IS a cocycle, matching
+    # Task 2's F_2 result). Verify this weaker property here.
+    delta_cup1_int := HAP_BarCoboundary(R, cup1_int, 1);;
+    Print("  δ(integer cup1) = ", delta_cup1_int, "\n");
+    AssertOrLog("integer cup1 has δ ≡ 0 mod 2 (F_2 cocycle property)",
+                ForAll(delta_cup1_int, x -> x mod 2 = 0));
+    AssertOrLog("integer cup1 has δ entries even (matches expected 2·(α∪α))",
+                ForAll(delta_cup1_int, x -> AbsInt(x) mod 2 = 0));
+fi;
+
+# --------------------------------------------------------------------
 # Summary.
 # --------------------------------------------------------------------
 

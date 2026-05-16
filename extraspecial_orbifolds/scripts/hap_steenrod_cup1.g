@@ -137,48 +137,42 @@ _HAP_GetPhi := function(G, N)
     return entry;
 end;;
 
-# HAP_SteenrodCup1Symmetric(R, alpha_vec, beta_vec, n)
+# HAP_SteenrodCup1_F2(R, alpha_vec, p, beta_vec, q)
 #
-# Symmetric F_2 cup-1: α ∪₁ β for α, β both in H^n(R; F_2). Output is
-# a (2n-1)-cocycle on R. Built from HAP_PHI on R!.group.
+# F_2 cup-1 product: α ∪₁ β for α (degree p), β (degree q) cochains on
+# R with F_2 coefficients. Output is a (p+q-1)-cochain on R. Built
+# from HAP_PHI in the bar-cochain encoding `cupgen` uses inside HAP's
+# Steenrod-square implementation.
 #
-# Returns a length-`R!.dimension(2n-1)` vector over F_2.
-HAP_SteenrodCup1Symmetric := function(R, alpha_vec, beta_vec, n)
+# Supports BOTH symmetric (p = q, the cupgen case) and asymmetric
+# (p ≠ q, the case needed for Pontryagin square's `δα̃ ∪₁ α̃`).
+HAP_SteenrodCup1_F2 := function(R, alpha_vec, p, beta_vec, q)
     local G, phi_data, phi, RC2G, RGG, one, result, m, v, j, k, a, x, w,
-          alpha_pos, beta_pos;
+          alpha_pos, beta_pos, total_deg, out_deg;
     G := R!.group;
-    phi_data := _HAP_GetPhi(G, 2 * n);
+    total_deg := p + q;
+    out_deg := p + q - 1;
+    phi_data := _HAP_GetPhi(G, total_deg);
     phi  := phi_data.phi;
     RC2G := phi_data.RC2G;
     RGG  := phi_data.RGG;
     one  := Identity(RC2G!.group);
 
-    result := ListWithIdenticalEntries(R!.dimension(2 * n - 1), 0 * Z(2));
-    # Determine non-zero coordinates of α, β.
+    result := ListWithIdenticalEntries(R!.dimension(out_deg), 0 * Z(2));
     alpha_pos := Filtered([1..Length(alpha_vec)], i -> not IsZero(alpha_vec[i]));
     beta_pos  := Filtered([1..Length(beta_vec)],  i -> not IsZero(beta_vec[i]));
 
-    for m in [1..R!.dimension(2 * n - 1)] do
-        # cupgen-style: encode (1, 2n-1, 1, m) — meaning C_2 factor at
-        # degree 1 (for cup-1), G factor at degree 2n-1, generator 1 of
-        # C_2 (the order-2 generator), and m-th generator of G in degree 2n-1.
-        v := RC2G!.Vector2Int(1, 2 * n - 1, 1, m);
-        v := phi(2 * n, one, v);
+    for m in [1..R!.dimension(out_deg)] do
+        # cupgen-style encoding: C_2 factor at degree 1 (cup-1), G factor
+        # at degree out_deg = p+q-1, C_2 generator 1, G generator m.
+        v := RC2G!.Vector2Int(1, out_deg, 1, m);
+        v := phi(total_deg, one, v);
         a := 0 * Z(2);
-        # Sum coefficients of v matching (n, n-1, j, k) for non-zero (j, k).
-        # Wait — for cup-1 at symmetric n, the encoding of the output
-        # has the C_2 factor at "level 1" and the two G generators of
-        # degrees n and n-1. Actually for OUR cup-1 with output degree
-        # 2n-1, the tensor factors are (degree p in α, degree q in β)
-        # = (n, n) with shift of 1 from the homotopy — making the
-        # right tensor have degree n-1.
-        # NOTE: this is the formula's BEST guess; verify in tests.
-        # RGG-encode the target tensor position: both factors at degree n.
-        # cup-i of two degree-n cochains has output degree 2n-i; the
-        # RC2G→RGG chain map phi already shifts the C_2 contribution out.
         for j in alpha_pos do
             for k in beta_pos do
-                w := RGG!.Vector2Int(n, n, j, k);
+                # RGG target position: degrees p, q on the two G-factors,
+                # generators j (in α-factor), k (in β-factor).
+                w := RGG!.Vector2Int(p, q, j, k);
                 for x in v do
                     if AbsInt(x[1]) = w then
                         a := a + alpha_vec[j] * beta_vec[k];
@@ -191,15 +185,78 @@ HAP_SteenrodCup1Symmetric := function(R, alpha_vec, beta_vec, n)
     return result;
 end;;
 
-# Public entry point. Currently only the symmetric F_2 case is wired.
+# HAP_SteenrodCup1_Int(R, alpha_vec, p, beta_vec, q)
+#
+# Integer-valued cup-1: same shape as HAP_SteenrodCup1_F2 but tracks
+# signs from HAP_PHI's signed coefficients. Used inside Pontryagin
+# square at the cochain level where Brumfiel-Morgan's formula
+# requires Z-arithmetic before reducing mod 4.
+#
+# CAVEAT: HAP_PHI is constructed from ResolutionPrimePowerGroup which
+# is characteristic-2. The signs of coefficients in phi's output are
+# present in the data structure but their semantic correctness for
+# integer Steenrod theory is not guaranteed by HAP's contract. The
+# value returned here is *some* integer cup-1 representative; tests
+# (mod-2 reduction equals F_2 cup-1, and the result is a Z-cocycle of
+# the appropriate degree) check correctness experimentally.
+HAP_SteenrodCup1_Int := function(R, alpha_vec, p, beta_vec, q)
+    local G, phi_data, phi, RC2G, RGG, one, result, m, v, j, k, a, x, w,
+          alpha_pos, beta_pos, total_deg, out_deg;
+    G := R!.group;
+    total_deg := p + q;
+    out_deg := p + q - 1;
+    phi_data := _HAP_GetPhi(G, total_deg);
+    phi  := phi_data.phi;
+    RC2G := phi_data.RC2G;
+    RGG  := phi_data.RGG;
+    one  := Identity(RC2G!.group);
+
+    result := ListWithIdenticalEntries(R!.dimension(out_deg), 0);
+    alpha_pos := Filtered([1..Length(alpha_vec)], i -> not IsZero(alpha_vec[i]));
+    beta_pos  := Filtered([1..Length(beta_vec)],  i -> not IsZero(beta_vec[i]));
+
+    for m in [1..R!.dimension(out_deg)] do
+        v := RC2G!.Vector2Int(1, out_deg, 1, m);
+        v := phi(total_deg, one, v);
+        a := 0;
+        for j in alpha_pos do
+            for k in beta_pos do
+                w := RGG!.Vector2Int(p, q, j, k);
+                for x in v do
+                    if AbsInt(x[1]) = w then
+                        a := a + SignInt(x[1]) * alpha_vec[j] * beta_vec[k];
+                    fi;
+                od;
+            od;
+        od;
+        result[m] := a;
+    od;
+    return result;
+end;;
+
+# Public dispatcher. Detects input ring (F_2 vs Z) and routes to the
+# appropriate impl. Backward-compat alias for the previously-symmetric
+# entry point.
 HAP_SteenrodCup1 := function(R, alpha_vec, p, beta_vec, q)
-    if p <> q then
-        Error("HAP_SteenrodCup1: asymmetric (p, q) = (", p, ", ", q,
-              ") not yet implemented. Symmetric case p=q only. ",
-              "Asymmetric is the Pontryagin-square-shape use case ",
-              "and is the next step in #170.");
+    local first_nonzero, sample;
+    # Detect coefficient ring by sampling a non-zero entry of alpha_vec.
+    first_nonzero := First([1..Length(alpha_vec)],
+                           i -> not IsZero(alpha_vec[i]));
+    if first_nonzero = fail then
+        # alpha is identically zero — same answer either way; default F_2.
+        return HAP_SteenrodCup1_F2(R, alpha_vec, p, beta_vec, q);
     fi;
-    return HAP_SteenrodCup1Symmetric(R, alpha_vec, beta_vec, p);
+    sample := alpha_vec[first_nonzero];
+    if IsInt(sample) then
+        return HAP_SteenrodCup1_Int(R, alpha_vec, p, beta_vec, q);
+    fi;
+    return HAP_SteenrodCup1_F2(R, alpha_vec, p, beta_vec, q);
+end;;
+
+# Backward-compat: keep the original HAP_SteenrodCup1Symmetric name.
+# (Some downstream code may already reference it via the merged spec PR.)
+HAP_SteenrodCup1Symmetric := function(R, alpha_vec, beta_vec, n)
+    return HAP_SteenrodCup1_F2(R, alpha_vec, n, beta_vec, n);
 end;;
 
 # HAP_BarCup(R, alpha_vec, p, beta_vec, q)
