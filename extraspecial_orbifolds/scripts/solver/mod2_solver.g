@@ -16,7 +16,18 @@
 # IsCoboundary2Mod2 (solving A·β = b) and IsCoboundary2Mod2WithLift (where
 # the row space of TransposedMat(A) is the boundary subspace we add to im(β)
 # for cohomology-level membership testing).
-BoundaryMatrixGF2 := function(H)
+# Module-level cache for BoundaryMatrixGF2. The matrix depends only on
+# the group H, not on the cocycle c_g being tested. The transgression-
+# kernel driver calls this function with a small number of distinct H
+# values (one per BRW orbit representative — 4 at m=5) but invokes it
+# 165 × 1025 ≈ 170,000 times during the enumeration sweep. Building the
+# n²×n GF(2) matrix from scratch each call at n=2048 dominates wall time
+# (estimated weeks for A-5b without this cache). With IsIdenticalObj
+# lookup against the BRW orbit representative centralizers we get O(1)
+# cache hits after the first 4 builds.
+_BoundaryMatrixGF2_cache := [];;
+
+_BoundaryMatrixGF2_raw := function(H)
     local elts, n, idx, A, i, j, ij, row, zero, one;
     elts := AsList(H);
     n := Length(elts);
@@ -35,6 +46,16 @@ BoundaryMatrixGF2 := function(H)
         od;
     od;
     ConvertToMatrixRep(A, GF(2));
+    return A;
+end;;
+
+BoundaryMatrixGF2 := function(H)
+    local entry, A;
+    for entry in _BoundaryMatrixGF2_cache do
+        if IsIdenticalObj(entry.H, H) then return entry.A; fi;
+    od;
+    A := _BoundaryMatrixGF2_raw(H);
+    Add(_BoundaryMatrixGF2_cache, rec(H := H, A := A));
     return A;
 end;;
 
