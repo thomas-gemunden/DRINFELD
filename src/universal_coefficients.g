@@ -86,7 +86,7 @@ od;
 homlist:=List(homlist,x->((C^(-1))*x) mod m);
 
 r2:=ComplementIntMatWithTransforms(
-              IdentityMat(K!.dimension(3)),ZZ);
+              IdentityMat(K!.dimension(n)),ZZ);
 C1:=r2!.subtrans;
 R1:=r2!.fulltrans;
 
@@ -143,7 +143,6 @@ local 	UCT1, 	# UCT for K1
 UCT1:=UniversalCoefficientsTheorem(K1,n);;
 m1:=UCT1!.exponent;;
 Z1:=UCT1!.cyclebasis;
-s:=NormalFormIntMat(Z1,13);
 UCT2:=UniversalCoefficientsTheorem(K2,n);;
 m2:=UCT2!.exponent;;
 Z2:=UCT2!.cyclebasis;
@@ -314,10 +313,14 @@ local n,e,o,list1,list2,m,i,j;
 n:=UCT!.exponent;
 e:=Exponent(G);
 o:=Order(x);
+# Build list1 iteratively: list1[m+1] = list1[m] * E(n)^f(x, x^(m-1), x).
+# Bug fix (#152): the original Add'd to an uninitialised list2 with an
+# undeclared `factors`; the math intent is the recurrence on list1, with
+# the f-cocycle phase as the per-step multiplier.
 list1:=[1];
 for m in [1..o] do
-Add(list2,
- factors[Size(list2)]*E(n)^f(x,x^(m-1),x));
+Add(list1,
+ list1[Size(list1)]*E(n)^f(x,x^(m-1),x));
 od;
 list2:=[1];
 for j in [1..e] do
@@ -419,7 +422,6 @@ GaugeInvariants:=function(G)
     	UCT:=UniversalCoefficientsTheorem(K,3);
     	Print("Cohomology done\n\n");
     	n:=UCT!.exponent;
-	hombasis:=UCT!.hombasis;
     	lift:=UCT!.lift;
     	orbits:=AutomorphismOrbits(G,R,K,UCT);
     	representatives:=List([1..Size(orbits)],i->(lift*orbits[i][1])mod n);
@@ -579,27 +581,35 @@ PC:=List(cosets,g->ProjectiveCharacters(
   UCT!.exponent));
 nu:=function(G,UCT,N,f,class,list,i,m)
  local x,sum,S,Pf,lift,chi,listG,pivalues,r,o;
+ # Bug fixes (#152, V-8 / V-4 lineage):
+ #   * dropped `Gaa := list!.Gaa;` (Gaa was assigned but never used and
+ #     leaked to the global scope since it wasn't in locals).
+ #   * `listG:-Enumerator(G)` was a `:=` typo and left listG unbound.
+ #   * The second `pivalues[Position(listG, ...)]` indexing dropped its
+ #     closing `]` and re-opened a new `[...]` mid-expression, so the
+ #     parser silently mangled the multiplication. Restored to mirror
+ #     the first pivalues lookup just above.
+ # R, K, UCT are captured from FSIforAGT's outer scope (closure).
  S:=Intersection(N,
      N^(Representative(class)^(-1)));
- Gaa:=list!.Gaa;
  lift:=list!.lift;
  chi:=list!.table[i];
- listG:-Enumerator(G);
+ listG:=Enumerator(G);
  pivalues:=List(listG,x->
             ValuesOfPiSymbols(G,R,K,UCT,x,f));
  sum:=0;
  for r in N do
-  if (Representative(class)*r)^m in S 
-  then 
+  if (Representative(class)*r)^m in S
+  then
    o:=Order(Representative(class)*r);
-   sum:=sum 
+   sum:=sum
     +(pivalues[Position(listG,
                 Representative(class)*r)][o+1]
       ^(QuoInt(-m,o)-1))
     *pivalues[Position(listG,
-                       Representative(class)*r)
-      [o+RemInt(-m,o)+1]
-    *lift(((Representative(class)*r)^(-m)))^chi; 
+                       Representative(class)*r)]
+              [o+RemInt(-m,o)+1]
+    *lift(((Representative(class)*r)^(-m)))^chi;
   fi;
  od;
 return sum/Size(S);
