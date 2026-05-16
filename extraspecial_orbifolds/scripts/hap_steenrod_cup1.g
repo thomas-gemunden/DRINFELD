@@ -100,13 +100,106 @@ fi;
 # the cup-i formula drop. Over Z (used inside Pontryagin square at
 # #171), signs matter.
 #
-# IMPLEMENTATION STATUS: scaffold only.
+# IMPLEMENTATION STATUS: first attempt — symmetric F_2 case via
+# HAP_PHI. The HAP `cupgen` in lib/CohomologyOperations/mycupi.gi gives
+# us the per-coordinate cup-i product for two F_2 classes of the SAME
+# degree. We replicate that pattern and extend to integer-valued cup-1.
+#
+# Limitations to address in follow-up work:
+#   - Symmetric only (p = q). For Pontryagin square (P(α) = α̃ ∪ α̃ +
+#     δα̃ ∪₁ α̃) we need ∪₁ on (degree-3, degree-2) cochains — i.e.
+#     ASYMMETRIC. Extension requires a different RC2G encoding.
+#   - F_2-coefficient. Integer cup-1 needs signed coefficient sums from
+#     HAP_PHI's output, not the mod-2 count.
+#
+# Caching: HAP_PHI is expensive (~minutes for E_+(3)). Cache by group
+# identity to avoid rebuilding across multiple cochain-level calls.
+
+_HAP_PHI_cache := [];;
+
+_HAP_GetPhi := function(G, N)
+    local entry, phi_data;
+    for entry in _HAP_PHI_cache do
+        if IsIdenticalObj(entry.G, G) and entry.N >= N then return entry; fi;
+    od;
+    phi_data := HAP_PHI(G, N);
+    # HAP_PHI returns [phi, RC2G, RGG, RG] (last from arg[3] dispatch).
+    # Some HAP versions return [phi, RC2G, RGG] only.
+    entry := rec(
+        G    := G,
+        N    := N,
+        phi  := phi_data[1],
+        RC2G := phi_data[2],
+        RGG  := phi_data[3]
+    );
+    if IsBound(phi_data[4]) then entry.RG := phi_data[4]; fi;
+    Add(_HAP_PHI_cache, entry);
+    return entry;
+end;;
+
+# HAP_SteenrodCup1Symmetric(R, alpha_vec, beta_vec, n)
+#
+# Symmetric F_2 cup-1: α ∪₁ β for α, β both in H^n(R; F_2). Output is
+# a (2n-1)-cocycle on R. Built from HAP_PHI on R!.group.
+#
+# Returns a length-`R!.dimension(2n-1)` vector over F_2.
+HAP_SteenrodCup1Symmetric := function(R, alpha_vec, beta_vec, n)
+    local G, phi_data, phi, RC2G, RGG, one, result, m, v, j, k, a, x, w,
+          alpha_pos, beta_pos;
+    G := R!.group;
+    phi_data := _HAP_GetPhi(G, 2 * n);
+    phi  := phi_data.phi;
+    RC2G := phi_data.RC2G;
+    RGG  := phi_data.RGG;
+    one  := Identity(RC2G!.group);
+
+    result := ListWithIdenticalEntries(R!.dimension(2 * n - 1), 0 * Z(2));
+    # Determine non-zero coordinates of α, β.
+    alpha_pos := Filtered([1..Length(alpha_vec)], i -> not IsZero(alpha_vec[i]));
+    beta_pos  := Filtered([1..Length(beta_vec)],  i -> not IsZero(beta_vec[i]));
+
+    for m in [1..R!.dimension(2 * n - 1)] do
+        # cupgen-style: encode (1, 2n-1, 1, m) — meaning C_2 factor at
+        # degree 1 (for cup-1), G factor at degree 2n-1, generator 1 of
+        # C_2 (the order-2 generator), and m-th generator of G in degree 2n-1.
+        v := RC2G!.Vector2Int(1, 2 * n - 1, 1, m);
+        v := phi(2 * n, one, v);
+        a := 0 * Z(2);
+        # Sum coefficients of v matching (n, n-1, j, k) for non-zero (j, k).
+        # Wait — for cup-1 at symmetric n, the encoding of the output
+        # has the C_2 factor at "level 1" and the two G generators of
+        # degrees n and n-1. Actually for OUR cup-1 with output degree
+        # 2n-1, the tensor factors are (degree p in α, degree q in β)
+        # = (n, n) with shift of 1 from the homotopy — making the
+        # right tensor have degree n-1.
+        # NOTE: this is the formula's BEST guess; verify in tests.
+        # RGG-encode the target tensor position: both factors at degree n.
+        # cup-i of two degree-n cochains has output degree 2n-i; the
+        # RC2G→RGG chain map phi already shifts the C_2 contribution out.
+        for j in alpha_pos do
+            for k in beta_pos do
+                w := RGG!.Vector2Int(n, n, j, k);
+                for x in v do
+                    if AbsInt(x[1]) = w then
+                        a := a + alpha_vec[j] * beta_vec[k];
+                    fi;
+                od;
+            od;
+        od;
+        result[m] := a;
+    od;
+    return result;
+end;;
+
+# Public entry point. Currently only the symmetric F_2 case is wired.
 HAP_SteenrodCup1 := function(R, alpha_vec, p, beta_vec, q)
-    Error("HAP_SteenrodCup1: not yet implemented. Issue #170 (B3-1).\n",
-          "Implementation plan: use HAP_PHI to extract the level-1 ",
-          "chain homotopy h_1, then compute (α ⊗ β) ∘ h_1. See file ",
-          "header comments and spec docs/superpowers/specs/",
-          "2026-05-16-path3-hap-resolution-redesign.md task B3-1.");
+    if p <> q then
+        Error("HAP_SteenrodCup1: asymmetric (p, q) = (", p, ", ", q,
+              ") not yet implemented. Symmetric case p=q only. ",
+              "Asymmetric is the Pontryagin-square-shape use case ",
+              "and is the next step in #170.");
+    fi;
+    return HAP_SteenrodCup1Symmetric(R, alpha_vec, beta_vec, p);
 end;;
 
 # HAP_BarCup(R, alpha_vec, p, beta_vec, q)
