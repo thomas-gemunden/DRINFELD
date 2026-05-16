@@ -144,6 +144,12 @@ BuildPerClassCocycleBasis := function(setup, gRep, C)
     for a in [1..n] do
         AddDictionary(idx_map, elts[a], a);
     od;
+    # R2-1 (#177): promote table to GAP's matrix rep so that the per-target
+    # `basis_cache.table * vec_target` in PerVecTransgressionShared dispatches
+    # to the compiled integer matrix-vector path instead of the per-row
+    # interpreter loop. At m=5 with n² = 1M rows × k = 165 cols, the matmul
+    # is ~165M ops; the compiled path is ~10x the interpreted one.
+    ConvertToMatrixRep(table);
     result := rec(C := C, table := table, elts := elts, n := n,
                   idx_map := idx_map);
     _basis_cache_by_class.(key) := result;
