@@ -83,9 +83,14 @@ _basis_cache_by_class := rec();;
 # a single driver run with a fixed G, so dropping IdGroup loses
 # nothing.
 _SafeIdString := function(grp)
-    local r;
-    r := CALL_WITH_CATCH(IdGroup, [grp]);
-    if r[1] then return String(r[2]); fi;
+    # GAP's SmallGroups library covers orders 1..2000 EXCEPT 1024,
+    # plus a few sparse high orders. The first attempt at this fix
+    # (only the `ord > 2000` branch) tripped over E_+(5)'s order-1024
+    # centralisers because CALL_WITH_CATCH does not catch the
+    # SmallGroups error reliably. Per the module-level comment, the
+    # cache scope is a single driver run with a fixed G; `Order(C)` +
+    # `String(gRep)` already discriminate uniquely within that scope,
+    # so dropping IdGroup entirely loses nothing.
     return Concatenation("order", String(Order(grp)));
 end;;
 

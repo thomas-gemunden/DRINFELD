@@ -260,7 +260,7 @@ Print("\nAlready completed (resume): ", Length(completed_idx), " / ", k,
 # per-class boolean list.
 PerVecTransgressionShared := function(vec)
     local results, oi, orb_info, basis_cache, target_idx, vec_target,
-          c_g_table, c_g_func;
+          c_g_table;
     results := List([1..n_classes], j -> "?");
     for oi in [1..Length(orbits_data)] do
         orb_info := orbits_data[oi];
@@ -269,13 +269,17 @@ PerVecTransgressionShared := function(vec)
             vec_target := H3VecAtTarget(orb_info.start_idx, target_idx,
                                          orb_info.parent, orb_info.gen_used,
                                          h3_matrices, torsion, vec);
-            c_g_table := List(basis_cache.table,
-                              row -> Sum([1..k], idx ->
-                                  vec_target[idx] * row[idx]));
-            c_g_func := MakeCgFromCache(c_g_table, basis_cache);
+            # GAP's compiled matrix-vector product on integer rows. ~10-50x
+            # faster than the prior `List(table, row -> Sum([1..k], ...))`
+            # comprehension because the dot product is in the compiled
+            # kernel, not the interpreter loop. At m=5 this drops the
+            # n²-row × k-term cost by orders of magnitude per call.
+            c_g_table := basis_cache.table * vec_target;
+            # Vectorised solver: skips the n² function calls + dictionary
+            # lookups in IsCoboundary2Mod2's b-vector loop.
             results[target_idx] :=
-                IsCoboundary2Split(basis_cache.C, c_g_func, vec_target,
-                                   setup);
+                IsCoboundary2SplitVec(basis_cache.C, c_g_table, vec_target,
+                                       setup);
         od;
     od;
     return results;

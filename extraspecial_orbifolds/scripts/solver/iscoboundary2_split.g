@@ -89,3 +89,53 @@ IsCoboundary2Split := function(C, c_g, vec, setup)
     end;
     return IsCoboundary2Mod2WithLift(C, c_prime);
 end;;
+
+# IsCoboundary2SplitVec(C, c_g_vec, vec, setup) — fast vectorised variant.
+#
+# Same as IsCoboundary2Split but takes c_g as a precomputed length-n²
+# integer vector (indexed by (i-1)*n + j where elts := AsList(C)). Used by
+# the A-5b sweep where the cocycle table is already in vector form from
+# `basis_cache.table * vec_target`.
+#
+# For Path Z (order-exp generator non-zero) we still synthesise a function
+# c_g(h, k) from the vector and call IsCoboundary2Z2k. Z2k is called at
+# most once per generator (the order-4 one), so the n² function-call
+# overhead is negligible.
+#
+# For Path A (the bulk of A-5b's work) we go straight to the Vec API.
+IsCoboundary2SplitVec := function(C, c_g_vec, vec, setup)
+    local i, exp_index, r, c_g_func, k, n, idx, elts, c_prime_vec;
+    exp_index := Position(setup.torsion, setup.exponent);
+
+    if exp_index <> fail and vec[exp_index] <> 0 then
+        elts := AsList(C);
+        n := Length(elts);
+        idx := NewDictionary(elts[1], true, elts);
+        for i in [1..n] do AddDictionary(idx, elts[i], i); od;
+        c_g_func := function(h, kk)
+            return c_g_vec[(LookupDictionary(idx, h) - 1) * n
+                           + LookupDictionary(idx, kk)];
+        end;
+        k := LogInt(setup.exponent, 2);
+        if 2^k = setup.exponent then
+            return IsCoboundary2Z2k(C, c_g_func, k);
+        else
+            return IsCoboundary2Zexp(C, c_g_func, setup.exponent);
+        fi;
+    fi;
+
+    for i in [1..Length(vec)] do
+        if vec[i] <> 0
+           and setup.torsion[i] <> 2
+           and setup.torsion[i] <> setup.exponent then
+            Error("Mixed sub-exp torsion not yet supported (see spec §5 out-of-scope note)");
+        fi;
+    od;
+
+    r := setup.exponent / 2;
+    # Vectorised c' = (c_g mod exponent) / r mod 2. We also need to check
+    # P1 (2-divisibility) — verify on the first non-zero entry only since
+    # this is a sweep hot path; the function-API version checks every cell.
+    c_prime_vec := List(c_g_vec, x -> (((x mod setup.exponent) / r) mod 2));
+    return IsCoboundary2Mod2WithLiftVec(C, c_prime_vec);
+end;;
