@@ -1,7 +1,9 @@
 # hap_pontryagin_square.g — Pontryagin square on HAP's compact resolution.
 #
-# Issue #171 (Q-int B3-2). Builds on B3-1 (#170, merged in PR #174).
-# Spec: docs/superpowers/specs/2026-05-16-path3-hap-resolution-redesign.md
+# Issue #171 (Q-int B3-2). Builds on B3-1 (#170, merged in PR #174) and
+# the diagonal/cup-1 chain-level construction from `hap_diagonal.g` and
+# `hap_cup1_homotopy.g` (issue #171 follow-up spec
+# 2026-05-16-pontryagin-diagonal-chain-map-spec.md).
 #
 # # Formula (Brumfiel-Morgan 1973 Lemma 3.5(b)).
 #
@@ -9,30 +11,46 @@
 #
 # where α is an F_2 n-cocycle on R, α̃ its integer set-theoretic lift
 # (values in {0, 1} ⊂ Z), and ∪, ∪₁ are the cup and Steenrod cup-1
-# products.
+# products. Both must be Z-bilinear chain operations satisfying the
+# Hirsch-Steenrod identities (Leibniz for ∪ and the cup-1 coboundary
+# identity) over Z, NOT just on cocycle classes.
 #
-# # 2-divisibility trick (avoids integer cup-1).
+# # Implementation note: chain-level integer cup/cup-1.
 #
-# Since α is an F_2 cocycle, δα̃ has all entries divisible by 2. Write
-# δα̃ = 2β with β an integer (n+1)-cochain. Then:
+# Prior B3-2 scaffolds used HAP's `CR_ChainMapFromCocycle` for the cup
+# product. That function builds a chain map under the assumption that
+# the input is a Z-cocycle — bilinear, but not Leibniz on non-cocycles.
+# For the integer lift α̃ of an F_2 cocycle, α̃ is NOT a Z-cocycle
+# (δα̃ ∈ 2Z, not 0), so the prior cup product violated Leibniz and
+# P(α) was not a Z/4 cocycle.
 #
-#     δα̃ ∪₁ α̃ = 2·(β ∪₁ α̃)
-#
-# Mod 4, this equals 2·((β mod 2) ∪₁ (α̃ mod 2)) = 2·(β_F2 ∪₁ α_F2),
-# where β_F2 = β mod 2 is just an F_2 cochain. So we never need an
-# integer cup-1 — F_2 cup-1 (which HAP_PHI computes) suffices.
+# The fix: build a true chain-level diagonal Δ: R → R⊗R using
+# `HAP_BuildDiagonal` (from `hap_diagonal.g`) and the level-1 cup-1
+# homotopy h_1: R → (R⊗R)[+1] via `HAP_BuildCup1Homotopy` (from
+# `hap_cup1_homotopy.g`). These are constructed inductively from
+# `R!.boundary` + `R!.homotopy` and satisfy the chain identities over Z.
 #
 # # Resolution choice.
 #
-# HAP_PHI(G, N) builds its own resolution `RG := ResolutionPrimePowerGroup(G, N)`
-# internally. Cochains for cup / cup-1 must be on this RG, not on
-# user-supplied `ResolutionFiniteGroup` resolutions (their dimensions
-# differ: D_8 gives [1,2,3,5,8,12] vs [1,2,3,4,5,6] resp.). Therefore
-# HAP_PontryaginSquare takes the *group* G as input and exposes the
-# internal RG to callers (B3-3 integration will use the same RG).
+# Must use `ResolutionFiniteGroup` (a free ZG-resolution of Z, with
+# characteristic 0). `ResolutionPrimePowerGroup` has characteristic 2,
+# so ∂² is non-zero in 2Z over Z and the BM formula's chain-level
+# identity `d(P(α)) ≡ 0 mod 4` cannot hold — there's an irreducible
+# error term from δ²α̃ ∈ 2Z. The Δ and h_1 inductive constructions also
+# rely on ∂² = 0 over Z to produce a well-defined integer chain map.
+#
+# `HAP_PontryaginGetResolution(G, deg_max)` returns
+# `ResolutionFiniteGroup(G, deg_max + 1)`. The internal R⊗R is the
+# 7-tuple representation defined in `hap_diagonal.g`.
 
 if not IsBoundGlobal("HAP_SteenrodCup1_Int") then
     Read("hap_steenrod_cup1.g");
+fi;
+if not IsBoundGlobal("HAP_BuildDiagonal") then
+    Read("hap_diagonal.g");
+fi;
+if not IsBoundGlobal("HAP_BuildCup1Homotopy") then
+    Read("hap_cup1_homotopy.g");
 fi;
 
 # Local ternary helper.
@@ -41,73 +59,136 @@ If_loc_zero_one := function(c, a, b)
 end;;
 
 # ------------------------------------------------------------------
+# Resolution caching.
+#
+# We need both R = ResolutionFiniteGroup and its Δ, h_1 caches. To
+# avoid rebuilding across calls, we keep a per-group cache.
+# ------------------------------------------------------------------
+
+_HAP_Pontryagin_cache := [];;
+
+# Cache lookup keyed by group identity. Note: HAP's ResolutionFiniteGroup
+# creates a NEW group object from the input's generators (so
+# `IsIdenticalObj(R!.group, original_G)` is false). We accept both the
+# input G and the internal R!.group as keys.
+_HAP_Pontryagin_GetCache := function(G, deg_max)
+    local entry, R, Diag_data, Cup1_data, N;
+    for entry in _HAP_Pontryagin_cache do
+        if (IsIdenticalObj(entry.G, G)
+            or IsIdenticalObj(entry.R!.group, G))
+           and entry.deg_max >= deg_max then
+            return entry;
+        fi;
+    od;
+    N := deg_max + 1;  # R built to degree N = deg_max + 1
+    R := ResolutionFiniteGroup(G, N);
+    Diag_data := HAP_BuildDiagonal(R, deg_max);
+    Cup1_data := HAP_BuildCup1Homotopy(R, Diag_data, deg_max);
+    entry := rec(G        := G,
+                 deg_max  := deg_max,
+                 R        := R,
+                 DiagMap  := Diag_data,
+                 Cup1Hty  := Cup1_data);
+    Add(_HAP_Pontryagin_cache, entry);
+    return entry;
+end;;
+
+# _HAP_Pontryagin_GetCacheForR(R, deg_max)
+#
+# Like _HAP_Pontryagin_GetCache but takes a resolution R (not a group)
+# and returns a cache entry whose `R` field is identical to the input
+# R. If no such cache exists, builds Δ and h_1 ON THE SUPPLIED R (does
+# not call ResolutionFiniteGroup again).
+#
+# Used by `HAP_ChainCupProduct_Int` and `HAP_SteenrodCup1_Int` which
+# accept user-supplied R rather than always going through
+# `HAP_PontryaginGetResolution`.
+_HAP_Pontryagin_GetCacheForR := function(R, deg_max)
+    local entry, Diag_data, Cup1_data;
+    for entry in _HAP_Pontryagin_cache do
+        if IsIdenticalObj(entry.R, R) and entry.deg_max >= deg_max then
+            return entry;
+        fi;
+    od;
+    Diag_data := HAP_BuildDiagonal(R, deg_max);
+    Cup1_data := HAP_BuildCup1Homotopy(R, Diag_data, deg_max);
+    entry := rec(G        := R!.group,
+                 deg_max  := deg_max,
+                 R        := R,
+                 DiagMap  := Diag_data,
+                 Cup1Hty  := Cup1_data);
+    Add(_HAP_Pontryagin_cache, entry);
+    return entry;
+end;;
+
+# ------------------------------------------------------------------
 # HAP_PontryaginGetResolution(G, deg_max)
 #
-# Returns the resolution RG = ResolutionPrimePowerGroup(G, deg_max + 1)
-# that HAP_PHI uses internally. Callers should anchor all subsequent
-# cochain / cocycle work on this RG so indexing stays consistent.
+# Returns the resolution R = ResolutionFiniteGroup(G, deg_max + 1)
+# used by HAP_PontryaginSquare. Callers should anchor all subsequent
+# cochain / cocycle work on this R so indexing stays consistent.
+#
+# Note: this CHANGED in the diagonal-chain-map fix (#171 follow-up).
+# Previous versions returned the HAP_PHI-internal
+# `ResolutionPrimePowerGroup`. The new version returns
+# `ResolutionFiniteGroup` because integer chain-level cup / cup-1
+# require a Z-resolution (∂² = 0 over Z).
 # ------------------------------------------------------------------
 
 HAP_PontryaginGetResolution := function(G, deg_max)
-    local phi_data;
-    phi_data := _HAP_GetPhi(G, deg_max);
-    return phi_data.RG;
+    return _HAP_Pontryagin_GetCache(G, deg_max).R;
 end;;
 
 # ------------------------------------------------------------------
 # HAP_ChainCupProduct_Int(R, alpha_vec, p, beta_vec, q)
 #
-# Integer chain-level cup product. Mirrors HAP's IntegralCupProduct
-# (lib/Rings/cupProduct.gi) but skips the cocycle-class round-trip so
-# it works on non-cocycle integer cochains (α̃ a {0,1}-lift of an F_2
-# cocycle is NOT a Z-cocycle in general).
+# Integer chain-level cup product computed via the diagonal Δ from
+# `HAP_BuildDiagonal`. Leibniz-correct on ANY integer cochain (not just
+# cocycles), so usable inside the Pontryagin square's BM formula.
 #
 # Output: integer (p+q)-cochain on R, length R!.dimension(p+q).
+#
+# Note: requires R to be the cached ResolutionFiniteGroup from
+# `HAP_PontryaginGetResolution`. We look up the Δ cache by R!.group.
 # ------------------------------------------------------------------
 
 HAP_ChainCupProduct_Int := function(R, alpha_vec, p, beta_vec, q)
-    local uChainMap, IDEN, EltsG, i, w, x, sw, uvCochain;
-    EltsG := R!.elts;
-    IDEN := Position(EltsG, Identity(R!.group));
-    if IDEN = fail then
-        Add(EltsG, Identity(R!.group));
-        IDEN := Length(EltsG);
-    fi;
-    uChainMap := CR_ChainMapFromCocycle(R, alpha_vec, p, q);
-    uvCochain := ListWithIdenticalEntries(R!.dimension(p + q), 0);
-    for i in [1..R!.dimension(p + q)] do
-        w := uChainMap([[i, IDEN]]);
-        sw := 0;
-        for x in w do
-            sw := sw + SignInt(x[1]) * beta_vec[AbsoluteValue(x[1])];
+    local cache, dim_pq, result, i, val, r;
+    cache := _HAP_Pontryagin_GetCacheForR(R, p + q);
+    dim_pq := R!.dimension(p + q);
+    result := ListWithIdenticalEntries(dim_pq, 0);
+    for i in [1..dim_pq] do
+        val := 0;
+        for r in cache.DiagMap[p+q+1][i] do
+            if r.p = p and r.q = q then
+                val := val + r.sgn * alpha_vec[r.jp] * beta_vec[r.jq];
+            fi;
         od;
-        uvCochain[i] := sw;
+        result[i] := val;
     od;
-    return uvCochain;
+    return result;
 end;;
 
 # ------------------------------------------------------------------
 # HAP_PontryaginSquare(G, alpha_F2_vec, n)
 #
 # Pontryagin square Z/4-valued 2n-cocycle, given an F_2 n-cocycle
-# alpha_F2_vec on the internal HAP_PHI resolution RG of G.
+# alpha_F2_vec on the cached resolution R for G.
 #
-# Returns a list of length RG!.dimension(2n) with entries in {0,1,2,3}.
-# Companion `HAP_PontryaginGetResolution(G, 2n+1)` returns RG so the
+# Returns a list of length R!.dimension(2n) with entries in {0,1,2,3}.
+# Companion `HAP_PontryaginGetResolution(G, 2n+1)` returns R so the
 # caller can size the input cochain correctly.
 # ------------------------------------------------------------------
 
 HAP_PontryaginSquare := function(G, alpha_F2_vec, n)
-    local phi_data, R, alpha_int, d_alpha_int, beta_int, beta_F2,
-          cup_aa, cup1_b_a_F2, cup1_b_a_int, result, i;
+    local cache, R, alpha_int, d_alpha_int, cup_aa, cup1_da_a, result, i;
 
     if not (IsInt(n) and n >= 1) then
         Error("HAP_PontryaginSquare: n must be a positive integer, got ", n);
     fi;
 
-    # Internal resolution = RG from HAP_PHI(G, 2n+1).
-    phi_data := _HAP_GetPhi(G, 2 * n + 1);
-    R := phi_data.RG;
+    cache := _HAP_Pontryagin_GetCache(G, 2 * n + 1);
+    R := cache.R;
 
     if Length(alpha_F2_vec) <> R!.dimension(n) then
         Error("HAP_PontryaginSquare: alpha_F2_vec has length ",
@@ -124,23 +205,19 @@ HAP_PontryaginSquare := function(G, alpha_F2_vec, n)
     d_alpha_int := HAP_BarCoboundary(R, alpha_int, n);
     if not ForAll(d_alpha_int, x -> x mod 2 = 0) then
         Error("HAP_PontryaginSquare: input alpha is not an F_2 ",
-              "cocycle on the internal RG resolution.");
+              "cocycle on the cached resolution.");
     fi;
-    beta_int := List(d_alpha_int, x -> x / 2);
-    beta_F2  := List(beta_int, x -> (x mod 2) * Z(2)^0);
 
-    # α̃ ∪ α̃: integer 2n-cochain (chain-level cup; no cocycle required).
+    # α̃ ∪ α̃: integer 2n-cochain via chain-level Δ.
     cup_aa := HAP_ChainCupProduct_Int(R, alpha_int, n, alpha_int, n);
 
-    # β_F2 ∪₁ α_F2: F_2 2n-cochain. Lifted to {0,1} integers, then ×2.
-    cup1_b_a_F2 := HAP_SteenrodCup1_F2(R, beta_F2, n + 1, alpha_F2_vec, n);
-    cup1_b_a_int := List(cup1_b_a_F2,
-                         x -> If_loc_zero_one(IsZero(x), 0, 1));
+    # δα̃ ∪₁ α̃: integer 2n-cochain via chain-level h_1.
+    cup1_da_a := HAP_SteenrodCup1_Int(R, d_alpha_int, n + 1, alpha_int, n);
 
-    # P(α) = (α̃ ∪ α̃) + 2·(β_F2 ∪₁ α_F2) mod 4.
+    # P(α) = (α̃ ∪ α̃) + (δα̃ ∪₁ α̃) mod 4.
     result := ListWithIdenticalEntries(R!.dimension(2 * n), 0);
     for i in [1..R!.dimension(2 * n)] do
-        result[i] := (cup_aa[i] + 2 * cup1_b_a_int[i]) mod 4;
+        result[i] := (cup_aa[i] + cup1_da_a[i]) mod 4;
     od;
     return result;
 end;;
