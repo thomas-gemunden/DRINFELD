@@ -76,16 +76,31 @@ _basis_cache_by_class := rec();;
 # total builds vs the optimal 4.
 #
 # Cache key: a string concatenating identifiers of (G, gRep, C).
-# `String(gRep)` + `String(IdGroup(C))` is enough to disambiguate the
-# orbit reps within a fixed G; the driver always works with one G.
+# Originally used IdGroup for G and C, but IdGroup is only available
+# for orders ≤ 2000 in the standard SmallGroup library — breaks at
+# m=5 (|G| = 2048). We use Order(G), Order(C), and String(gRep)
+# (the strong per-orbit discriminator) instead. The cache scope is
+# a single driver run with a fixed G, so dropping IdGroup loses
+# nothing.
+_SafeIdString := function(grp)
+    # GAP's SmallGroups library covers orders 1..2000 EXCEPT 1024,
+    # plus a few sparse high orders. The first attempt at this fix
+    # (only the `ord > 2000` branch) tripped over E_+(5)'s order-1024
+    # centralisers because CALL_WITH_CATCH does not catch the
+    # SmallGroups error reliably. Per the module-level comment, the
+    # cache scope is a single driver run with a fixed G; `Order(C)` +
+    # `String(gRep)` already discriminate uniquely within that scope,
+    # so dropping IdGroup entirely loses nothing.
+    return Concatenation("order", String(Order(grp)));
+end;;
 
 BuildPerClassCocycleBasis := function(setup, gRep, C)
     local key, elts, n, basis, k, exp, R, ncells, table, idx_map,
           a, b, r, i, ChainAt, v1, v2, v3, contrib, result;
 
-    key := Concatenation("G", String(IdGroup(setup.group)),
+    key := Concatenation("G", _SafeIdString(setup.group),
                          "_g", String(gRep),
-                         "_C", String(IdGroup(C)),
+                         "_C", _SafeIdString(C),
                          "_n", String(Size(C)));
     if IsBound(_basis_cache_by_class.(key)) then
         return _basis_cache_by_class.(key);
