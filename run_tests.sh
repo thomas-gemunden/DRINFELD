@@ -36,8 +36,12 @@ echo
 
 # Tests that are too slow / heavy for CI under FAST=1.
 # test_quillen_vs_hap.g is gated by Q8_INCLUDE_M3 (cross-check against HAP).
+# test_krr_spectral_characters_sparse.g runs the m=5 build (~23 min wall) by
+#   default; FAST=1 skips this test entirely. To exercise only the m=3 anchor
+#   without skipping, set SPARSE_SKIP_M5 := true; in the GAP session.
 SKIP_SLOW=(
     "test_quillen_vs_hap.g"
+    "test_krr_spectral_characters_sparse.g"
 )
 
 is_slow() {
