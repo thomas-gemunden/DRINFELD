@@ -31,5 +31,6 @@
   "test_quillen_presentation":         {"wall_s_median": 0, "wall_s_runs": []},
   "test_s_entry":                      {"wall_s_median": 0, "wall_s_runs": []},
   "test_skeller_adapter":              {"wall_s_median": 0, "wall_s_runs": []},
-  "test_standard_bar_cocycle":         {"wall_s_median": 0, "wall_s_runs": []}
+  "test_standard_bar_cocycle":         {"wall_s_median": 0, "wall_s_runs": []},
+  "test_uc_sequence":                  {"wall_s_median": 0, "wall_s_runs": []}
 }
