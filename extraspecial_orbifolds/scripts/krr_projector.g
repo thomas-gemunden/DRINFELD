@@ -86,6 +86,31 @@ BuildIntertwinerDataUntwisted := function(G)
     );
 end;;
 
+# K-2c (#129): lazy variant for the single-query SKeller path.
+# Same shape as the eager version above but the inner index defers
+# per-class CharacterTable builds. Use this when only a small number of
+# (class_i, class_j) pairs will be queried (e.g. SKeller(7, i, j) for a
+# single (i, j)). For full S-matrix work the eager version is still
+# preferred since every class would be touched anyway.
+#
+# NOTE: BuildTransports is still eager (iterates all classes). At m=7
+# transports also dominate (~16K classes); a lazy-transports follow-up
+# is the next step under #129.
+BuildIntertwinerDataUntwistedLazy := function(G)
+    local idx, transport;
+    idx := BuildSimpleIndexLazy(G);
+    transport := BuildTransports(idx);
+    return rec(
+        group := G,
+        idx := idx,
+        transport := transport,
+        trace_on_W := function(class_idx, irrep_idx, h)
+            return EvalIrr(idx, class_idx, irrep_idx, h);
+        end,
+        epsilon := function(g1, g2, a, b) return 1; end
+    );
+end;;
+
 
 # ============================================================
 # Simple-object descriptors W_g
