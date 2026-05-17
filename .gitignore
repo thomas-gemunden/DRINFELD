@@ -26,6 +26,7 @@
 
 # Investigation work files
 **/scripts/Modular_Data
+**/tests/**/Modular_Data
 **/scripts/*.output
 **/scripts/*.log
 
