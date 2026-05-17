@@ -167,7 +167,8 @@ BRWConjugacyAction := function(m)
           class_orders, class_elements, types, orbit_partition, gens,
           perms, image_lists, y, p, image_list, image_subgroup, n, i, k,
           result, class_idx_dict, conj, t_dict_start, t_dict_end,
-          t_loop_start, t_loop_end, pre_images;
+          t_loop_start, t_loop_end, gens_em, gens_em_lifted,
+          images_under_y, phi_y, t_hom_start, t_hom_end, t_hom_total_ms;
     Assert(0, m >= 1, "m must be a positive integer");
 
     key := Concatenation("m", String(m));
@@ -199,38 +200,54 @@ BRWConjugacyAction := function(m)
     # At m=7, |em| = 2^15 = 32768 elements across 16385 classes; this
     # converts the inner loop's class-index lookup from O(n_classes)
     # (linear scan through class_elements) to O(1) (dict probe).
-    #
-    # Wall impact at m=7: the class-index lookup itself was
-    # O(BRW_gens * n_classes^2) = 28 * 16385^2 ~= 7.5 * 10^9 ops,
-    # which dominated the pre-fix 6-8h estimate in #271. Post-fix the
-    # lookup costs O(BRW_gens * n_classes) ~= 7 * 10^5 dict probes
-    # (~0.25s for the build, microseconds per probe). The remaining
-    # per-iteration cost is matrix conjugation in BRW plus
-    # Image(iso_em, ...) — these are NOT addressed by this patch and
-    # are the new wall-clock bottleneck at m=7. See #271 follow-up
-    # for the GroupHomomorphismByImages optimisation that would
-    # collapse them too.
     t_dict_start := Runtime();;
     class_idx_dict := BuildElementToClassIndexDict(em, classes);
     t_dict_end := Runtime();;
 
-    # Pre-compute matrix preimages of class reps once (each call to
-    # PreImagesRepresentative does HAP-style work; doing it n times
-    # instead of n * |BRW_gens| times is a free win).
-    pre_images := List(reps, r -> PreImagesRepresentative(iso_em, r));
+    # A-7-perf-2a (#271 follow-up): cache the BRW conjugation action on
+    # em as a pc-group homomorphism per BRW generator.
+    #
+    # Each BRW generator y acts on em by g -> y*g*y^(-1). Mathematically
+    # BRW is defined to normalise em (extraspecial subgroup), so this
+    # action is an automorphism of em. Concretely: build the matrix-side
+    # conjugates of em's generators ONCE per y (|GeneratorsOfGroup(em)|
+    # matmuls + iso_em evals), then assemble a pc-group hom phi_y. The
+    # inner loop over class reps then collapses from a 128x128 cyclotomic
+    # matmul + iso_em eval (~150 ms each at m=7, ~16385 calls per BRW
+    # gen, ~2 h total) to a pc-group hom evaluation (~100 us each,
+    # ~100 s total). See acceptance test in
+    # tests/test_brw_conjugacy_action.g and issue #271 comment 4472495339.
+    gens_em := GeneratorsOfGroup(em);
+    gens_em_lifted := List(gens_em,
+                           g -> PreImagesRepresentative(iso_em, g));
 
     gens := GeneratorsOfGroup(brw);
     perms := [];
     image_lists := [];
+    t_hom_total_ms := 0;
     t_loop_start := Runtime();;
     for i in [1..Length(gens)] do
         y := gens[i];
-        # y is a matrix in BRW; classes are pc-group classes. Translate:
-        # iso_em(y * iso_em^{-1}(rep_pc) * y^{-1}) is the pc-image of the
-        # conjugate. Dictionary lookup is O(1) per class.
+        # Build phi_y once per BRW generator. The matrix-arithmetic cost
+        # (|gens_em| matmuls + iso_em evals + GroupHomomorphismByImagesNC
+        # setup) lives here, not inside the per-class loop. NB: BRW
+        # conjugation is known to be an automorphism of em (see header
+        # comment); GroupHomomorphismByImagesNC skips the well-definedness
+        # check that ByImages (no NC) would run.
+        t_hom_start := Runtime();;
+        images_under_y := List(gens_em_lifted,
+                               g_lift -> Image(iso_em,
+                                               y * g_lift * y^(-1)));
+        phi_y := GroupHomomorphismByImagesNC(em, em,
+                                             gens_em, images_under_y);
+        t_hom_end := Runtime();;
+        t_hom_total_ms := t_hom_total_ms + (t_hom_end - t_hom_start);
+
+        # Per-class step: pc-group hom evaluation (fast), then O(1)
+        # dictionary lookup. No matrix arithmetic, no iso_em call.
         image_list := EmptyPlist(n);
         for k in [1..n] do
-            conj := Image(iso_em, y * pre_images[k] * y^(-1));
+            conj := Image(phi_y, reps[k]);
             image_list[k] := LookupDictionary(class_idx_dict, conj);
         od;
         Add(image_lists, image_list);
@@ -259,10 +276,14 @@ BRWConjugacyAction := function(m)
         perms := perms,
         image_lists := image_lists,
         image_subgroup := image_subgroup,
-        # A-7-perf-2 perf breakdown (s).
+        # A-7-perf-2 / A-7-perf-2a perf breakdown (s). brw_loop_s is the
+        # total loop wall (hom-build + per-class hom eval + dict lookup);
+        # hom_build_s is the sum of the matrix-side phi_y construction
+        # walls, which is the only remaining matrix-arithmetic cost.
         timings := rec(
             element_dict_s := (t_dict_end - t_dict_start) / 1000.0,
-            brw_loop_s     := (t_loop_end - t_loop_start) / 1000.0
+            brw_loop_s     := (t_loop_end - t_loop_start) / 1000.0,
+            hom_build_s    := t_hom_total_ms / 1000.0
         )
     );
     _brw_conjugacy_action_cache.(key) := result;
