@@ -155,10 +155,12 @@ Print("BRW build + order wall: ", t_brw_lb_wall, " s\n");
 # ----------------------------------------------------------------------
 
 if A3D_FULL_AUTNT then
-    Print("\n--- Step 4: full AutNT(N, T, QD) ---\n");
+    Print("\n--- Step 4: full AutNT(N, T, QD) via BRW symmetry (#241) ---\n");
     Read("aut_nt_partition.g");
     Read("aut_nt_refine.g");
     Read("aut_nt.g");
+    Read("brw_simples_action.g");
+    Read("aut_nt_brw_symmetry.g");
 
     Print("Computing quantum dimensions ...\n");
     t_qd := Runtime();;
@@ -178,10 +180,20 @@ if A3D_FULL_AUTNT then
     Print("MakeStreamingFusionOracle (cache_size=",
           N_cache_size, ") wall: ", t_fc_wall, " s\n");
 
+    Print("Building BRW-on-simples action (#241) ...\n");
+    t_brw_sa := Runtime();;
+    brw_simples := BRWSimplesAction(m);;
+    t_brw_sa_wall := (Runtime() - t_brw_sa) / 1000.;;
+    Print("BRWSimplesAction(", m, ") wall: ", t_brw_sa_wall, " s\n");
+    Print("# BRW-on-simples orbits = ", Length(brw_simples.orbits), "\n");
+    Print("max orbit size = ", Maximum(List(brw_simples.orbits, Length)), "\n");
+    Print("|BRW image in Sym(rank)| = ",
+          Order(Group(brw_simples.generators)), "\n");
+
     t_aut := Runtime();;
-    aut_result := AutNT(N_oracle, md.T, QD);;
+    aut_result := AutNTBRWSymmetry(m, N_oracle, md.T, QD);;
     t_aut_wall := (Runtime() - t_aut) / 1000.;;
-    Print("AutNT wall: ", t_aut_wall, " s\n");
+    Print("AutNTBRWSymmetry wall: ", t_aut_wall, " s\n");
     Print("|Aut(N^0, T^0)| = ", aut_result.order, "\n");
     Print("# generators returned: ", Length(aut_result.generators), "\n");
 
