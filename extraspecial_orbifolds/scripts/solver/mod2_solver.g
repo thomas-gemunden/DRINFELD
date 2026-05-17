@@ -173,11 +173,9 @@ end;;
 # number of even-order elementary divisors of C^ab — i.e. the F_2-rank of
 # C^ab / 2·C^ab = H^1(C; F_2).
 BocksteinH1ToH2 := function(C)
-    local elts, n, phi, GA, abgens, ab_orders, hom_basis, alpha_vals,
-          k, ord, vecs, i, j, v, zero, one;
+    local elts, phi, GA, abgens, ab_orders, hom_basis, alpha_vals,
+          k, ord, vecs, v, one;
     elts := AsList(C);
-    n := Length(elts);
-    zero := Zero(GF(2));
     one  := One(GF(2));
 
     phi := MaximalAbelianQuotient(C);
@@ -198,14 +196,15 @@ BocksteinH1ToH2 := function(C)
     od;
 
     # For each α, build β(α) as a length-n² vector with β(α)(i, j) = α(i)·α(j).
+    # A-5b R2-3 (#186): replaced an n^2 nested interpreter loop with a single
+    # compiled KroneckerProduct. The wrap `[alpha_vals]` makes it a 1×n matrix;
+    # the `[1]` unwraps the result back to a length-n² row whose entry at
+    # column (i-1)*n+j is alpha_vals[i] * alpha_vals[j] — equivalent to the
+    # original loop body. Cuts lift-cache build time at n=2048 from ~25 min
+    # to under a minute.
     vecs := [];
     for alpha_vals in hom_basis do
-        v := List([1..n*n], i -> zero);
-        for i in [1..n] do
-            for j in [1..n] do
-                v[(i - 1) * n + j] := alpha_vals[i] * alpha_vals[j];
-            od;
-        od;
+        v := KroneckerProduct([alpha_vals], [alpha_vals])[1];
         Add(vecs, v);
     od;
 
