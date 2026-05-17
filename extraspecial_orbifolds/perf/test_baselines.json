@@ -19,6 +19,7 @@
   "test_gauge_invariants":             {"wall_s_median": 0, "wall_s_runs": []},
   "test_integral_bockstein":           {"wall_s_median": 0, "wall_s_runs": []},
   "test_integral_cohomology":          {"wall_s_median": 0, "wall_s_runs": []},
+  "test_krr_full_s_t":                 {"wall_s_median": 0, "wall_s_runs": []},
   "test_krr_projector":                {"wall_s_median": 0, "wall_s_runs": []},
   "test_krr_vs_central_closed_form":   {"wall_s_median": 0, "wall_s_runs": []},
   "test_q8_regression":                {"wall_s_median": 0, "wall_s_runs": []},
