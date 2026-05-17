@@ -283,18 +283,23 @@ end;;
 # IB_AlphaCupAlpha(alpha, n) — the cup-square (α∪α)(h, k) := α(h)·α(k)
 # as a length-n² integer (0/1) cochain. Used to subtract Bockstein image
 # corrections from a Z/2^L cochain table at any level.
+#
+# A-5b R2-9 (#258 follow-up): replace nested for-loop with compiled
+# KroneckerProduct, matching the pattern landed in PR #221 / #225 for
+# BocksteinH1ToH2 and IsCoboundary2Mod2WithLiftWitness. KroneckerProduct
+# is called per α (up to 2^num_basis ≈ 2K-16K α candidates per Path Z
+# class at m=5), so the per-call O(n²) interpreted loop dominated Path
+# Z wall after the R2-5/R2-6/R2-7/R2-8 audit series eliminated the
+# Path A bottlenecks.
 IB_AlphaCupAlpha := function(alpha, n)
-    local v, i, j;
     if Length(alpha) = 0 then
         return List([1..n*n], i -> 0);
     fi;
-    v := List([1..n*n], i -> 0);
-    for i in [1..n] do
-        for j in [1..n] do
-            v[(i-1)*n + j] := alpha[i] * alpha[j];
-        od;
-    od;
-    return v;
+    # GAP's KroneckerProduct on two 1xn matrices [alpha], [alpha] returns
+    # a 1x(n*n) matrix whose only row is the outer product alpha ⊗ alpha,
+    # laid out as v[(i-1)*n + j] = alpha[i] * alpha[j] — exactly the
+    # cup-square. Returning [1] extracts the row.
+    return KroneckerProduct([alpha], [alpha])[1];
 end;;
 
 # IsCob_aux(C, c_table, modulus, hom_basis, A_F2_T, elts, n, idx) —
@@ -367,9 +372,10 @@ IB_TableMod2WithLift := function(c_table, n, A_F2_T, hom_basis)
         if Length(alpha) = 0 then
             alpha_cup_alpha_F2 := List([1..n*n], i -> zero);
         else
-            alpha_cup_alpha_F2 := List([1..n*n], i -> 0);
-            alpha_cup_alpha_F2 := List(IB_AlphaCupAlpha(alpha, n),
-                                       v -> v * one);
+            # A-5b R2-9 (#258 follow-up): the previous code allocated a
+            # zero-list then immediately overwrote it; drop the wasted
+            # allocation. The `* one` promotion is compiled (vec * scalar).
+            alpha_cup_alpha_F2 := IB_AlphaCupAlpha(alpha, n) * one;
         fi;
         ConvertToVectorRep(alpha_cup_alpha_F2, GF(2));
         residual := b_F2 - alpha_cup_alpha_F2;
