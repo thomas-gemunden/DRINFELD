@@ -62,17 +62,23 @@ Print("\n--- Task 2.4: Gate 1A m=2 (10 unit generators are non-zero) ---\n");
 # WHAT THIS GATE TESTS — and what it does NOT test.
 #
 # D-VAN's claim: ResIsTrivialOnDetectingFamily(m, omega) returns
-# trivial=true iff [omega] = 0 in H^3(E_+(m); U(1)). By the AM04 IV.7 +
-# Quillen 1971 injectivity theorem, this is equivalent to res(omega) = 0
-# under restriction to {E, D_8}.
+# trivial=true iff [omega] = 0 in H^3(E_+(m); U(1)). By the
+# AM04 §IV.4-§IV.5 (specifically Thm 4.3 + Thm 5.6) + Quillen 1971
+# injectivity theorem, this is equivalent to res(omega) = 0 under
+# restriction to {E, D_8}. The citation chain in detail: Adem-Milgram
+# framework (§IV.4-§IV.5) -> Quillen 1971 Thm 5.10 (explicit
+# H*(E_+(m); F_2)) -> Harada-Kono 1987 Thm 1.1 (integer A(k) summand)
+# -> UCT for U(1) coefficients. See R-1
+# (docs/superpowers/research/2026-05-17-detecting-family-literature.md)
+# for the full synthesis.
 #
 # Each UCT.hombasis-indexed unit generator e_i is by construction a
 # NON-ZERO class in H^3(G; U(1)) (the hombasis is a Z-basis of H^3
 # modulo torsion). So D-VAN must report trivial=false for every e_i.
 # If any e_i had trivial=true, either (a) e_i = 0 in H^3 (false by
 # linear independence) or (b) res has non-trivial kernel (false by
-# AM04 IV.7). Either way, a violation flags an implementation bug or
-# a math premise failure.
+# AM04 §IV.4-§IV.5). Either way, a violation flags an implementation
+# bug or a math premise failure.
 #
 # NOTE on a tempting (but WRONG) alternative gate: comparing
 # `r.trivial` against `e_i in HAP_kernel_of_Tr`. These conditions are
