@@ -95,7 +95,7 @@ If_ := function(cond, a, b) if cond then return a; else return b; fi; end;;
 IsCoboundary2Mod2WithLiftWitness := function(C, c)
     local elts, n, c_F2, A_F2_T, phi, GA, abgens, ab_orders, hom_basis,
           alpha_vals, k, ord, num_basis, mask, alpha, alpha_cup_alpha,
-          residual, sol, beta_F2, i, j, idx_h, zero, one;
+          residual, sol, beta_F2, i, j, zero, one;
     elts := AsList(C);
     n := Length(elts);
     zero := Zero(GF(2));
@@ -143,12 +143,13 @@ IsCoboundary2Mod2WithLiftWitness := function(C, c)
         od;
 
         # Build α∪α as a length-n² F_2 vector.
-        alpha_cup_alpha := List([1..n*n], i -> zero);
-        for i in [1..n] do
-            for j in [1..n] do
-                alpha_cup_alpha[(i-1)*n + j] := alpha[i] * alpha[j];
-            od;
-        od;
+        # A-5b R2-3 sibling (refs #186, #221): replaced an n^2 nested
+        # interpreter loop with a single compiled KroneckerProduct. The wrap
+        # `[alpha]` makes it a 1×n matrix; the `[1]` unwraps the result back
+        # to a length-n² row whose entry at column (i-1)*n+j is
+        # alpha[i] * alpha[j] — equivalent to the original loop body.
+        # Mirrors the BocksteinH1ToH2 fix in mod2_solver.g.
+        alpha_cup_alpha := KroneckerProduct([alpha], [alpha])[1];
         ConvertToVectorRep(alpha_cup_alpha, GF(2));
 
         # Test whether c_F2 - α∪α is a strict F_2 coboundary.
