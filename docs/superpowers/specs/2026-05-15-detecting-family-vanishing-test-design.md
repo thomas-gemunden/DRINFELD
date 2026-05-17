@@ -16,11 +16,18 @@ The injectivity of
 res : H³(E_+(m); U(1)) → H³(E; U(1)) ⊕ H³(D_8; U(1))
 ```
 
-is the key theorem (AM04 IV.7 + Quillen 1971 essential-ideal argument: the
-essential ideal of `H*(E_+(m); F_2)` starts in degree `2m`, so degree 3 is
-clear for all m ≥ 2). For our application (Keller's question
-"is `[ω] = 0`?") this means the test reduces to two cheap subgroup
-checks: `|E| = 2^{m+1} ≤ 256` for m ≤ 7 and `|D_8| = 8` always.
+is the key theorem (AM04 §IV.4-§IV.5 (specifically Thm 4.3 + Thm 5.6) +
+Quillen 1971 essential-ideal argument: the essential ideal of
+`H*(E_+(m); F_2)` starts in degree `2m`, so degree 3 is clear for all
+m ≥ 2). For our application (Keller's question "is `[ω] = 0`?") this
+means the test reduces to two cheap subgroup checks:
+`|E| = 2^{m+1} ≤ 256` for m ≤ 7 and `|D_8| = 8` always.
+
+The citation chain in detail: Adem–Milgram framework (§IV.4-§IV.5) →
+Quillen 1971 Thm 5.10 (explicit H*(E_+(m); F_2)) → Harada–Kono 1987
+Thm 1.1 (integer A(k) summand) → UCT for U(1) coefficients. See R-1
+(`docs/superpowers/research/2026-05-17-detecting-family-literature.md`)
+for the full synthesis.
 
 ## Motivation
 
@@ -272,7 +279,7 @@ tests/test_detecting_family_phase2_xcheck.g  (Phase 2)
 
 ## Risk register
 
-1. **AM04 IV.7 injectivity could fail empirically.** Gate 1A *is* the
+1. **AM04 §IV.4-§IV.5 injectivity could fail empirically.** Gate 1A *is* the
    empirical test. Probability we expect divergence: zero (Quillen 1971's
    essential-ideal argument is rock-solid for our range), but Gate 1A is
    the fact-check.
@@ -346,7 +353,11 @@ Phase 2 (gated on Q-int A2/A3, issue #136)
 - AM04 = A. Adem, R. Milgram, *Cohomology of Finite Groups*, 2nd ed.,
   Springer, 2004.
   - V.6.5 (general detecting-family injectivity)
-  - IV.7 (specific essential-ideal argument for extraspecial 2-groups)
+  - §IV.4 Def 4.2, Thm 4.3 ("Groups with Cohomology Detected by
+    Abelian Subgroups") + §IV.5 Thm 5.6 (F-isomorphism); the
+    essential-ideal argument for extraspecial 2-groups is then
+    Quillen 1971 Thm 5.10 (see R-1 synthesis at
+    `docs/superpowers/research/2026-05-17-detecting-family-literature.md`).
 - D. Quillen, *The mod 2 cohomology rings of extra-special 2-groups and
   the spinor groups*, Math. Ann. 194 (1971), 197–212. (Essential ideal
   starts in degree `2m`.)
