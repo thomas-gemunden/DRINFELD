@@ -397,26 +397,15 @@ od;
 
 # Build per-orbit cocycle-basis caches.
 #
-# A-7-perf-1 (#271): we use BuildPerClassCocycleBasisForOrbit, which
-# (a) builds the rep cache via brute force (one Syzygy chain per (a, b)
-#     pair in C(rep)),
-# (b) for each sibling target_idx in the orbit, transports the rep table
-#     via the BRW path's cumulative H^3 matrix + phi_path-induced
-#     permutation, and stores the result in _basis_cache_by_class.
-#
-# At m=2 / m=3 the rep-cache cost is small; the transport population
-# is mostly a convenience for downstream code that calls
-# BuildPerClassCocycleBasis per class (e.g. TransgressionKernelExact).
-#
-# The inner per-vec loop below (PerVecTransgressionShared) still uses
-# orbit_caches[oi] (the rep cache) + H3VecAtTarget to transport the
-# vec; not the per-class siblings. This keeps the BRW-symmetry path
-# unchanged at the cocycle-level boolean answer. The two paths
-# disagree on the COCYCLE-level table (transport differs by a
-# 2-coboundary on C(sib), invisible to IsCoboundary2Split), but the
-# driver's inner loop and the transport-built sibling caches both
-# give the SAME boolean coboundary answer for any vec.
-Print("Building per-orbit cocycle-basis caches (with sibling transport)...\n");
+# Driver consumes only the orbit-rep cache (via H3VecAtTarget to transport
+# the H^3 vec to sibling classes on-the-fly in PerVecTransgressionShared).
+# We therefore use the rep-only `BuildPerClassCocycleBasis(setup, rep, C)`
+# call here; the sibling-transport machinery
+# `BuildPerClassCocycleBasisForOrbit` from PR #276 stays available in
+# solver/snf_wrapper.g for downstream consumers that need per-class
+# sibling caches (e.g. the proposed perf-4' transgression-matrix
+# re-architecture). See #277 for rationale.
+Print("Building per-orbit cocycle-basis caches (rep-only)...\n");
 t_caches := Runtime();;
 orbit_caches := [];;
 for orb_info in orbits_data do
@@ -452,12 +441,11 @@ for orb_info in orbits_data do
                                idx_map := cache_idx_map));
         Print((Runtime() - t_one) / 1000., " s (degenerate, identity class)\n");
     else
-        # Non-identity orbit: build rep cache + sibling transport caches.
-        Add(orbit_caches,
-            BuildPerClassCocycleBasisForOrbit(setup, conj_action, orb_info,
-                                               h3_matrices_consistent));
-        Print((Runtime() - t_one) / 1000., " s (",
-              Length(orb_info.orbit), " classes via transport)\n");
+        # Non-identity orbit: build the rep cache only. Sibling transport
+        # is not consumed by PerVecTransgressionShared (see header comment
+        # above this block).
+        Add(orbit_caches, BuildPerClassCocycleBasis(setup, rep, C));
+        Print((Runtime() - t_one) / 1000., " s (rep-only)\n");
     fi;
 od;
 Print("Per-orbit caches wall: ", (Runtime() - t_caches) / 1000., " s total\n");
