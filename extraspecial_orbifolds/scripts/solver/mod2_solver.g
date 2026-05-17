@@ -69,14 +69,24 @@ end;;
 _IsCoboundary2Mod2_SemCache := [];;
 
 _GetCachedSemForAT := function(A)
-    local entry, sem;
+    local entry, sem, nonzero_heads;
     for entry in _IsCoboundary2Mod2_SemCache do
-        if IsIdenticalObj(entry.A, A) then return entry.sem; fi;
+        if IsIdenticalObj(entry.A, A) then return entry; fi;
     od;
     # Build sem for TransposedMat(A) once and cache.
     sem := SemiEchelonMatTransformation(TransposedMat(A));
-    Add(_IsCoboundary2Mod2_SemCache, rec(A := A, sem := sem));
-    return sem;
+    # R2-2 (#177): the back-substitution loop iterates [1..Length(b)] which
+    # is n² (up to 4M at n=2048). Most of those indices have sem.heads[i] = 0
+    # (rank is bounded by n = |C|, so at most n of the n² heads are non-zero
+    # — i.e. ≥ 99.9% of the iterations are pure-skip noise costing 4
+    # interpreter ops each: EvalElmList + ExecAssLVar + EvalNe + ExecIf).
+    # Sample of A-5b live during gen ~13 showed these 4 primitives at 67.6 %
+    # combined of total CPU. Precompute the non-zero-head index list once
+    # per cached sem and iterate that instead.
+    nonzero_heads := Filtered([1..Length(sem.heads)], i -> sem.heads[i] <> 0);
+    Add(_IsCoboundary2Mod2_SemCache,
+        rec(A := A, sem := sem, nonzero_heads := nonzero_heads));
+    return _IsCoboundary2Mod2_SemCache[Length(_IsCoboundary2Mod2_SemCache)];
 end;;
 
 IsCoboundary2Mod2 := function(H, c)
@@ -110,13 +120,15 @@ end;;
 # precomputed vector. At n=1024 this drops the per-call cost from ~5s to
 # under 100 ms.
 IsCoboundary2Mod2Vec := function(H, c_g_vec)
-    local n, A, sem, b, i, one, z, sol_dim, sol, vno, x;
+    local n, A, entry, sem, nonzero_heads, b, i, one, z, sol_dim, sol, vno, x;
     n := Length(AsList(H));
     one := One(GF(2));
     z := Zero(GF(2));
 
-    A := BoundaryMatrixGF2(H);             # cached via the prior patch
-    sem := _GetCachedSemForAT(A);          # cached factorisation
+    A := BoundaryMatrixGF2(H);                  # cached
+    entry := _GetCachedSemForAT(A);             # cached factorisation + heads
+    sem := entry.sem;
+    nonzero_heads := entry.nonzero_heads;
 
     b := List(c_g_vec, x -> (x mod 2) * one);
     ConvertToVectorRep(b, GF(2));
@@ -128,14 +140,15 @@ IsCoboundary2Mod2Vec := function(H, c_g_vec)
     sol := ListWithIdenticalEntries(sol_dim, z);
     ConvertToVectorRep(sol, GF(2));
     b := ShallowCopy(b);
-    for i in [1..Length(b)] do
+    # R2-2 (#177): iterate only the non-zero-head indices (the rank-many
+    # pivot rows of sem) instead of every i in [1..Length(b)]. The skipped
+    # iterations had vno = 0 and contributed nothing to b or sol.
+    for i in nonzero_heads do
         vno := sem.heads[i];
-        if vno <> 0 then
-            x := b[i];
-            if x <> z then
-                AddRowVector(b, sem.vectors[vno], -x);
-                AddRowVector(sol, sem.coeffs[vno], x);
-            fi;
+        x := b[i];
+        if x <> z then
+            AddRowVector(b, sem.vectors[vno], -x);
+            AddRowVector(sol, sem.coeffs[vno], x);
         fi;
     od;
     return IsZero(b);
@@ -241,9 +254,9 @@ end;;
 _LiftSemCache := [];;
 
 _GetLiftSemForC := function(C)
-    local entry, img, B, M, sem;
+    local entry, img, B, M, sem, nonzero_heads;
     for entry in _LiftSemCache do
-        if IsIdenticalObj(entry.C, C) then return entry.sem; fi;
+        if IsIdenticalObj(entry.C, C) then return entry; fi;
     od;
     img := BocksteinH1ToH2(C);
     B := TransposedMat(BoundaryMatrixGF2(C));
@@ -253,20 +266,18 @@ _GetLiftSemForC := function(C)
         M := Concatenation(img, B);
         ConvertToMatrixRep(M, GF(2));
     fi;
-    # We solve `vec = sum lambda_i * M[i]`, i.e. membership of vec in row
-    # span of M. SemiEchelonMatTransformation(M) returns a record whose
-    # back-substitution loop is what SolutionMat would do internally —
-    # caching it across calls is the same trick as IsCoboundary2Mod2Vec.
     sem := SemiEchelonMatTransformation(M);
-    Add(_LiftSemCache, rec(C := C, sem := sem));
-    return sem;
+    # R2-2 (#177): same head-skip optimisation as _GetCachedSemForAT.
+    nonzero_heads := Filtered([1..Length(sem.heads)], i -> sem.heads[i] <> 0);
+    Add(_LiftSemCache, rec(C := C, sem := sem, nonzero_heads := nonzero_heads));
+    return _LiftSemCache[Length(_LiftSemCache)];
 end;;
 
 # IsCoboundary2Mod2WithLiftVec(C, c_g_vec) — fast vectorised path. Identical
 # to IsCoboundary2Mod2WithLift but takes a precomputed length-n² vector
 # instead of a function c(h, k). Used by the A-5b sweep.
 IsCoboundary2Mod2WithLiftVec := function(C, c_g_vec)
-    local b, one, z, sem, sol, sol_dim, i, vno, x;
+    local b, one, z, entry, sem, nonzero_heads, sol, sol_dim, i, vno, x;
     if IsCoboundary2Mod2Vec(C, c_g_vec) then return true; fi;
 
     one := One(GF(2));
@@ -274,7 +285,9 @@ IsCoboundary2Mod2WithLiftVec := function(C, c_g_vec)
     b := List(c_g_vec, x -> (x mod 2) * one);
     ConvertToVectorRep(b, GF(2));
 
-    sem := _GetLiftSemForC(C);
+    entry := _GetLiftSemForC(C);
+    sem := entry.sem;
+    nonzero_heads := entry.nonzero_heads;
     if Length(sem.coeffs) = 0 then
         return IsZero(b);
     fi;
@@ -282,14 +295,12 @@ IsCoboundary2Mod2WithLiftVec := function(C, c_g_vec)
     sol := ListWithIdenticalEntries(sol_dim, z);
     ConvertToVectorRep(sol, GF(2));
     b := ShallowCopy(b);
-    for i in [1..Length(b)] do
+    for i in nonzero_heads do
         vno := sem.heads[i];
-        if vno <> 0 then
-            x := b[i];
-            if x <> z then
-                AddRowVector(b, sem.vectors[vno], -x);
-                AddRowVector(sol, sem.coeffs[vno], x);
-            fi;
+        x := b[i];
+        if x <> z then
+            AddRowVector(b, sem.vectors[vno], -x);
+            AddRowVector(sol, sem.coeffs[vno], x);
         fi;
     od;
     return IsZero(b);
