@@ -80,27 +80,42 @@ end;;
 
 # _HAP_RR_Reduce(chain): combine like terms in an R⊗R chain. Sum signs
 # over identical (p, q, jp, jq, gl, gr) keys; drop zero-coefficient.
+#
+# Implementation: sort by (p, q, jp, jq, gl, gr) lex key, then single-pass
+# merge consecutive duplicates. GAP's Sort is in-place mergesort and list-
+# vs-list `<` is the compiled lex comparator. This is much faster than
+# the prior string-keyed record approach at large chain sizes (the
+# string-keyed version paid ~30 chars of GC-traffic per entry).
 _HAP_RR_Reduce := function(chain)
-    local d, k, key, result, r;
-    d := rec();
-    for r in chain do
-        if r.sgn = 0 then continue; fi;
-        key := Concatenation("k", String(r.p), "_", String(r.q), "_",
-                             String(r.jp), "_", String(r.jq), "_",
-                             String(r.gl), "_", String(r.gr));
-        if IsBound(d.(key)) then
-            d.(key).sgn := d.(key).sgn + r.sgn;
-        else
-            d.(key) := rec(sgn := r.sgn, p := r.p, q := r.q,
-                           jp := r.jp, jq := r.jq,
-                           gl := r.gl, gr := r.gr);
-        fi;
-    od;
+    local n, sorted, r, i, j, sgn, result, prev;
+    n := Length(chain);
+    if n = 0 then return []; fi;
+    sorted := List(chain, r -> [r.p, r.q, r.jp, r.jq, r.gl, r.gr, r.sgn]);
+    Sort(sorted);
     result := [];
-    for key in RecNames(d) do
-        if d.(key).sgn <> 0 then
-            Add(result, d.(key));
+    i := 1;
+    while i <= n do
+        sgn := sorted[i][7];
+        j := i + 1;
+        # Merge consecutive entries sharing the same (p,q,jp,jq,gl,gr) prefix.
+        # We compare sorted[j]{[1..6]} = sorted[i]{[1..6]}.
+        while j <= n
+              and sorted[j][1] = sorted[i][1]
+              and sorted[j][2] = sorted[i][2]
+              and sorted[j][3] = sorted[i][3]
+              and sorted[j][4] = sorted[i][4]
+              and sorted[j][5] = sorted[i][5]
+              and sorted[j][6] = sorted[i][6] do
+            sgn := sgn + sorted[j][7];
+            j := j + 1;
+        od;
+        if sgn <> 0 then
+            Add(result, rec(sgn := sgn,
+                            p := sorted[i][1], q := sorted[i][2],
+                            jp := sorted[i][3], jq := sorted[i][4],
+                            gl := sorted[i][5], gr := sorted[i][6]));
         fi;
+        i := j;
     od;
     return result;
 end;;
