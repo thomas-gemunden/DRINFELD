@@ -92,10 +92,16 @@ end;;
 # ----------------------------------------------------------------------
 
 IsCoboundary2 := function(H, c, m)
-    local elts, n, idx, i, j, ij, A, b, row, sol, R, A_mod, b_mod;
+    local elts, n, idx_dict, i, j, ij, A, b, row, sol, R, A_mod, b_mod;
     elts := AsList(H);
     n := Length(elts);
-    idx := function(h) return Position(elts, h); end;
+    # A-5b audit (#258 follow-up): replace `Position(elts, h)` (O(n) per
+    # call, O(n^3) total over the n*n loop) with a NewDictionary-based
+    # lookup (O(1) per call, O(n^2) total). This is the slow integer-solve
+    # path (replaced by the split solver in production); the fix gives a
+    # free speedup whenever this fallback is exercised.
+    idx_dict := NewDictionary(elts[1], true, elts);
+    for i in [1..n] do AddDictionary(idx_dict, elts[i], i); od;
 
     # Set up the system d_2(beta) = c, with rows indexed by (h, k):
     #   beta(h)  -  beta(hk)  +  beta(k)  =  c(h, k)  (mod m)
@@ -105,7 +111,7 @@ IsCoboundary2 := function(H, c, m)
     for i in [1..n] do
         for j in [1..n] do
             row := (i - 1) * n + j;
-            ij := idx(elts[i] * elts[j]);
+            ij := LookupDictionary(idx_dict, elts[i] * elts[j]);
             A[row][i] := A[row][i] + 1;
             A[row][ij] := A[row][ij] - 1;
             A[row][j] := A[row][j] + 1;

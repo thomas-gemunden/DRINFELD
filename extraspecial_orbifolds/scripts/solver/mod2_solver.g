@@ -28,10 +28,16 @@
 _BoundaryMatrixGF2_cache := [];;
 
 _BoundaryMatrixGF2_raw := function(H)
-    local elts, n, idx, A, i, j, ij, row, zero, one;
+    local elts, n, idx_dict, A, i, j, ij, row, zero, one;
     elts := AsList(H);
     n := Length(elts);
-    idx := function(h) return Position(elts, h); end;
+    # A-5b audit (#258 follow-up): replace `Position(elts, h)` (O(n) per
+    # call, O(n^3) total over the n*n loop) with a NewDictionary-based
+    # lookup (O(1) per call, O(n^2) total). At m=5 with |C| = 2048 this
+    # drops the cache-build wall from ~5 min per centraliser to seconds
+    # (observed live: orbit start 2 |C|=2048 took 309.667 s).
+    idx_dict := NewDictionary(elts[1], true, elts);
+    for i in [1..n] do AddDictionary(idx_dict, elts[i], i); od;
     zero := Zero(GF(2));
     one  := One(GF(2));
 
@@ -39,7 +45,7 @@ _BoundaryMatrixGF2_raw := function(H)
     for i in [1..n] do
         for j in [1..n] do
             row := (i - 1) * n + j;
-            ij := idx(elts[i] * elts[j]);
+            ij := LookupDictionary(idx_dict, elts[i] * elts[j]);
             A[row][i]  := A[row][i]  + one;
             A[row][j]  := A[row][j]  + one;
             A[row][ij] := A[row][ij] + one;
