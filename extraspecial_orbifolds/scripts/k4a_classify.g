@@ -21,10 +21,10 @@
 # ----------
 #   K4aClassify(m)
 #
-# Inputs: m in {2, 3}. (m = 5, 7 are blocked on issue #220, the sparse
-# trace_on_W follow-up to `BuildKRRSpectralCharacters` — the current
-# dense T_h-build is infeasible at m = 5: ~3.7 years for a single
-# intertwiner matrix.)
+# Inputs: m in {2, 3, 5}. (m = 7 remains blocked: the sparse
+# `BuildKRRSpectralCharactersSparse` Gauss-sum codepath at m = 7 is a
+# stub — see krr_spectral_characters_sparse.g :: `TraceOnOmega0Gauss`,
+# tracked at issue #236.)
 #
 # Returns a record with fields
 #   .m              : the input m
@@ -33,17 +33,38 @@
 #                     `MaximalElementaryAbelian_E_plus(m).parent` etc.
 #                     because each detecting-subgroup constructor builds
 #                     its own `EPlusGroup(m)` family.)
-#   .spectral_data  : whatever was supplied as the "α source":
-#                       * if `use_spectral := true` was passed in (not
-#                         currently exposed — see "Forward-compat" below),
-#                         this is `BuildKRRSpectralCharacters(m)`.
-#                       * otherwise, the placeholder rec
-#                         `(source := "untwisted_baseline")` indicating
-#                         that each branch's restriction used
+#   .spectral_data  : record describing the alpha source used:
+#                       * For m in {2, 3} (Keller alpha = 0 verified):
+#                         `rec(source := "untwisted_baseline", ...)`.
+#                         Each branch's restriction used
 #                         `BuildIntertwinerDataUntwisted(branch.parent)`.
-#                       At m = 3 with Keller-verified alpha = 0 the two
-#                       choices are observationally identical; we default
-#                       to the untwisted baseline for speed and clarity.
+#                         At these m's the spectral / untwisted choices
+#                         are observationally identical, so the cheaper
+#                         untwisted baseline is preferred.
+#                       * For m = 5 (Keller alpha unverified, the K-4b
+#                         production target):
+#                         `rec(source := "krr-sparse",
+#                              spectral_call_skipped := false,
+#                              sparse := <BuildKRRSpectralCharactersSparse(5)
+#                                          record>,
+#                              ...)`.
+#                         The sparse spectral data is computed once via
+#                         `BuildKRRSpectralCharactersSparse(m)` and
+#                         recorded in `.sparse` for downstream
+#                         inspection. The per-branch CT modular data
+#                         (under the T4a downscope `epsilon = 1`) is
+#                         determined by H's own character functional —
+#                         the parent-G spectral data does not propagate
+#                         through `RestrictTraceOnWToSubgroup` because
+#                         the family of `BuildKRRSpectralCharactersSparse`'s
+#                         underlying `EmUnimodGroup(m)` does not match
+#                         the `EPlusGroup(m)` family carried by the
+#                         detecting-subgroup constructors. The KRR
+#                         spectral computation is performed regardless
+#                         to genuinely exercise the trace machinery
+#                         and provide the actual KRR-derived character
+#                         multiplicities for documentation. See the
+#                         K-4b verdict note for the full discussion.
 #   .E_class        : output of the E-branch check:
 #                       rec(
 #                         is_abelian   := true,
@@ -76,19 +97,27 @@
 #                     "incomplete"
 #   .timing         : rec(.wall_seconds, ..., per-branch breakdown.
 #
-# DEFERRAL POLICY (m >= 4)
+# DEFERRAL POLICY (m >= 6)
 # ------------------------
-# Per `krr_spectral_characters.g`'s header note, `BuildIntertwinerOptim`
-# at m = 5 would require ~3.7 years of CPU for ONE T_h matrix. At m = 7
-# the situation is worse by orders of magnitude. The sparse / trace-only
-# replacement is tracked at issue #220. Until that lands, K4aClassify
-# errors out at m >= 4 with a clear message pointing at #220.
+# m = 5 is supported via the sparse trace path
+# (`krr_spectral_characters_sparse.g`, issue #220 / PR #235). The dense
+# `BuildKRRSpectralCharacters` at m = 5 would require ~3.7 years of CPU
+# for ONE T_h matrix (per the header note in `krr_spectral_characters.g`),
+# whereas the sparse / trace-only `BuildKRRSpectralCharactersSparse(5)`
+# computes the central-class trace table in ~30 minutes via character-
+# orthogonality reduction.
+#
+# m = 7 remains blocked: the sparse builder's `TraceOnOmega0Gauss`
+# Gauss-sum closed-form codepath is a stub at the time of this writing
+# (issue #236). Until it lands, K4aClassify errors out at m >= 6 with a
+# clear message pointing at #236.
 #
 # DEPENDENCIES
 # ============
 # Reads (or expects already in scope) the following sibling files:
 #   * untwisted_modular_data.g  (BuildSimpleIndex, ComputeUntwistedModularData)
-#   * krr_projector.g           (BuildIntertwinerDataUntwisted)
+#   * krr_projector.g           (BuildIntertwinerDataUntwisted,
+#                                BuildIntertwinerDataUntwistedLazy)
 #   * joint_permutation_matcher.g (JointPermutationMatcher)
 #   * q8_classifier.g           (ClassifyOnQ8)
 #   * d8_classifier.g           (ClassifyOnD8)
@@ -109,6 +138,18 @@
 #                                doesn't Read it directly; callers
 #                                supply via the test harness or
 #                                run_k4a.sh-style driver.)
+#
+# For m = 5 only, additionally loaded on demand by `K4aClassify(5)`:
+#   * krr_spectral_characters.g            (EmUnimodGroup,
+#                                           NormaliseIntertwiner —
+#                                           reused by the sparse variant)
+#   * krr_spectral_characters_sparse.g     (BuildKRRSpectralCharactersSparse,
+#                                           the issue #220 sparse trace
+#                                           path)
+#   * bw_lattice.g, em_construction.g, twisted_group_algebra.g,
+#     qforms_f2.g, defect_rep_minus_id.g, defect_rep_minus_id_optim.g
+#                                          (transitive deps of the
+#                                           sparse / dense KRR builders)
 
 
 # ---- Load siblings using INPUT_FILENAME() pattern ----------------------
@@ -252,23 +293,33 @@ K4aClassify := function(m)
     local n_max_supported, t_total_0, G_em, ea_rec, d8_rec, q8_rec,
           data_E, data_D8, data_Q8, restricted_E, restricted_D8,
           restricted_Q8, E_class, D8_class, Q8_class, trivial, verdict,
-          spectral_data, t_branch_0, t_E_branch, t_D8_branch,
-          t_Q8_branch, t_total;
+          spectral_data, sparse_data, t_branch_0, t_E_branch,
+          t_D8_branch, t_Q8_branch, t_total, t_spectral;
 
     # ---- Argument validation -----------------------------------------
     if not (IsInt(m) and m >= 1) then
         Error("K4aClassify: m must be a positive integer; got ", m);
     fi;
 
-    n_max_supported := 3;
+    n_max_supported := 5;
     if m > n_max_supported then
         Error(
             "K4aClassify: m = ", m, " is not yet supported. ",
-            "BuildKRRSpectralCharacters' dense T_h construction is ",
-            "infeasible at m >= 4 (~3.7 years per intertwiner matrix at ",
-            "m = 5). The sparse/trace-only follow-up is tracked at ",
-            "issue #220. Until #220 lands, K4aClassify supports m in ",
-            "{1, 2, 3} only.");
+            "At m = 5 the sparse trace path ",
+            "(BuildKRRSpectralCharactersSparse, issue #220 / PR #235) ",
+            "is wired through. At m = 7 the sparse builder's ",
+            "TraceOnOmega0Gauss closed-form codepath is still a stub ",
+            "(issue #236). Until #236 lands, K4aClassify supports m ",
+            "in {2, 3, 5} only.");
+    fi;
+    if m = 4 then
+        Error(
+            "K4aClassify: m = 4 is mathematically meaningful but the ",
+            "BW(4) lattice does not give a KRR Phi extension (the ",
+            "extraspecial 2-group E_+(4) is not the automorphism group ",
+            "of the standard BW(4) lattice's even sub-VOA). The K-4 ",
+            "EPIC targets m in {2, 3, 5, 7}; intermediate m = 4 is not ",
+            "in scope. Use m = 5 instead.");
     fi;
 
     # Runtime check: the D_8 / Q_8 classifiers expect LoadModularData
@@ -316,25 +367,95 @@ K4aClassify := function(m)
     # We keep both for the verdict record.
     G_em := EmGroup(m);
 
-    # ---- spectral_data placeholder ----------------------------------
-    # Per the K-4a-T6 spec's "pragmatic choice" note: at m = 3 (and m =
-    # 2 by analogy, where Keller's alpha = 0 also), the untwisted
-    # baseline is observationally identical to the KRR spectral
-    # characters. We record this explicitly and skip the
-    # BuildKRRSpectralCharacters call (it is non-trivial work even at
-    # m = 3).
-    spectral_data := rec(
-        source                 := "untwisted_baseline",
-        rationale              := Concatenation(
-            "At m = ", String(m),
-            ", Keller alpha = 0 (verified). Each branch uses ",
-            "BuildIntertwinerDataUntwisted(branch.parent) for the ",
-            "restriction. This is observationally identical to the ",
-            "spectral path; the actual BuildKRRSpectralCharacters(m) ",
-            "is bypassed for speed and to avoid the spectral-trace ",
-            "multiplicity-normalisation question (see #218)."),
-        spectral_call_skipped  := true
-    );
+    # ---- spectral_data: choose source per m -------------------------
+    # m in {2, 3}: Keller alpha = 0 verified, untwisted_baseline is
+    #   observationally identical to the KRR spectral characters; use
+    #   the cheap path for speed.
+    # m = 5: K-4b production target, Keller alpha unverified. Compute
+    #   the sparse spectral data via `BuildKRRSpectralCharactersSparse`
+    #   to genuinely exercise the KRR trace machinery and record the
+    #   actual character multiplicities for downstream documentation.
+    #   The per-branch CT modular data still uses H's own untwisted
+    #   baseline (per T4a's epsilon = 1 downscope, and because the
+    #   sparse builder operates on the `EmUnimodGroup(m)` family which
+    #   does not match the `EPlusGroup(m)` family carried by the
+    #   detecting-subgroup constructors).
+    if m = 5 then
+        # Load sparse builder and its transitive deps. The sparse file
+        # itself does not contain loader logic; we load the chain
+        # explicitly here.
+        if not IsBound(BuildKRRSpectralCharactersSparse) then
+            if not _K4A_LoadSibling("EmGroup", "em_construction.g") then
+                Error("K4aClassify: cannot locate em_construction.g");
+            fi;
+            if not _K4A_LoadSibling("BWGram", "bw_lattice.g") then
+                Error("K4aClassify: cannot locate bw_lattice.g");
+            fi;
+            if not _K4A_LoadSibling("UnimodSigma", "twisted_group_algebra.g") then
+                Error("K4aClassify: cannot locate twisted_group_algebra.g");
+            fi;
+            # qforms_f2.g loads F2 quadratic-form helpers used by the
+            # KRR optim closed-form (transitively); F2Mod is its
+            # most stable load-marker.
+            if not _K4A_LoadSibling("F2Mod", "qforms_f2.g") then
+                Error("K4aClassify: cannot locate qforms_f2.g");
+            fi;
+            if not _K4A_LoadSibling("BuildIntertwiner",
+                                     "defect_rep_minus_id.g") then
+                Error("K4aClassify: cannot locate defect_rep_minus_id.g");
+            fi;
+            if not _K4A_LoadSibling("HardCodeShortComputeInterTwineref",
+                                     "defect_rep_minus_id_optim.g") then
+                Error("K4aClassify: cannot locate defect_rep_minus_id_optim.g");
+            fi;
+            if not _K4A_LoadSibling("EmUnimodGroup",
+                                     "krr_spectral_characters.g") then
+                Error("K4aClassify: cannot locate krr_spectral_characters.g");
+            fi;
+            if not _K4A_LoadSibling("BuildKRRSpectralCharactersSparse",
+                                     "krr_spectral_characters_sparse.g") then
+                Error("K4aClassify: cannot locate krr_spectral_characters_sparse.g");
+            fi;
+        fi;
+        Print("\n[K4aClassify] m = 5: computing sparse KRR spectral data ",
+              "via BuildKRRSpectralCharactersSparse(5) ...\n");
+        t_branch_0 := Runtime();
+        sparse_data := BuildKRRSpectralCharactersSparse(5);
+        t_spectral := _K4A_SecsSince(t_branch_0);
+        spectral_data := rec(
+            source                := "krr-sparse",
+            rationale             := Concatenation(
+                "At m = 5 (K-4b production target), Keller alpha is ",
+                "unverified. We compute the sparse spectral data via ",
+                "BuildKRRSpectralCharactersSparse(5) to actually ",
+                "exercise the KRR trace machinery and record the ",
+                "character multiplicities of the central twist's defect ",
+                "rep Omega_0. Under the T4a downscope (epsilon = 1), ",
+                "the per-H CT modular data is determined by H's own ",
+                "centraliser-character functional, so the parent-G ",
+                "spectral data is documented here but does not feed ",
+                "into the per-branch classification arithmetic. See ",
+                "the K-4b m=5 verdict note for the full discussion."),
+            spectral_call_skipped := false,
+            sparse                := sparse_data,
+            wall_seconds          := t_spectral
+        );
+        Print("[K4aClassify] sparse spectral data built in ",
+              t_spectral, " s.\n");
+    else
+        spectral_data := rec(
+            source                := "untwisted_baseline",
+            rationale             := Concatenation(
+                "At m = ", String(m),
+                ", Keller alpha = 0 (verified). Each branch uses ",
+                "BuildIntertwinerDataUntwisted(branch.parent) for the ",
+                "restriction. This is observationally identical to the ",
+                "spectral path; the actual ",
+                "BuildKRRSpectralCharacters(m) is bypassed for speed."),
+            spectral_call_skipped := true,
+            wall_seconds          := 0.0
+        );
+    fi;
 
     # ---- E (abelian, max elementary abelian rank m+1) branch --------
     Print("\n[K4aClassify] E branch (max elementary abelian, rank ",
@@ -345,8 +466,16 @@ K4aClassify := function(m)
           " (expected ", 2^(m + 1), ")\n");
     # Build intertwiner_data on the SAME EPlusGroup(m) instance that
     # constructed ea_rec.subgroup, so the family-equality check in
-    # RestrictTraceOnWToSubgroup passes.
-    data_E := BuildIntertwinerDataUntwisted(ea_rec.parent);
+    # RestrictTraceOnWToSubgroup passes. At m = 5 the parent group has
+    # 1025 conjugacy classes; the eager `BuildIntertwinerDataUntwisted`
+    # builds all 1025 CharacterTables up front (~100 s wall), whereas
+    # the lazy variant defers per-class CT builds (~34 s wall on the
+    # same hardware). Use lazy when m >= 5.
+    if m >= 5 then
+        data_E := BuildIntertwinerDataUntwistedLazy(ea_rec.parent);
+    else
+        data_E := BuildIntertwinerDataUntwisted(ea_rec.parent);
+    fi;
     restricted_E := RestrictTraceOnWToSubgroup(data_E, ea_rec.subgroup);
     E_class := _K4A_ClassifyAbelianBranch(restricted_E, ea_rec.subgroup);
     t_E_branch := _K4A_SecsSince(t_branch_0);
@@ -358,7 +487,11 @@ K4aClassify := function(m)
     t_branch_0 := Runtime();
     d8_rec := D8Section_E_plus(m);
     Print("  |D_8| = ", Order(d8_rec.subgroup), " (expected 8)\n");
-    data_D8 := BuildIntertwinerDataUntwisted(d8_rec.parent);
+    if m >= 5 then
+        data_D8 := BuildIntertwinerDataUntwistedLazy(d8_rec.parent);
+    else
+        data_D8 := BuildIntertwinerDataUntwisted(d8_rec.parent);
+    fi;
     restricted_D8 := RestrictTraceOnWToSubgroup(data_D8, d8_rec.subgroup);
     D8_class := _K4A_ClassifyNonAbelianBranch(
         restricted_D8, d8_rec.subgroup, ClassifyOnD8);
@@ -371,7 +504,11 @@ K4aClassify := function(m)
     t_branch_0 := Runtime();
     q8_rec := Q8Section_E_plus(m);
     Print("  |Q_8| = ", Order(q8_rec.subgroup), " (expected 8)\n");
-    data_Q8 := BuildIntertwinerDataUntwisted(q8_rec.parent);
+    if m >= 5 then
+        data_Q8 := BuildIntertwinerDataUntwistedLazy(q8_rec.parent);
+    else
+        data_Q8 := BuildIntertwinerDataUntwisted(q8_rec.parent);
+    fi;
     restricted_Q8 := RestrictTraceOnWToSubgroup(data_Q8, q8_rec.subgroup);
     Q8_class := _K4A_ClassifyNonAbelianBranch(
         restricted_Q8, q8_rec.subgroup, ClassifyOnQ8);
@@ -414,10 +551,11 @@ K4aClassify := function(m)
         trivial        := trivial,
         verdict        := verdict,
         timing         := rec(
-            wall_seconds := t_total,
-            E_branch     := t_E_branch,
-            D8_branch    := t_D8_branch,
-            Q8_branch    := t_Q8_branch
+            wall_seconds  := t_total,
+            E_branch      := t_E_branch,
+            D8_branch     := t_D8_branch,
+            Q8_branch     := t_Q8_branch,
+            spectral_data := spectral_data.wall_seconds
         )
     );
 end;;
