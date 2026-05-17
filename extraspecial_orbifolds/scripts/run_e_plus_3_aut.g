@@ -1,45 +1,66 @@
-# run_e_plus_3_aut.g — A-3d driver: |Aut(N^0, T^0)| cross-validation
-# on E_+(3) untwisted modular data.
+# run_e_plus_3_aut.g — A-3d driver: |Aut(N^0, T^0)| analysis on E_+(3)
+# untwisted modular data.
 #
 # Implements issue #45 (A-3d). Closes the m=3 ladder begun by A-3a
 # (#42, ker Tr) and A-3c (#44, candidate elimination).
 #
 # Goal:
-#   Compute |Aut(N^0, T^0)| for the untwisted modular data of E_+(3)
-#   and verify the BRW lower bound
+#   Verify the BRW lower bound
 #
-#       |Aut(N^0, T^0)| >= |BRW(3) / E_+(3)|.
+#       |Aut(N^0, T^0)| >= |BRW(3) / E_+(3)|
+#
+#   for E_+(3)'s untwisted Drinfeld centre.
 #
 # Math anchor: BRW(m) acts on the simple objects of D(Vec^0_{E_+(m)})
 # by outer automorphism (modulo inner = E_+(m) itself), so |Aut(N^0,
 # T^0)| is a multiple of |BRW(m)/E_+(m)|. At m=3:
-#   |BRW(3)| = |O+(6, F_2)| * |E_+(3)| = 1451520 * 128 / ... actually
-#   |BRW(3)/E_+(3)| = |O+(6, F_2)| = 1451520, and |E_+(3)| = 128, so
-#   the expected lower bound is 1451520.
+#   |BRW(3)/E_+(3)| = 40320 (= GAP's |GO+(6, F_2)|; this matches
+#   test_brw_conjugacy_action.g and the BRW-class action subgroup size).
+#
+# Two paths to the |Aut| >= |BRW/E_+| anchor are available:
+#
+#   (1) Default (issue #239 / PR for A-3d perf-1): the constructive
+#       lower-bound check. For each generator y of BRW(3) we build the
+#       lifted permutation sigma_y in Sym(2272) (via
+#       brw_aut_lower_bound.g) and verify it is an (N, T)-automorphism;
+#       the generated subgroup has order |BRW(3)/E_+(3)|. This is fast
+#       (~2 min wall) and gives |Aut| >= 40320 constructively, without
+#       running the full AutNT backtracking.
+#
+#   (2) Optional (gated by A3D_FULL_AUTNT := true): the original full
+#       AutNT backtracking path. Computes |Aut(N^0, T^0)| exactly, then
+#       checks the BRW lower bound. Wall ~ 100h+ at r=2272 under the
+#       V-5c implementation (well above the perf budget); use only
+#       when an exact |Aut| value is needed for downstream comparisons.
 #
 # Scope: untwisted side only. Per-omega Aut comparisons across the
 # 16 non-zero kernel orbits (A-3c) is a follow-up.
 #
 # Steps:
-#   1. Build E_+(3) as a pc-group via BRWH3Action(3).em (cached).
+#   1. Build E_+(3) as a pc-group via BRWConjugacyAction(3).em.
 #   2. Compute untwisted modular data (S, T) via
 #      ComputeUntwistedModularData; rank = 2272.
-#   3. Build a STREAMING fusion oracle (A-3d / #45 sparse refactor) on
-#      top of S — Verlinde rows are computed on demand from S via the
-#      P-4 matrix-multiply form and cached in a bounded LRU.  This
-#      avoids materialising the dense O(r^3) tensor (~94 GB at r=2272)
-#      that PR #181 left as the blocker.  Compute quantum dimensions
-#      QD := QuantumDimensionsFromS(S).
-#   4. Run AutNT(N_oracle, T, QD) (V-5c) to get |Aut(N^0, T^0)|.
-#   5. Compute the BRW lower bound and assert
-#      |Aut| >= |BRW(3)/E_+(3)|.
-#   6. Persist result to computed/aut_nt/3/untwisted.g.
+#   3. Compute the BRW lower bound |BRW(m)/E_+(m)|.
+#   4. Default (perf-1): explicit constructive certificate that each
+#      BRW(m)/E_+(m) element is a valid (N, T)-automorphism via
+#      VerifyBRWAutLowerBound — closes the structural inequality
+#      |Aut(N^0, T^0)| >= |BRW(m)/E_+(m)| in ~minutes.
+#      Gated with A3D_FULL_AUTNT := true: run full AutNT against the
+#      streaming fusion oracle (PR #237) for the exact |Aut| value.
+#      The streaming oracle avoids materialising the O(r^3) dense
+#      tensor (~94 GB at r=2272).
+#   5. Persist result to computed/aut_nt/3/brw_lower_bound.g (default)
+#      or computed/aut_nt/3/untwisted.g (A3D_FULL_AUTNT).
 #
 # Usage:
 #   gap -q -b -c 'Read("run_e_plus_3_aut.g");'
 # from extraspecial_orbifolds/scripts/, or:
 #   gap -q -b extraspecial_orbifolds/scripts/run_e_plus_3_aut.g
 # from anywhere. We auto-cd to scripts/ so transitive Read()s work.
+#
+# Optional flags (set before Read):
+#   A3D_FULL_AUTNT := true;   # use full AutNT instead of BRW lower bound
+#   A3D_SKIP_PERSIST := true; # do not write computed/aut_nt/3/...
 
 _driver_path := INPUT_FILENAME();;
 if _driver_path <> fail and _driver_path <> "stream"
@@ -50,44 +71,48 @@ if _driver_path <> fail and _driver_path <> "stream"
 fi;
 
 Read("untwisted_modular_data.g");
-Read("aut_nt_partition.g");
-Read("fusion_oracle.g");      # A-3d (#45): streaming N rows for r=2272
-Read("aut_nt_refine.g");
-Read("aut_nt.g");
-Read("brw_h3_action.g");      # for BRWH3Action(3).em (pc-group form)
-Read("brw_construction.g");   # for BRW(m), EmGroup(m)
+Read("brw_construction.g");
+Read("brw_conjugacy_action.g");
+Read("brw_aut_lower_bound.g");
+# Lazy-loaded by the A3D_FULL_AUTNT branch (slow path):
+#   aut_nt_partition.g, fusion_oracle.g, aut_nt_refine.g, aut_nt.g
+
+# Small local helper (idempotent; defined identically elsewhere).
+if not IsBound(If_) then
+    If_ := function(c, a, b) if c then return a; else return b; fi; end;;
+fi;
+
+# Set defaults for optional flags.
+if not IsBound(A3D_FULL_AUTNT) then
+    A3D_FULL_AUTNT := false;
+fi;
+if not IsBound(A3D_SKIP_PERSIST) then
+    A3D_SKIP_PERSIST := false;
+fi;
 
 t_start := Runtime();;
 
-Print("\n=== A-3d driver: |Aut(N^0, T^0)| for E_+(3) (#45) ===\n");
+Print("\n=== A-3d driver: |Aut(N^0, T^0)| analysis for E_+(3) (#45) ===\n");
+Print("Path: ", If_(A3D_FULL_AUTNT, "FULL AutNT (slow, exact)",
+                    "BRW lower-bound check (fast, constructive)"), "\n");
 
 # ----------------------------------------------------------------------
-# Step 1: build E_+(3) as a pc-group via BRWH3Action(3).em.
-#
-# BRWH3Action(3) does the EmGroup(3) -> IsomorphismPcGroup conversion
-# once and caches the result (P-11/#130). We reuse this so we don't
-# rebuild the HAP resolution or recompute the iso.
+# Step 1: build E_+(3) as a pc-group via BRWConjugacyAction(3).em.
 # ----------------------------------------------------------------------
 
 Print("\n--- Step 1: build E_+(3) (pc-group form) ---\n");
 
 m := 3;;
 t_em := Runtime();;
-h3_action := BRWH3Action(m);;
+conj_action := BRWConjugacyAction(m);;
 t_em_wall := (Runtime() - t_em) / 1000.;;
-G := h3_action.em;;
-Print("BRWH3Action(", m, ") wall: ", t_em_wall, " s\n");
+G := conj_action.em;;
+Print("BRWConjugacyAction(", m, ") wall: ", t_em_wall, " s\n");
 Print("|G| = ", Order(G), " (expect 128)\n");
 Assert(0, Order(G) = 128, "E_+(3) should have order 128");
 
 # ----------------------------------------------------------------------
 # Step 2: compute untwisted modular data (S, T).
-#
-# The rank is predicted as 2272 simples (PredictE_plus_m(3)). The
-# expensive step is the S-matrix: per (i, j) block we sum
-# |class_i| x |C_G(g_i)| terms (P-9/#126), so total work is
-# |classes|^2 * |G| character evals = 65^2 * 128 ~ 5.4e5 character
-# lookups, each O(r_C). Wall: expect minutes.
 # ----------------------------------------------------------------------
 
 Print("\n--- Step 2: untwisted modular data (S, T) ---\n");
@@ -97,86 +122,16 @@ md := ComputeUntwistedModularData(G);;
 t_md_wall := (Runtime() - t_md) / 1000.;;
 Print("ComputeUntwistedModularData wall: ", t_md_wall, " s\n");
 Print("rank = ", md.idx.rank, " (predicted 2272)\n");
-Print("|classes| = ", Length(md.idx.classes), " (predicted 65)\n");
-
 Assert(0, md.idx.rank = 2272, "Expected rank 2272 for E_+(3)");
 
 # Quick T-spectrum sanity.
 Tcollect := Collected(md.T);;
-Print("T-multiset:\n");
-for pair in Tcollect do
-    Print("  T = ", pair[1], "  multiplicity ", pair[2], "\n");
-od;
 
 # ----------------------------------------------------------------------
-# Step 3: streaming fusion oracle + quantum dimensions.
-#
-# A-3d (#45) sparse refactor.  Instead of materialising the full
-# O(r^3) fusion tensor (~94 GB at r = 2272) we build a streaming
-# oracle that computes one row N_i = S * diag(S[i]/S[1]) * Sbar^T
-# on demand and caches a bounded number of rows in an LRU.  Memory
-# is O(cache_size * r^2); each cache miss costs one matmul.  See
-# `fusion_oracle.g`.
-#
-# The cache size below controls the memory-vs-recompute tradeoff.
-# A larger cache reduces recomputation inside the AutNT search but
-# uses more RAM.  Default 64 trades ~32 GB of cached rows against
-# repeated row recomputes in the refinement passes (see acceptance-
-# criterion test_a3d_sparse_fusion.g for the microbench rationale).
+# Step 3: BRW lower bound + assertion.
 # ----------------------------------------------------------------------
 
-Print("\n--- Step 3: streaming fusion oracle + quantum dimensions ---\n");
-
-t_qd := Runtime();;
-QD := QuantumDimensionsFromS(md.S);;
-t_qd_wall := (Runtime() - t_qd) / 1000.;;
-Print("QuantumDimensionsFromS wall: ", t_qd_wall, " s\n");
-
-t_fc := Runtime();;
-N_cache_size := 64;;
-N_oracle := MakeStreamingFusionOracle(md.S,
-                rec(cache_size := N_cache_size));;
-t_fc_wall := (Runtime() - t_fc) / 1000.;;
-Print("MakeStreamingFusionOracle (cache_size=",
-      N_cache_size, ") wall: ", t_fc_wall, " s\n");
-Print("oracle.rank = ", N_oracle.rank, "\n");
-
-Assert(0, N_oracle.rank = md.idx.rank,
-       "Streaming oracle rank disagrees with idx.rank");
-
-# ----------------------------------------------------------------------
-# Step 4: AutNT.
-#
-# Partition refinement + backtracking. Initial joint (T, QD) partition
-# (V-5a) shrinks the search space dramatically. RefineByFusion (V-5b)
-# iterates 1-WL on fusion-row signatures.
-#
-# We collect generators by default; if this stalls, the spec says we
-# can pass {skip_generators := true}. Since AutNT signals the count
-# even with skip_generators, we'd lose nothing essential.
-# ----------------------------------------------------------------------
-
-Print("\n--- Step 4: AutNT(N_oracle, T, QD) ---\n");
-
-t_aut := Runtime();;
-aut_result := AutNT(N_oracle, md.T, QD);;
-t_aut_wall := (Runtime() - t_aut) / 1000.;;
-Print("AutNT wall: ", t_aut_wall, " s\n");
-Print("|Aut(N^0, T^0)| = ", aut_result.order, "\n");
-Print("# generators returned: ", Length(aut_result.generators), "\n");
-Print("Oracle stats: ", FusionOracle_StatsString(N_oracle), "\n");
-
-# ----------------------------------------------------------------------
-# Step 5: BRW lower bound + assertion.
-#
-# |BRW(m)/E_+(m)| = |O+(2m, F_2)|. At m=3:
-#   |BRW(3)| / |E_+(3)| should equal 1451520 (the order of O+(6, F_2)).
-#
-# We compute both orders directly from the groups: BRW(3) is built
-# via brw_construction.g, E_+(3) is what we already have.
-# ----------------------------------------------------------------------
-
-Print("\n--- Step 5: BRW lower bound ---\n");
+Print("\n--- Step 3: BRW lower bound ---\n");
 
 t_brw_lb := Runtime();;
 brw_group := BRW(m);;
@@ -187,154 +142,169 @@ t_brw_lb_wall := (Runtime() - t_brw_lb) / 1000.;;
 
 Print("|BRW(", m, ")| = ", brw_order, "\n");
 Print("|E_+(", m, ")| = ", e_plus_order, "\n");
-Print("|BRW(", m, ")/E_+(", m, ")| = ", brw_lower,
-      " (expect |O+(6, F_2)| = 1451520)\n");
+Print("|BRW(", m, ")/E_+(", m, ")| = ", brw_lower, "\n");
 Print("BRW build + order wall: ", t_brw_lb_wall, " s\n");
 
-Assert(0, brw_lower = 1451520,
-       Concatenation("Expected |BRW(3)/E_+(3)| = 1451520; got ",
-                     String(brw_lower)));
+# Note. The original driver expected brw_lower = 1451520 here, but
+# empirically (and in agreement with test_brw_conjugacy_action.g)
+# |BRW(3)/E_+(3)| = 40320 in our brw_construction.g (= |GO+(6, F_2)|
+# in GAP's convention). The issue spec had a math-convention error.
 
-# The key assertion.
-if aut_result.order < brw_lower then
-    Error("|Aut(N^0, T^0)| = ", aut_result.order,
-          " < |BRW(3)/E_+(3)| = ", brw_lower,
-          " — this contradicts the BRW math anchor!");
+# ----------------------------------------------------------------------
+# Step 4: BRW lower-bound certificate (default) OR full AutNT (gated).
+# ----------------------------------------------------------------------
+
+if A3D_FULL_AUTNT then
+    Print("\n--- Step 4: full AutNT(N, T, QD) ---\n");
+    Read("aut_nt_partition.g");
+    Read("aut_nt_refine.g");
+    Read("aut_nt.g");
+
+    Print("Computing quantum dimensions ...\n");
+    t_qd := Runtime();;
+    QD := QuantumDimensionsFromS(md.S);;
+    t_qd_wall := (Runtime() - t_qd) / 1000.;;
+    Print("QuantumDimensionsFromS wall: ", t_qd_wall, " s\n");
+
+    Read("fusion_oracle.g");
+
+    Print("Building streaming fusion oracle (cache_size=64) ...\n");
+    t_fc := Runtime();;
+    N_cache_size := 64;;
+    N_oracle := MakeStreamingFusionOracle(md.S,
+                    rec(cache_size := N_cache_size));;
+    t_fc_wall := (Runtime() - t_fc) / 1000.;;
+    Print("MakeStreamingFusionOracle (cache_size=",
+          N_cache_size, ") wall: ", t_fc_wall, " s\n");
+
+    t_aut := Runtime();;
+    aut_result := AutNT(N_oracle, md.T, QD);;
+    t_aut_wall := (Runtime() - t_aut) / 1000.;;
+    Print("AutNT wall: ", t_aut_wall, " s\n");
+    Print("|Aut(N^0, T^0)| = ", aut_result.order, "\n");
+    Print("# generators returned: ", Length(aut_result.generators), "\n");
+
+    # The key assertion.
+    if aut_result.order < brw_lower then
+        Error("|Aut(N^0, T^0)| = ", aut_result.order,
+              " < |BRW(3)/E_+(3)| = ", brw_lower,
+              " — this contradicts the BRW math anchor!");
+    fi;
+    ratio := aut_result.order / brw_lower;;
+    Print("\n*** ANCHOR CHECK: |Aut| / |BRW/E_+| = ", aut_result.order,
+          " / ", brw_lower, " = ", ratio, " ***\n");
+
+    out_subpath := "untwisted.g";
+else
+    Print("\n--- Step 4: BRW lower-bound constructive certificate ---\n");
+    Print("Building BRWSimpleAction(", m, ") ...\n");
+    t_action := Runtime();;
+    action := BRWSimpleAction(m, md.idx);;
+    t_action_wall := (Runtime() - t_action) / 1000.;;
+    Print("BRWSimpleAction wall: ", t_action_wall, " s\n");
+
+    Print("Verifying each generator's permutation preserves (S, T) ...\n");
+    t_verify := Runtime();;
+    verification := VerifyBRWAutLowerBound(md, action, rec(
+        verbose := true,
+        expected_lb := brw_lower,
+        group_label := "E_+(3) untwisted"));;
+    t_verify_wall := (Runtime() - t_verify) / 1000.;;
+    Print("VerifyBRWAutLowerBound wall: ", t_verify_wall, " s\n");
+
+    if verification.verdict <> "BOUND_VERIFIED" then
+        Error("BRW lower-bound certificate failed: verdict = ",
+              verification.verdict);
+    fi;
+    Print("\n*** ANCHOR CHECK (constructive): ",
+          verification.count_verified,
+          " BRW elements verified as (N, T)-automorphisms; ",
+          "|Aut(N^0, T^0)| >= ", brw_lower, " ***\n");
+
+    out_subpath := "brw_lower_bound.g";
 fi;
-ratio := aut_result.order / brw_lower;;
-Print("\n*** ANCHOR CHECK: |Aut| / |BRW/E_+| = ", aut_result.order,
-      " / ", brw_lower, " = ", ratio, " ***\n");
 
 # ----------------------------------------------------------------------
-# Step 6: persist to computed/aut_nt/3/untwisted.g.
-#
-# Use OutputTextFile + SetPrintFormattingStatus(stream, false) to avoid
-# the PrintTo line-wrap hazard (issues #43/#46). Lines like
-#   # ... a long comment ...
-# get wrapped at ~80 chars with a backslash continuation by default,
-# silently corrupting the file.
+# Step 5: persist result.
 # ----------------------------------------------------------------------
 
-Print("\n--- Step 6: persist result ---\n");
+if not A3D_SKIP_PERSIST then
+    Print("\n--- Step 5: persist result ---\n");
+    OutDir := "../../computed/aut_nt/3";;
+    Exec(Concatenation("mkdir -p ", OutDir));
+    OutPath := Concatenation(OutDir, "/", out_subpath);;
 
-OutDir := "../../computed/aut_nt/3";;
-Exec(Concatenation("mkdir -p ", OutDir));
-OutPath := Concatenation(OutDir, "/untwisted.g");;
+    total_wall := (Runtime() - t_start) / 1000.;;
 
-# Generators can be large; we cap how many we serialise to avoid a
-# multi-MB file. AutNT defaults max_generators = 32, so this is normally
-# small (a handful of permutations of length 2272 = ~few KB each).
-# We always include `order`; generators are optional.
-n_gens_persisted := Length(aut_result.generators);;
+    stream := OutputTextFile(OutPath, false);;
+    SetPrintFormattingStatus(stream, false);
+    if A3D_FULL_AUTNT then
+        PrintTo(stream,
+            "# |Aut(N^0, T^0)| for E_+(3) untwisted modular data.\n",
+            "# Generated by run_e_plus_3_aut.g (A3D_FULL_AUTNT path).\n",
+            "# Issue #45 (A-3d).\n",
+            "return rec(\n",
+            "    group              := \"E_+(3) untwisted\",\n",
+            "    id                 := ", IdSmallGroup(G), ",\n",
+            "    m                  := ", m, ",\n",
+            "    rank               := ", md.idx.rank, ",\n",
+            "    aut_order          := ", aut_result.order, ",\n",
+            "    brw_order          := ", brw_order, ",\n",
+            "    e_plus_order       := ", e_plus_order, ",\n",
+            "    brw_lower_bound    := ", brw_lower, ",\n",
+            "    ratio              := ", ratio, ",\n",
+            "    T_multiset         := ", Tcollect, ",\n",
+            "    generators_count   := ",
+                Length(aut_result.generators), ",\n",
+            "    generators         := ",
+                aut_result.generators, ",\n",
+            "    total_wall         := ", total_wall, "\n",
+            ");;\n");
+    else
+        PrintTo(stream,
+            "# BRW lower-bound certificate for E_+(3) untwisted.\n",
+            "# Generated by run_e_plus_3_aut.g (default constructive path).\n",
+            "# Issue #239 (A-3d perf-1), parent #45 (A-3d).\n",
+            "#\n",
+            "# count_verified BRW elements were explicitly checked to be\n",
+            "# (N, T)-automorphisms of D(Vec^0_{E_+(3)}). This is a\n",
+            "# constructive certificate of |Aut(N^0, T^0)| >= count_verified.\n",
+            "return rec(\n",
+            "    group              := \"E_+(3) untwisted\",\n",
+            "    id                 := ", IdSmallGroup(G), ",\n",
+            "    m                  := ", m, ",\n",
+            "    rank               := ", md.idx.rank, ",\n",
+            "    brw_order          := ", brw_order, ",\n",
+            "    e_plus_order       := ", e_plus_order, ",\n",
+            "    brw_lower_bound    := ", brw_lower, ",\n",
+            "    count_verified     := ",
+                verification.count_verified, ",\n",
+            "    count_failed       := ",
+                verification.count_failed, ",\n",
+            "    subgroup_order     := ",
+                verification.subgroup_order, ",\n",
+            "    verdict            := \"", verification.verdict, "\",\n",
+            "    T_multiset         := ", Tcollect, ",\n",
+            "    total_wall         := ", total_wall, "\n",
+            ");;\n");
+    fi;
+    CloseStream(stream);
+    Print("Wrote ", OutPath, "\n");
+
+    # Reload sanity.
+    reload_f := ReadAsFunction(OutPath);;
+    if reload_f = fail then
+        Error("Reload of ", OutPath, " failed.");
+    fi;
+    reload_data := reload_f();;
+    Assert(0, reload_data.brw_lower_bound = brw_lower,
+           "Reload brw_lower_bound mismatch.");
+    Print("Reload OK.\n");
+fi;
 
 total_wall := (Runtime() - t_start) / 1000.;;
 
-stream := OutputTextFile(OutPath, false);;
-SetPrintFormattingStatus(stream, false);
-PrintTo(stream,
-    "# |Aut(N^0, T^0)| for E_+(3) untwisted modular data.\n",
-    "#\n",
-    "# Generated by extraspecial_orbifolds/scripts/run_e_plus_3_aut.g\n",
-    "# (issue #45, A-3d: m=3 |Aut(N, T)| cross-validation).\n",
-    "#\n",
-    "# G                : E_+(3) = pc-group form of EmGroup(3),\n",
-    "#                    Order(G) = 128 (= 2^7).\n",
-    "# rank             : 2272 (untwisted Drinfeld centre D(Vec^0_G)).\n",
-    "# |Aut(N^0, T^0)|  : ", String(aut_result.order),
-    "  (the answer).\n",
-    "# BRW lower bound : |BRW(3) / E_+(3)| = ", String(brw_lower),
-    " = |O+(6, F_2)|.\n",
-    "# Ratio            : |Aut| / |BRW/E_+| = ", String(ratio), ".\n",
-    "#\n",
-    "# Math anchor (issue #45). BRW(m) acts on the simple objects of\n",
-    "# D(Vec^0_{E_+(m)}) by outer automorphism, so |Aut(N^0, T^0)| is\n",
-    "# a multiple of |BRW(m)/E_+(m)|. We verify the >= inequality.\n",
-    "#\n",
-    "# Wall-clock breakdown (this invocation):\n",
-    "#   BRWH3Action(3).em (pc form)   : ", String(t_em_wall), " s\n",
-    "#   ComputeUntwistedModularData  : ", String(t_md_wall), " s\n",
-    "#   QuantumDimensionsFromS       : ", String(t_qd_wall), " s\n",
-    "#   MakeStreamingFusionOracle    : ", String(t_fc_wall), " s\n",
-    "#   AutNT                        : ", String(t_aut_wall), " s\n",
-    "#   BRW(3) + order               : ", String(t_brw_lb_wall), " s\n",
-    "#   TOTAL                        : ", String(total_wall), " s\n",
-    "#\n",
-    "# Persisted fields:\n",
-    "#   group               : human-readable label.\n",
-    "#   id                  : [n, m] such that SmallGroup(n, m) ~= G\n",
-    "#                         (pc-group form of EmGroup(3)).\n",
-    "#   m                   : 3.\n",
-    "#   rank                : # simple objects in D(Vec^0_G).\n",
-    "#   aut_order           : |Aut(N^0, T^0)|.\n",
-    "#   brw_order           : |BRW(3)|.\n",
-    "#   e_plus_order        : |E_+(3)| = 128.\n",
-    "#   brw_lower_bound     : |BRW(3)/E_+(3)|.\n",
-    "#   ratio               : aut_order / brw_lower_bound.\n",
-    "#   T_multiset          : Collected(T) as list of [value, count].\n",
-    "#   generators_count    : # generators returned by AutNT.\n",
-    "#   generators          : list of length-rank permutation images\n",
-    "#                         (sigma[i] = image of i). Capped by AutNT's\n",
-    "#                         max_generators (default 32).\n",
-    "#   timings             : per-step wall-clock seconds.\n",
-    "#\n",
-    "# Reload via:\n",
-    "#   data := ReadAsFunction(\"untwisted.g\")();\n",
-    "\n",
-    "return rec(\n",
-    "    group              := \"E_+(3) untwisted\",\n",
-    "    id                 := ", IdSmallGroup(G), ",\n",
-    "    m                  := ", m, ",\n",
-    "    rank               := ", md.idx.rank, ",\n",
-    "    aut_order          := ", aut_result.order, ",\n",
-    "    brw_order          := ", brw_order, ",\n",
-    "    e_plus_order       := ", e_plus_order, ",\n",
-    "    brw_lower_bound    := ", brw_lower, ",\n",
-    "    ratio              := ", ratio, ",\n",
-    "    T_multiset         := ", Tcollect, ",\n",
-    "    generators_count   := ", n_gens_persisted, ",\n",
-    "    generators         := ", aut_result.generators, ",\n",
-    "    timings            := rec(\n",
-    "        brwh3_action_em       := ", t_em_wall, ",\n",
-    "        compute_md            := ", t_md_wall, ",\n",
-    "        quantum_dim           := ", t_qd_wall, ",\n",
-    "        fusion_oracle_build   := ", t_fc_wall, ",\n",
-    "        aut_nt                := ", t_aut_wall, ",\n",
-    "        brw_lower             := ", t_brw_lb_wall, ",\n",
-    "        total                 := ", total_wall, "\n",
-    "    )\n",
-    ");;\n");
-CloseStream(stream);
-Print("Wrote ", OutPath, "\n");
-
-# ----------------------------------------------------------------------
-# Reload sanity check: re-parse the file to confirm it's syntactically
-# valid GAP (catches the PrintTo line-wrap hazard early).
-# ----------------------------------------------------------------------
-
-Print("\n--- Reload sanity ---\n");
-reload_f := ReadAsFunction(OutPath);;
-if reload_f = fail then
-    Error("Reload of ", OutPath, " failed (file not syntactically valid).");
-fi;
-reload_data := reload_f();;
-Assert(0, reload_data.aut_order = aut_result.order,
-       "Reload aut_order mismatch.");
-Assert(0, reload_data.brw_lower_bound = brw_lower,
-       "Reload brw_lower_bound mismatch.");
-Print("Reload OK: aut_order = ", reload_data.aut_order,
-      ", brw_lower_bound = ", reload_data.brw_lower_bound, "\n");
-
-# ----------------------------------------------------------------------
-# Final summary
-# ----------------------------------------------------------------------
-
 Print("\n=== A-3d driver: DONE ===\n");
-Print("|Aut(N^0, T^0)|     = ", aut_result.order, "\n");
-Print("|BRW(3)/E_+(3)|     = ", brw_lower, "\n");
-Print("Ratio               = ", ratio,
-      "  (anchor holds: ratio integer = ",
-      IsInt(ratio), ")\n");
-Print("Total wall          = ", total_wall, " s\n");
-Print("Output              : ", OutPath, "\n");
+Print("Total wall = ", total_wall, " s\n");
 
 QUIT;
