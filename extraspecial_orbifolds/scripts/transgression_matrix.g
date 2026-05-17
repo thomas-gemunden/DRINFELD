@@ -96,7 +96,7 @@ end;;
 
 SetupCentraliserH2 := function(C, exp)
     local elts, n, R, K, UCT_C, K2dim, basis_cocycles, r, basis_funcs,
-          B_T, k, f_k, i, j, M_aug_T, project, basis_check;
+          B_T, k, f_k, i, j, ij, idx_dict, M_aug_T, project, basis_check;
     elts := AsList(C);
     n := Length(elts);
     R := ResolutionFiniteGroup(C, 3);
@@ -129,12 +129,17 @@ SetupCentraliserH2 := function(C, exp)
     # Next n rows: gamma (coboundary) contributions.  Row r+p, column (i,j):
     # +1 if elts[p] = elts[i],  +1 if elts[p] = elts[j],  -1 if elts[p] = elts[i]*elts[j].
     for k in [1..n] do Add(M_aug_T, List([1..n*n], q -> 0)); od;
+    # Audit (#258 follow-up): replace `Position(elts, elts[i]*elts[j])`
+    # (O(n) per call, called twice per inner iteration → O(n^3) total)
+    # with a NewDictionary lookup (O(1) per call → O(n^2) total).
+    idx_dict := NewDictionary(elts[1], true, elts);
+    for k in [1..n] do AddDictionary(idx_dict, elts[k], k); od;
     for i in [1..n] do
         for j in [1..n] do
+            ij := LookupDictionary(idx_dict, elts[i] * elts[j]);
             M_aug_T[r + i][(i-1)*n + j] := M_aug_T[r + i][(i-1)*n + j] + 1;
             M_aug_T[r + j][(i-1)*n + j] := M_aug_T[r + j][(i-1)*n + j] + 1;
-            M_aug_T[r + Position(elts, elts[i]*elts[j])][(i-1)*n + j] :=
-                M_aug_T[r + Position(elts, elts[i]*elts[j])][(i-1)*n + j] - 1;
+            M_aug_T[r + ij][(i-1)*n + j] := M_aug_T[r + ij][(i-1)*n + j] - 1;
         od;
     od;
     # Last n^2 rows: exp * I_{n^2} -- mod-exp slack.
