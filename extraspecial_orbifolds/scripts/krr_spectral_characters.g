@@ -195,8 +195,12 @@ end;;
 # refining each input by the eigenspaces of M acting on its basis.
 _RefineByMatrix := function(eigenspaces, M, field)
     local newlist, rec_es, basis, restricted, i, evs,
-          ev, vects, kerBasis, restRow, newRec, c, dim_in;
+          ev, vects, kerBasis, restRow, newRec, c, dim_in, M_T;
     newlist := [];
+    # Audit (#258 follow-up): hoist TransposedMat(M) out of the per-record
+    # loops below. M is loop-invariant across all eigenspaces and basis
+    # vectors; one transpose suffices.
+    M_T := TransposedMat(M);
     for rec_es in eigenspaces do
         basis := rec_es.basis;
         dim_in := Length(basis);
@@ -221,7 +225,7 @@ _RefineByMatrix := function(eigenspaces, M, field)
             # restRow such that  restRow * basis  =  M * basis[i]  (as row vec)
             # i.e. basis[i] is a row vector; compute  basis[i] * M^T (row times matrix)
             # which equals (M * basis[i]^T)^T  =  row vector.
-            restRow := basis[i] * TransposedMat(M);
+            restRow := basis[i] * M_T;
             # Express restRow as a linear combination of basis vectors:
             # solve  c * basis = restRow.
             c := SolutionMat(basis, restRow);
@@ -456,7 +460,7 @@ BuildKRRSpectralCharacters := function(m)
     # For non-central classes: fall back to the standard centraliser
     #   character via EvalIrr.
     trace_on_W := function(class_idx, irrep_idx, h)
-        local em, e_rec, std_idx, idMat_loc, T_h_full,
+        local em, e_rec, std_idx, idMat_loc, T_h_full, T_h_full_T,
               v, b, total, j, c, mult;
         idMat_loc := IdentityMat(2^m);
         if eigenspace_cache[class_idx] = false then
@@ -484,6 +488,10 @@ BuildKRRSpectralCharacters := function(m)
         # Fallback (shouldn't happen for m=3, 5, 7 per T4a's analysis):
         # build T_h fully and compute its trace on the eigenspace basis.
         T_h_full := NormaliseIntertwiner(BuildIntertwinerOptim(h, m), m);
+        # Audit (#258 follow-up): hoist TransposedMat(T_h_full) out of the
+        # for-j loop. T_h_full is loop-invariant; transposing it once instead
+        # of per-iteration trims wall in the rare fallback path.
+        T_h_full_T := TransposedMat(T_h_full);
         # Trace of T_h restricted to the eigenspace = sum_i b_i^T * T_h * b_i
         # / (b_i^T * b_i)  if orthonormal; for generic basis use
         # b_i^T * T_h * dual_basis_i.  Simpler: compute the projector
@@ -497,7 +505,7 @@ BuildKRRSpectralCharacters := function(m)
         total := 0;
         for j in [1..Length(e_rec.basis)] do
             b := e_rec.basis[j];
-            v := b * TransposedMat(T_h_full);
+            v := b * T_h_full_T;
             c := SolutionMat(e_rec.basis, v);
             if c = fail then
                 # Should not happen — T_h preserves joint eigenspaces.
