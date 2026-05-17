@@ -417,6 +417,24 @@ K4aClassify := function(m)
                 Error("K4aClassify: cannot locate krr_spectral_characters_sparse.g");
             fi;
         fi;
+        # #256 family-translation: load the EU<->EP iso machinery
+        # used by the m >= 4 detection path below.
+        if not IsBound(TranslateSpectralDataToEPlus) then
+            if not _K4A_LoadSibling("EmEPlusTranslate",
+                                     "em_eplus_translate.g") then
+                Error("K4aClassify: cannot locate em_eplus_translate.g");
+            fi;
+        fi;
+        if not IsBound(RestrictTraceOnWToSubgroupHonourParent) then
+            # restrict_to_subgroup.g is already loaded transitively
+            # via the K4A_LoadSibling above, but the new function
+            # was added to it as part of #256. Re-read just in case
+            # an older copy is in scope.
+            if not _K4A_LoadSibling("RestrictTraceOnWToSubgroupHonourParent",
+                                     "restrict_to_subgroup.g") then
+                Error("K4aClassify: cannot locate restrict_to_subgroup.g");
+            fi;
+        fi;
         Print("\n[K4aClassify] m = 5: computing sparse KRR spectral data ",
               "via BuildKRRSpectralCharactersSparse(5) ...\n");
         t_branch_0 := Runtime();
@@ -464,19 +482,22 @@ K4aClassify := function(m)
     ea_rec := MaximalElementaryAbelian_E_plus(m);
     Print("  |E| = ", Order(ea_rec.subgroup),
           " (expected ", 2^(m + 1), ")\n");
-    # Build intertwiner_data on the SAME EPlusGroup(m) instance that
-    # constructed ea_rec.subgroup, so the family-equality check in
-    # RestrictTraceOnWToSubgroup passes. At m = 5 the parent group has
-    # 1025 conjugacy classes; the eager `BuildIntertwinerDataUntwisted`
-    # builds all 1025 CharacterTables up front (~100 s wall), whereas
-    # the lazy variant defers per-class CT builds (~34 s wall on the
-    # same hardware). Use lazy when m >= 5.
+    # At m >= 5 (#256 family-translation path): translate the sparse
+    # KRR spectral data from the EmUnimodGroup(m) family to the
+    # EPlusGroup(m) family of ea_rec.parent, then use
+    # RestrictTraceOnWToSubgroupHonourParent which propagates the
+    # spectral multiplicities into the per-H trace functional.
+    # At m < 5 the legacy path (BuildIntertwinerDataUntwisted +
+    # RestrictTraceOnWToSubgroup) is retained — it is the K-4a-T7
+    # anchor and changing it would invalidate #201's regression test.
     if m >= 5 then
-        data_E := BuildIntertwinerDataUntwistedLazy(ea_rec.parent);
+        data_E := TranslateSpectralDataToEPlus(sparse_data, ea_rec.parent);
+        restricted_E := RestrictTraceOnWToSubgroupHonourParent(
+            data_E, ea_rec.subgroup);
     else
         data_E := BuildIntertwinerDataUntwisted(ea_rec.parent);
+        restricted_E := RestrictTraceOnWToSubgroup(data_E, ea_rec.subgroup);
     fi;
-    restricted_E := RestrictTraceOnWToSubgroup(data_E, ea_rec.subgroup);
     E_class := _K4A_ClassifyAbelianBranch(restricted_E, ea_rec.subgroup);
     t_E_branch := _K4A_SecsSince(t_branch_0);
     Print("  E-branch result: is_coboundary = ", E_class.is_coboundary,
@@ -488,11 +509,13 @@ K4aClassify := function(m)
     d8_rec := D8Section_E_plus(m);
     Print("  |D_8| = ", Order(d8_rec.subgroup), " (expected 8)\n");
     if m >= 5 then
-        data_D8 := BuildIntertwinerDataUntwistedLazy(d8_rec.parent);
+        data_D8 := TranslateSpectralDataToEPlus(sparse_data, d8_rec.parent);
+        restricted_D8 := RestrictTraceOnWToSubgroupHonourParent(
+            data_D8, d8_rec.subgroup);
     else
         data_D8 := BuildIntertwinerDataUntwisted(d8_rec.parent);
+        restricted_D8 := RestrictTraceOnWToSubgroup(data_D8, d8_rec.subgroup);
     fi;
-    restricted_D8 := RestrictTraceOnWToSubgroup(data_D8, d8_rec.subgroup);
     D8_class := _K4A_ClassifyNonAbelianBranch(
         restricted_D8, d8_rec.subgroup, ClassifyOnD8);
     t_D8_branch := _K4A_SecsSince(t_branch_0);
@@ -505,11 +528,13 @@ K4aClassify := function(m)
     q8_rec := Q8Section_E_plus(m);
     Print("  |Q_8| = ", Order(q8_rec.subgroup), " (expected 8)\n");
     if m >= 5 then
-        data_Q8 := BuildIntertwinerDataUntwistedLazy(q8_rec.parent);
+        data_Q8 := TranslateSpectralDataToEPlus(sparse_data, q8_rec.parent);
+        restricted_Q8 := RestrictTraceOnWToSubgroupHonourParent(
+            data_Q8, q8_rec.subgroup);
     else
         data_Q8 := BuildIntertwinerDataUntwisted(q8_rec.parent);
+        restricted_Q8 := RestrictTraceOnWToSubgroup(data_Q8, q8_rec.subgroup);
     fi;
-    restricted_Q8 := RestrictTraceOnWToSubgroup(data_Q8, q8_rec.subgroup);
     Q8_class := _K4A_ClassifyNonAbelianBranch(
         restricted_Q8, q8_rec.subgroup, ClassifyOnQ8);
     t_Q8_branch := _K4A_SecsSince(t_branch_0);

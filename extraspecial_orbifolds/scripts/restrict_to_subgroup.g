@@ -274,3 +274,182 @@ RestrictTraceOnWToSubgroup := function(intertwiner_data_G, H)
         parent_data  := intertwiner_data_G
     );
 end;;
+
+
+# ============================================================
+# Public: RestrictTraceOnWToSubgroupHonourParent  (#256)
+# ============================================================
+#
+# Variant of RestrictTraceOnWToSubgroup that PROPAGATES the parent's
+# spectral multiplicities into the H-side restricted record. The
+# H-character functional itself stays H's untwisted (which is the
+# mathematically correct chi_H(h) value); the multiplicity factor
+# mult from the parent's KRR spectral data is applied as a scalar
+# weighting per H-class / H-irrep.
+#
+# WHY THIS EXISTS
+# ---------------
+# The original RestrictTraceOnWToSubgroup (per K-4a-T5a downscope)
+# discards the parent's trace_on_W in favour of H's untwisted
+# baseline. This was correct under the omega = 0 / epsilon = 1
+# downscope for K-4a-T5b (#198), but it has the side-effect that any
+# downstream `ComputeCTModularData(restricted, H)` produces
+# H-untwisted modular data regardless of the parent's spectral
+# characters. At m = 5 (K-4b production target) this is precisely
+# the structural-trivial caveat documented in
+# docs/superpowers/research/2026-05-17-k4b-m5-verdict.md Section 4.4.
+#
+# DESIGN: multiplicity-weighted baseline
+# ---------------------------------------
+# KRR's spectral trace_on_W (BuildKRRSpectralCharactersSparse) returns
+#   spectral.trace_on_W(k, j, h) = mult_{k,j} * chi_{k,j}(h)
+# where chi_{k,j} is the j-th irrep of C_G(a_k) and mult_{k,j} is the
+# multiplicity in the central twist's defect rep Omega_0. For the
+# trivial cocycle / untwisted baseline, mult_{k,j} = 1 (Omega_0
+# decomposes as the regular C_G(-I) rep, so each chi appears once).
+#
+# Under the K-4a T4a downscope (epsilon = 1), the H-level CT modular
+# data is determined by H's own character functional WEIGHTED by
+# the inherited multiplicities. The H-side trace_on_W therefore is
+#   trace_on_W_H(k_H, j_H, h_H) = mult_{k_G, j_G} * chi_H[j_H](h_H)
+# where k_G = class_to_G[k_H].k_G is the G-class containing a_H, and
+# j_G is the irrep_idx_G "associated" to j_H by the
+# irrep_index_translation table (dimension matching, see below).
+#
+# This is the right object because:
+#   * For omega = 0 (mult = 1 everywhere), it reduces to H's untwisted
+#     character, recovering the K-4a-T5a baseline.
+#   * For a non-trivial mult inherited from KRR's central-twist
+#     Omega_0 decomposition, the per-irrep multiplicities propagate
+#     to the H-side T-matrix entries (T = chi(a)/chi(e), so a
+#     mult factor cancels in the ratio — but it survives in any
+#     spectral weighting that the downstream pipeline applies).
+#
+# IRREP-INDEX TRANSLATION
+# -----------------------
+# We pre-compute irrep_idx_H -> irrep_idx_G by dimension matching.
+# For abelian C_H(a_H) (which holds for the rank-(m+1) elementary
+# abelian E-branch and the abelian centralisers of non-central
+# classes in D_8 / Q_8) all irreps are linear (dim 1), so the
+# match is unambiguous up to the GAP enumeration order.
+#
+# For non-abelian centralisers and non-linear irreps the matching
+# is heuristic. The mult-weighted design above means that whenever
+# mult = 1 (the baseline) the irrep index choice does not affect
+# the trace value, so the choice is mathematically inert in the
+# omega = 0 case. For non-trivial mult, the choice picks WHICH
+# G-irrep's multiplicity to inherit — a follow-up may need a
+# more careful per-irrep restriction-decomposition.
+#
+# PARENT'S MULTIPLICITY FIELD
+# ---------------------------
+# We look for parent_data.multiplicities (a list indexed by
+# class_idx_G, each entry a list aligned with idx.irreps[k_G]'s
+# Irr ordering). If absent or `fail` at the relevant class, we
+# fall back to mult = 1.
+#
+# Output: A record with the same shape as RestrictTraceOnWToSubgroup
+#         output, plus:
+#   .trace_on_W            : multiplicity-weighted H character
+#                             functional, NOT raw H untwisted.
+#   .irrep_index_translation
+#                          : list of length |classes(H)|, each entry
+#                             is a list of length num_irreps_H[k_H]
+#                             mapping irrep_idx_H to irrep_idx_G.
+#   .multiplicity_lookup   : function(k_H, j_H) -> cyclotomic, the
+#                             mult factor used for that (k_H, j_H).
+RestrictTraceOnWToSubgroupHonourParent := function(intertwiner_data_G, H)
+    local G, idx_H, transport_H, idx_G, class_to_G, k_H, a_H, mapping,
+          base_data, gens_H, bad_gen, parent_data, irrep_index_translation,
+          k_G_idx, irr_H, irr_G, j_H,
+          new_trace_on_W, new_epsilon, multiplicity_lookup,
+          has_mults;
+    G := intertwiner_data_G.group;
+    gens_H := GeneratorsOfGroup(H);
+    bad_gen := First(gens_H, g -> not (g in G));
+    if bad_gen <> fail then
+        Error("RestrictTraceOnWToSubgroupHonourParent: H has a generator ",
+              bad_gen, " not in intertwiner_data_G.group.");
+    fi;
+    base_data := BuildIntertwinerDataUntwisted(H);
+    idx_H := base_data.idx;
+    transport_H := base_data.transport;
+    idx_G := intertwiner_data_G.idx;
+    parent_data := intertwiner_data_G;
+
+    # H-class -> G-class, conjugator.
+    class_to_G := [];
+    for k_H in [1..Length(idx_H.reps)] do
+        a_H := idx_H.reps[k_H];
+        mapping := _RTS_FindGClassOf(idx_G, a_H, G);
+        Add(class_to_G, mapping);
+    od;
+
+    # Per-H-class irrep_idx_H -> irrep_idx_G translation table
+    # via dimension matching.
+    irrep_index_translation := [];
+    for k_H in [1..Length(idx_H.reps)] do
+        k_G_idx := class_to_G[k_H].k_G;
+        _EnsureClassData(idx_H, k_H);
+        _EnsureClassData(idx_G, k_G_idx);
+        irr_H := idx_H.irreps[k_H];
+        irr_G := idx_G.irreps[k_G_idx];
+        Add(irrep_index_translation,
+            List([1..Length(irr_H)], j_H ->
+                (function()
+                    local d_H, found;
+                    d_H := irr_H[j_H][1];
+                    found := First([1..Length(irr_G)],
+                                    j_G -> irr_G[j_G][1] = d_H);
+                    if found = fail then
+                        return j_H;
+                    fi;
+                    return found;
+                end)()));
+    od;
+
+    # Does the parent carry .multiplicities (the KRR spectral builder
+    # marker)? If so we use it; otherwise we treat mult = 1 (the
+    # untwisted baseline).
+    has_mults := IsBound(parent_data.multiplicities);
+    multiplicity_lookup := function(k_H_arg, j_H_arg)
+        local k_G, j_G, mults;
+        if not has_mults then return 1; fi;
+        k_G := class_to_G[k_H_arg].k_G;
+        mults := parent_data.multiplicities[k_G];
+        if mults = fail or mults = [] then return 1; fi;
+        j_G := irrep_index_translation[k_H_arg][j_H_arg];
+        if j_G < 1 or j_G > Length(mults) then return 1; fi;
+        if mults[j_G] = fail then return 1; fi;
+        return mults[j_G];
+    end;
+
+    # Multiplicity-weighted H character functional.
+    new_trace_on_W := function(k_H_arg, irrep_idx_H, h_H)
+        local mult, chi_val;
+        mult := multiplicity_lookup(k_H_arg, irrep_idx_H);
+        chi_val := base_data.trace_on_W(k_H_arg, irrep_idx_H, h_H);
+        return mult * chi_val;
+    end;
+
+    new_epsilon := function(g1, g2, a, b)
+        return parent_data.epsilon(g1, g2, a, b);
+    end;
+
+    return rec(
+        group        := H,
+        idx          := idx_H,
+        transport    := transport_H,
+        trace_on_W   := new_trace_on_W,
+        epsilon      := new_epsilon,
+        class_to_G   := class_to_G,
+        irrep_index_translation := irrep_index_translation,
+        multiplicity_lookup := multiplicity_lookup,
+        parent_G     := G,
+        parent_data  := parent_data,
+        # Diagnostic: keep H's untwisted baseline available for
+        # comparison.
+        baseline_trace_on_W := base_data.trace_on_W,
+        baseline_epsilon := base_data.epsilon
+    );
+end;;
