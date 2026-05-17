@@ -439,7 +439,7 @@ Print("\nAlready completed (resume): ", Length(completed_idx), " / ", k,
 PerVecTransgressionShared := function(vec)
     local results, oi, orb_info, basis_cache, target_idx, vec_target,
           c_g_table, exp_index, r, exp_local, batch_inputs, batch_targets,
-          c_prime_bits, batch_results, j, ti, one_gf2;
+          c_prime_bits, batch_results, j, ti, one_gf2, u_gf2;
     results := List([1..n_classes], j -> "?");
     # Precondition: every torsion[i] in {2, exponent}.
     for ti in [1..Length(setup.torsion)] do
@@ -462,24 +462,29 @@ PerVecTransgressionShared := function(vec)
             vec_target := H3VecAtTarget(orb_info.start_idx, target_idx,
                                          orb_info.parent, orb_info.gen_used,
                                          h3_matrices, torsion, vec);
-            c_g_table := basis_cache.table * vec_target;
             if exp_local > 2 and exp_index <> fail and vec_target[exp_index] <> 0 then
-                # Path Z: per-call.
+                # Path Z: per-call. Needs the full integer c_g_table.
+                c_g_table := basis_cache.table * vec_target;
                 results[target_idx] :=
                     IsCoboundary2SplitVec(basis_cache.C, c_g_table, vec_target,
                                            setup);
             else
-                # Path A: reduce to GF(2) inline and queue.
-                if exp_local = 2 then
-                    # r = 1, so c_prime_bits[j] = c_g_table[j] mod 2.
-                    c_prime_bits := List(c_g_table,
-                                         x -> ((x mod 2) * one_gf2));
-                else
-                    c_prime_bits := List(c_g_table,
-                                         x -> ((((x mod exp_local) / r) mod 2)
-                                               * one_gf2));
-                fi;
-                ConvertToVectorRep(c_prime_bits, GF(2));
+                # Path A: A-5b R2-8 (#258 / #266 follow-up). Single
+                # compiled GF(2) matvec replaces the 1M-int matmul
+                # `basis_cache.table * vec_target` AND the per-element
+                # bit-extract List comprehension. Math:
+                #   c_prime_bits[i]
+                #     = bit_{log2(r)}((table * vec_target)[i] mod exp)
+                #     = sum_k (vec_target[k] mod 2)
+                #            * bit_{log2(r)}(table[i][k])  over GF(2)
+                # under Path A's `vec_target[exp_index] = 0`
+                # precondition. table_gf2 precomputed once per
+                # centraliser in BuildPerClassCocycleBasis
+                # (solver/snf_wrapper.g). Generalises across exp = 2
+                # (r = 1, bit_0) and exp = 4 (r = 2, bit_1).
+                u_gf2 := List(vec_target, x -> (x mod 2) * one_gf2);
+                ConvertToVectorRep(u_gf2, GF(2));
+                c_prime_bits := basis_cache.table_gf2 * u_gf2;
                 Add(batch_inputs, c_prime_bits);
                 Add(batch_targets, target_idx);
             fi;

@@ -78,7 +78,7 @@ if [[ ! -f "${KERNEL_FILE}" ]]; then
     echo "[run_d_van_7] BLOCKED on #47 A-5b: kernel.g missing." >&2
     echo "[run_d_van_7]   path checked : ${KERNEL_FILE}" >&2
     echo "[run_d_van_7]   dependency   : A-5b driver, issue #47" >&2
-    echo "[run_d_van_7]                  (run_e_plus_5_kernel.g)." >&2
+    echo "[run_d_van_7]                  (run_e_plus_m_kernel_hap.g with MPARAM:=5)." >&2
     echo "[run_d_van_7]   action       : wait for A-5b to complete and" >&2
     echo "[run_d_van_7]                  write the kernel file, then re-run." >&2
     echo "[run_d_van_7]                  PID 44998 is running A-5b as of" >&2
