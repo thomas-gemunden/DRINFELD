@@ -70,6 +70,36 @@ ChangeDirectoryCurrent(Filename(itb_orig_dir, ""));;
 # redefinition is safe).
 If_ := function(cond, a, b) if cond then return a; else return b; fi; end;;
 
+# Module-level cache for A_F2_T := TransposedMat(BoundaryMatrixGF2(C)).
+#
+# A-5b R2-5 (#258): the per-call rebuild of A_F2_T inside IsCoboundary2Z2k
+# was the dominant remaining bottleneck after the R2-3/R2-4 batched solver
+# landed. Live profile (May 2026, PID 44998 post-PR-233) attributed ~2.5 %
+# of total CPU to FuncTRANSPOSED_GF2MAT and the surrounding rebuild
+# accounted for the majority of the remaining ~95 % interpreter overhead
+# in ExecFor3/ExecAssList/EvalFunccall4args inside the Z2k Path-Z calls.
+#
+# At m=5 with |C|=1024 the boundary matrix is n^2 x n = 1M x 1024 = ~125 MB
+# (compressed GF(2)), and TransposedMat moves ~1 GB of bits each call. The
+# m=5 sweep issues thousands of Z2k calls per generator on a small number
+# (~4) of distinct centralisers (one per BRW orbit), so caching by
+# IsIdenticalObj(C) recovers nearly all of that cost.
+#
+# We mirror the pattern of _BoundaryMatrixGF2_cache in mod2_solver.g:
+# the BoundaryMatrixGF2(C) call returns an IsIdenticalObj-stable matrix
+# (also cached by C), so we key by C and hold the precomputed transpose.
+_ItBock_AF2T_CACHE := [];;
+
+_GetCachedAF2T := function(C)
+    local entry, A_F2_T;
+    for entry in _ItBock_AF2T_CACHE do
+        if IsIdenticalObj(entry.C, C) then return entry.A_F2_T; fi;
+    od;
+    A_F2_T := TransposedMat(BoundaryMatrixGF2(C));
+    Add(_ItBock_AF2T_CACHE, rec(C := C, A_F2_T := A_F2_T));
+    return A_F2_T;
+end;;
+
 # IsCoboundary2Mod2WithLiftWitness(C, c) — witness-returning variant of
 # IsCoboundary2Mod2WithLift.
 #
@@ -111,7 +141,10 @@ IsCoboundary2Mod2WithLiftWitness := function(C, c)
     od;
     ConvertToVectorRep(c_F2, GF(2));
 
-    A_F2_T := TransposedMat(BoundaryMatrixGF2(C));
+    # A-5b R2-5 (#258): cached per-C (see _GetCachedAF2T below). This entry
+    # point is far cooler than IsCoboundary2Z2k but the same cache covers it
+    # for free.
+    A_F2_T := _GetCachedAF2T(C);
 
     # Build the F_2-functional basis for H¹(C; F_2) (mirrors
     # BocksteinH1ToH2's construction but keeps the alpha-as-1-cochain).
@@ -377,7 +410,11 @@ IsCoboundary2Z2k := function(C, c, k)
         od;
     od;
 
-    A_F2_T := TransposedMat(BoundaryMatrixGF2(C));
+    # A-5b R2-5 (#258): A_F2_T is built once per C and cached. Previously
+    # this was rebuilt every IsCoboundary2Z2k call — at m=5 with |C|=1024
+    # each rebuild moves ~1 GB of bits through TransposedMat, and the sweep
+    # issues thousands of calls. The transpose dominates remaining wall.
+    A_F2_T := _GetCachedAF2T(C);
     hom_basis := IB_F2HomBasis(C);
 
     return IB_RecCob(c_table, modulus, elts, n, idx, A_F2_T, hom_basis);
