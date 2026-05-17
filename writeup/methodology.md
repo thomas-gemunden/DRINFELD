@@ -79,7 +79,7 @@ The two pipelines are independent algorithmically (no shared code paths) and epi
 
 ### 1.5 Reading guide
 
-§2 is mathematical background: twisted Drinfeld doubles, modular data, transgression. §3 develops the mathematical foundation underlying D-VAN: the detection theorem for \(\{E, D_8, Q_8\}\) from Quillen 1971 + Harada–Kono 1987 + the Adem–Karagueuzian / Pham essential-cohomology argument, with R-1's literature synthesis (issue #193, PR #205) and R-1 follow-up's correction (issue #215, PR #219) integrated. §4 describes D-VAN: the restriction-matrix construction (Phase 1 HAP, Phase 2 Quillen), the verdict, and the gating tests. §5 describes K-4a: KRR's CT condition, the CGR §5.2 closed-form, restriction to detecting subgroups, the classifier on each subgroup. §6 explains the T4a finding that \(\varepsilon \equiv 1\) is the correct CGR gauge (issue #196, PR #206). §7 covers the joint \((S, T)\) matcher with bucketing, colour refinement, backtracking, and the Mignard–Schauenburg completeness it implements. §8 is the acceptance protocol: the \(m = 3\) anchor, the \(m = 5, 7\) verdict triage, and the cross-validation cases. §9 records current status (K-3 anchor verified; m=5 production blocked on sparse trace #220; m=7 future) and open questions. References follow.
+§2 is mathematical background: twisted Drinfeld doubles, modular data, transgression. §3 develops the mathematical foundation underlying D-VAN: the detection theorem for \(\{E, D_8, Q_8\}\) from Quillen 1971 + Harada–Kono 1987 + the Adem–Karagueuzian / Pham essential-cohomology argument, with R-1's literature synthesis (issue #193, PR #205) and R-1 follow-up's correction (issue #215, PR #219) integrated. §4 describes D-VAN: the restriction-matrix construction (Phase 1 HAP, Phase 2 Quillen), the verdict, and the gating tests. §5 describes K-4a: KRR's CT condition, the CGR §5.2 closed-form, restriction to detecting subgroups, the classifier on each subgroup. §6 explains the T4a finding that \(\varepsilon \equiv 1\) is the correct CGR gauge (issue #196, PR #206). §7 covers the joint \((S, T)\) matcher (signature pruning + backtracking with online consistency checks) and the Mignard–Schauenburg completeness it implements. §8 is the acceptance protocol: the \(m = 3\) anchor, the \(m = 5, 7\) verdict triage, and the cross-validation cases. §9 records current status (K-3 anchor and its full \(S\) + \(T\) extension verified; K-4a Phase 2 \(m = 3\) anchor passes end-to-end at 39/39 assertions in 3.4 s; \(m = 5\) production blocked on the sparse-trace replacement #220 and the lifting of the \(m \le 3\) cap in `k4a_classify.g`; \(m = 7\) future) and open questions. References follow.
 
 The infrastructure underpinning the kernel computation itself — torsion-split solver, BRW-symmetry reduction, centraliser-type caching, and resumable per-generator state — is documented in `writeup/section_3_infrastructure.md`; for the methodology paper it is treated as a black box delivering the empirical \(\ker(\mathrm{Tr})\) ground truth at \(m \le 3\) referenced throughout.
 
@@ -269,7 +269,7 @@ For the Keller question proper, D-VAN provides the cross-validation witness; K-4
 
 ## 5. K-4a: the modular-data witness from CGR §5.2
 
-K-4a's design specification is `docs/superpowers/specs/2026-05-17-k4a-phase2-implementation-spec.md`. Phase 1 (T1, T3, T4a) shipped the joint-permutation matcher, the closed-form abelian-cohomology checker, and the math derivation of \(\varepsilon_a\) (§6 below). Phase 2 (T2, T4b, T5a, T5b, T6, T7) wires these into an end-to-end pipeline. The public API after Phase 2 is
+K-4a's design specification is `docs/superpowers/specs/2026-05-17-k4a-phase2-implementation-spec.md`. Phase 1 (T1, T3, T4a) shipped the joint-permutation matcher, the closed-form abelian-cohomology checker, and the math derivation of \(\varepsilon_a\) (§6 below). Phase 2 wires these into an end-to-end pipeline: T2 (\(D_8\) classifier, PR #213), T4b (the \(\varepsilon\) callable, closed as superseded by T4c after the T4a finding moved the substantive content into `trace_on_W`), T4c (spectral `trace_on_W`, PR #218; m=5 variant in flight as #220), T5a (restriction to detecting subgroup, PR #217), T5b (CT modular data, PR #216), T6 (orchestrator, PR #224, with test fix in PR #228), and T7 (the \(m = 3\) anchor regression, closed by PR #224). The public API after Phase 2 is
 \[
   \texttt{K4aClassify}(m) \;\to\;
   \texttt{rec}(m, \texttt{group}, \texttt{epsilon\_data}, \texttt{E\_class}, \texttt{D8\_class}, \texttt{Q8\_class}, \texttt{trivial}, \texttt{verdict}),
@@ -354,7 +354,7 @@ For \(D_8\) and \(Q_8\) the comparison is via the joint \((S, T)\)-permutation m
 
 The triviality verdict at \(E_+(m)\) is the conjunction over \(H\): \([\alpha] = 0 \iff [\alpha|_E] = 0 \wedge [\alpha|_{D_8}] = 0 \wedge [\alpha|_{Q_8}] = 0\), bidirectional by §3's detection theorem.
 
-The aggregator `K4aClassify(m)` (T6, `k4a_classify.g`) orchestrates the three classifications and returns the joint verdict. The \(m = 3\) anchor (T7, `test_k4a_anchor_m3.g`) runs the full pipeline on KRR's known-trivial \(m = 3\) data and confirms `verdict = "trivial"`; this is the gating test before applying to \(m = 5, 7\).
+The aggregator `K4aClassify(m)` (T6, `extraspecial_orbifolds/scripts/k4a_classify.g`) orchestrates the three classifications and returns the joint verdict. The \(m = 3\) anchor (T7, `extraspecial_orbifolds/scripts/tests/test_k4a_classify.g`) runs the full pipeline on KRR's known-trivial \(m = 3\) data and confirms `verdict = "trivial"`; this is the gating test before applying to \(m = 5, 7\). It now passes 39/39 assertions in 3.4 s wall (well under the 300 s budget) per PR #224; the same test file additionally verifies the \(m = 2\) case (also `verdict = "trivial"`) as a bonus.
 
 ### 5.5 Strengths and weaknesses
 
@@ -409,13 +409,13 @@ So \((T_{3,1})_{0,0} = 1/2\), and \((T_h)_{0,0}\) is not multiplicative — inco
 
 ### 6.3 Implementation consequence
 
-For K-4a-T4b (issue #197), the deliverable is the trivial \(\varepsilon\) callable:
+For K-4a-T4b (issue #197), the deliverable was the trivial \(\varepsilon\) callable:
 \[
   \texttt{epsilon}(g_1, g_2, a, b) \;:=\; 1 \qquad \forall (g_1, g_2, a, b).
 \]
-No \(T_h\) matrix entries are read. The substantive lattice-orbifold information needed by K-1's `ProjectorFormula` lives entirely in `trace_on_W`, not in \(\varepsilon\). `trace_on_W(class_idx, irrep_idx, h)` returns the character value \(\chi_{\texttt{class\_idx}, \texttt{irrep\_idx}}(h)\) where \(\chi\) ranges over the linear characters appearing in the decomposition of \(\Omega_0\) under \(\{T_h \colon h \in C_G(a)\}\), with the labelling fixed to match GAP's `Irr(C_G(a))` ordering.
+Under the T4a finding (\(\varepsilon \equiv 1\) is the canonical gauge), T4b reduces to a one-line literal and T4b was closed as superseded by T4c (issue #208, PR #218): the substantive lattice content moves into the spectral `trace_on_W`, which is the function that picks out which character \(\chi\) corresponds to each twisted-module piece. No \(T_h\) matrix entries are read for \(\varepsilon\). The substantive lattice-orbifold information needed by K-1's `ProjectorFormula` lives entirely in `trace_on_W`, not in \(\varepsilon\). `trace_on_W(class_idx, irrep_idx, h)` returns the character value \(\chi_{\texttt{class\_idx}, \texttt{irrep\_idx}}(h)\) where \(\chi\) ranges over the linear characters appearing in the decomposition of \(\Omega_0\) under \(\{T_h \colon h \in C_G(a)\}\), with the labelling fixed to match GAP's `Irr(C_G(a))` ordering. At \(m = 3\), T4c (PR #218) implements this via full joint eigendecomposition; at \(m = 5, 7\) the full-matrix approach is infeasible (a single \(T_h\) at \(m = 5\) is \(\sim 3.7\) years to build per PR #218's scalability finding), and the sparse-trace replacement `BuildKRRSpectralCharactersSparse` is the in-flight follow-up (#220).
 
-The acceptance test for the \(\varepsilon \equiv 1\) gauge is the K-3 anchor at \(m = 3\): central-row entries of \(S^{\mathrm{Keller}}\) must match the dense untwisted \(S^0\) central row computed by `untwisted_modular_data.g`, byte-for-byte (cyclotomic equality). This is implemented in `tests/test_krr_vs_central_closed_form.g` (K-3 anchor, issue #40, task #45) and confirms the gauge choice on \(295\,360 / 295\,360\) central-row entries — three-way agreement between `SKeller` (the K-2 adapter), the closed-form `CentralSEntryClosedForm`, and the untwisted `ComputeSBlock`.
+The acceptance test for the \(\varepsilon \equiv 1\) gauge has two layers. The original K-3 anchor (issue #40, task #45) confirms the gauge choice on \(295\,360 / 295\,360\) central-row entries — three-way agreement between `SKeller` (the K-2 adapter), the closed-form `CentralSEntryClosedForm`, and the untwisted `ComputeSBlock` (see `tests/test_krr_vs_central_closed_form.g`). The K-3 extension (issue #211, PR #222) densifies this baseline to **all 5 161 984 \(S\)-entries and all 2 272 \(T\)-diagonal entries** at \(m = 3\), with 0 mismatches, giving a much stronger ground truth for diagnosing any character-misidentification bug in T4c-style spectral characters (see `tests/test_krr_full_s_t.g`). The orchestrator K-4a-T6 lifts these to the full three-subgroup verdict: `K4aClassify(3)` returns `verdict = "trivial"` with 39/39 assertions in 3.4 s wall (PR #224).
 
 A note on what \(\varepsilon \neq 1\) would buy us: it is useful as a sanity check (if a canonical vacuum existed and gave a non-trivial \(\varepsilon\), this would let us double-check \(\sigma(a \mid b)\) against the K-3 anchor) and is necessary for the general non-CT case (e.g. a hypothetical non-zero \(\omega\), where \(\beta_a\) is only trivial up to coboundary). For the present application both are vacuous: KRR's CT case at \(m \in \{3, 5, 7\}\) is verified cochain-level, and the K-3 anchor passes with \(\varepsilon \equiv 1\).
 
@@ -431,13 +431,17 @@ By [MignardSchauenburg18 Thm 5.4, MignardSchauenburg21], for \(|H| < 32\) this i
 
 ### 7.1 Algorithmic structure
 
-Naive search is infeasible at rank 22 (\(22! \approx 10^{21}\)). The matcher (file `joint_permutation_matcher.g`, K-4a-T1, issue #192) uses backtracking with three layers of pruning, borrowing the structure from the \(Q_8\) extension-type case study (`q8_extension_type/scripts/find_permutation.g` and `q8_extension_type/writeup.md`).
+Naive search is infeasible at rank 22 (\(22! \approx 10^{21}\)). The matcher (file `extraspecial_orbifolds/scripts/joint_permutation_matcher.g`, K-4a-T1, issue #192, PR #203) uses signature-pruned backtracking, lifted from the one-shot \(Q_8\) extension-type case study (`q8_extension_type/scripts/find_permutation.g` and `q8_extension_type/writeup.md`) into a reusable callable `JointPermutationMatcher(S1, T1, S2, T2)`.
 
-**Bucketing.** Partition the simples by the joint invariant \((d_i, T_i)\), where \(d_i = S_{i, 1} / S_{1, 1}\) is the quantum dimension and \(T_i\) is the \(T\)-eigenvalue. Any valid \(\pi\) permutes buckets to themselves. At \(D_8\) and \(Q_8\) the bucket structure is fine: in the \(Q_8\) case study the buckets cut the search space from \(22!\) down to under \(2^{16}\) before backtracking.
+**Per-row signatures.** For each row \(i\) compute a signature
+\[
+  \mathrm{sig}(i) \;:=\; \bigl(T_i,\; \mathrm{SortedList}(S_{i,\cdot})\bigr).
+\]
+The candidate set for \(\pi(i)\) is the set of rows \(j\) of \(S_1\) with \(\mathrm{sig}_1(j) = \mathrm{sig}_2(i)\). Any valid \(\pi\) maps each row to one of its candidates. The signature is strictly stronger than a \((d_i, T_i)\) joint-invariant partition, since \(\mathrm{SortedList}(S_{i,\cdot})\) sees every row entry, not just the vacuum column \(S_{i,1}\); in practice it cuts the candidate sets to single-digit sizes at \(D_8\) and \(Q_8\). A cheap necessary precheck (\(\mathrm{SortedList}(T_1) = \mathrm{SortedList}(T_2)\)) and a per-row precheck (\(\mathrm{candidates}(i) \neq \varnothing\)) bail out before any search.
 
-**Colour refinement.** Within each bucket, compute the multiset of \(S\)-row entries projected onto the unmatched indices. Two simples in the same bucket but with distinct row multisets cannot map to each other. Iterate until refinement stabilises. For \(D_8\) and \(Q_8\) this typically singles out most of the permutation.
+**Fail-fast row ordering.** The search order over rows of \(S_2\) is by ascending \(|\mathrm{candidates}(i)|\), so the most constrained rows are placed first. This is a heuristic, not a prune.
 
-**Backtracking.** Pick the smallest-fanout bucket, branch over the choices, propagate the \(T\)-equality and \(S\)-equality constraints for all already-matched indices, prune. The \(Q_8\) case study reports milliseconds-range runtime at rank 22 with these prunes.
+**Backtracking with online consistency.** Walk the rows of \(S_2\) in the chosen order; at each row \(i\), branch over the unused candidates \(j\) and, before recursing, verify \(S_2[i][k] = S_1[j][\pi(k)]\) for every already-assigned \(k\). This eliminates whole subtrees as soon as a partial assignment violates the \(S\) equation. At the leaf, verify the full \(S\) equation as a belt-and-braces check. The \(Q_8\) extension-type case study reports milliseconds-range runtime at rank 22 under this scheme.
 
 ### 7.2 Abelian case
 
@@ -459,19 +463,23 @@ The two pipelines D-VAN and K-4a admit a clean cross-validation protocol at fixe
 
 Both `K4aClassify(3)` and `ResIsTrivialOnDetectingFamily(3, omega_KRR_3_vec)` must return verdicts of `trivial`. This is the bidirectional sanity check: K-4a's full pipeline correctly identifies a known-untwisted orbifold; D-VAN's restriction infrastructure correctly handles a known-zero class.
 
-**Current status (at time of writing):**
+**Current status: anchor is GREEN end-to-end.**
 
 - *D-VAN \(m = 3\) anchor* (Gate 1A) passes: 35/35 agreement of the D-VAN verdict with the per-basis-vector restriction at \(m = 3\), and the order-8 generator of the \(\mathbb Z/8\) summand at \(m = 2\) is detected by \(Q_8\) (Gate 1B). See `tests/test_detecting_family_vanish.g`.
 
-- *K-3 anchor* (issue #40, the central-row check) passes: 295 360 / 295 360 central-row entries of \(S^{\mathrm{Keller}}\) match the closed-form `CentralSEntryClosedForm` and the dense untwisted `ComputeSBlock` byte-for-byte, with \(\varepsilon \equiv 1\). See `tests/test_krr_vs_central_closed_form.g`.
+- *K-3 anchor — central rows* (issue #40, original): 295 360 / 295 360 central-row entries of \(S^{\mathrm{Keller}}\) match the closed-form `CentralSEntryClosedForm` and the dense untwisted `ComputeSBlock` byte-for-byte, with \(\varepsilon \equiv 1\). See `tests/test_krr_vs_central_closed_form.g`.
 
-- *K-4a full \(m = 3\) anchor* (T7, issue #201) is the next gating test: the full three-subgroup pipeline on KRR's lattice data at \(m = 3\), expected to return `verdict = "trivial"`. This is gated on the merge of T4b (issue #197, \(\varepsilon\) callable) and the completion of T6 (issue #200, orchestrator). At time of writing T4b is in flight; the extension to the full anchor lives in PR #222.
+- *K-3 anchor — full S + T* (issue #211, PR #222): the dense extension of K-3 covers all **5 161 984** \(S\)-entries (\(=\) rank\(^2\), with rank \(= 2272\)) and all **2 272** \(T\)-diagonal entries at \(m = 3\), with 0 mismatches against the untwisted ground truth \((S^0, T^0)\). See `tests/test_krr_full_s_t.g`. This gives a substantially denser baseline than the central-row check for diagnosing character-misidentification bugs.
+
+- *K-4a full \(m = 3\) anchor* (T7, issue #201, closed by PR #224): `K4aClassify(3)` returns `verdict = "trivial"` end-to-end. The orchestrator (T6, issue #200, PR #224 with float-vs-int test fix in PR #228) wires together `BuildIntertwinerDataUntwisted` (the \(m \le 3\) pragmatic-choice path; observationally identical to the KRR-spectral path at \(\alpha = 0\) per K-3 extension, and avoids both the multiplicity-scaling reconciliation in PR #218 and the m=5 infeasibility in #220), the abelian \(E\) classifier (T3, PR #207), the \(D_8\) classifier (T2, PR #213), and the \(Q_8\) classifier (T1, PR #203), with restriction via T5a (PR #217) and CT modular data via T5b (PR #216). The test file `tests/test_k4a_classify.g` records **39/39 assertions PASS**, run time **3.4 s wall** (budget 300 s), with per-branch breakdown matching the §5.4 detection logic: \(E\) branch coboundary in 1.4 s, \(D_8\) classified to `class_idx = 1` (the trivial cocycle slot in `modular_data/8/3/`) in 1.0 s, \(Q_8\) classified to `class_idx = 1` (trivial slot in `modular_data/8/4/`) in 1.0 s. Note that T4b (issue #197, the \(\varepsilon\)-callable implementation) was closed as superseded by T4c (#208, PR #218) — under the T4a finding that \(\varepsilon \equiv 1\) is the correct gauge, the substantive content moves into the spectral `trace_on_W`; the orchestrator currently uses the untwisted-character path at \(m \le 3\), with the spectral path gated on the sparse-trace replacement (#220) for \(m = 5\).
+
+- *K-4a \(m = 2\) bonus anchor.* The same `K4aClassify` orchestrator also passes at \(m = 2\) (verified in `tests/test_k4a_classify.g` test T4): `verdict = "trivial"`, \(E\) and \(D_8\) and \(Q_8\) all classified to their trivial slots, \(E\) CT modular-data block of rank \(64 = |E|^2\) (the maximal elementary abelian at \(m = 2\) has rank \(m + 1 = 3\), so \(|E| = 8\)).
 
 ### 8.2 Step 1 — Compute on the target \(m\)
 
 Run `K4aClassify(m)` and `ResIsTrivialOnDetectingFamily(m, omega_candidates)`, where `omega_candidates` is whatever set of candidate 3-cocycles is most useful — typically the zero vector (for the sanity check that KRR's lattice maps to \([\alpha] = 0\)), plus a basis of \(H^3(E_+(m); U(1))\) at \(m \le 5\) (to map out the relevant subspace), or the specific class identified by K-4a if non-trivial. At \(m = 7\) the basis sweep depends on the Phase 2 Quillen restriction matrices.
 
-**Current status at \(m = 5\):** K-4b's production driver (`docs/superpowers/specs/2026-05-17-k4b-m5-production-spec.md`) is blocked on the sparse-trace optimisation of the \(\Omega_0\) representation (issue #220, in flight). The dense \(\Omega_0\) at \(m = 5\) has dimension \(2^{16} = 65\,536\), making the literal entry-wise \(T_h\) computation expensive; the sparse-trace approach reduces this to a manageable scan over only the support of \(\Omega_0\) under the projection onto each character isotype. Once #220 merges, the m=5 driver should produce a verdict in hours of wall clock on a single node.
+**Current status at \(m = 5\):** K-4b's production driver scaffold landed in PR #227 (`extraspecial_orbifolds/scripts/run_k4b_m5.sh`, `k4b_xcheck_d_van.g`, `tests/test_k4b_scaffold_smoke.g`). The driver wraps a single call to `K4aClassify(5)` and gates explicitly on two upstream merges: (i) the sparse-trace replacement `BuildKRRSpectralCharactersSparse` (issue #220, in flight) for the \(\Omega_0\) representation, and (ii) lifting the \(m \le 3\) cap currently hard-coded in `k4a_classify.g` (the `n_max_supported := 3` deferral, errors out at \(m \ge 4\) with a pointer to #220). The dense \(\Omega_0\) at \(m = 5\) has dimension \(2^{16} = 65\,536\), making the literal entry-wise \(T_h\) computation infeasible (the m=3 dense path in PR #218 takes 2.4 s; the same approach at \(m = 5\) is projected at \(\sim\)3.7 years per matrix per PR #218's scalability note, motivating #220). The sparse-trace approach reduces this to \(\mathrm{Tr}(T_h^j)\) (touches only \(2^k\) diagonal entries per trace) and inverts via character orthogonality. Once #220 merges and `k4a_classify.g` lifts its cap, the \(m = 5\) driver should produce a verdict in a single shell invocation (`./run_k4b_m5.sh`).
 
 **Current status at \(m = 7\):** future work. The Phase 2 Quillen restriction matrices and the analytical \(T_h\) computation (`compute_e_plus_7_T_analytical.g`) are the prerequisites; the latter is in place modulo verification.
 
@@ -523,15 +531,20 @@ Whatever the verdict, record:
 | \(\ker(\mathrm{Tr})\) for \(E_+(2)\) (brute-force) | Verified, \(|\ker| = 2048\) | `run_e_plus_2_kernel.g`, `writeup/section_3_infrastructure.md` §3.7 |
 | \(\ker(\mathrm{Tr})\) for \(E_+(2)\) (Path Z, structured) | Verified, agrees with brute force | T-1d, `solver/bockstein_iterated.g`, ~74 s wall |
 | \(\ker(\mathrm{Tr})\) for \(E_+(3)\) | In progress via BRW-folded per-generator sweep | `transgression_per_generator_brw.g`, T-3 series |
-| K-3 anchor (central-row \(S\) match at \(m = 3\)) | Passes, 295 360 / 295 360 entries | `tests/test_krr_vs_central_closed_form.g`, issue #40 |
+| K-3 anchor — central rows (\(S\) at \(m = 3\)) | Passes, 295 360 / 295 360 entries | `tests/test_krr_vs_central_closed_form.g`, issue #40 |
+| K-3 extension — full \(S\) + \(T\) at \(m = 3\) | Passes, 5 161 984 \(S\) + 2 272 \(T\), 0 mismatches | `tests/test_krr_full_s_t.g`, issue #211, PR #222 |
 | D-VAN \(m = 3\) anchor (Gate 1A, 35 basis vectors) | Passes, 35/35 | `tests/test_detecting_family_vanish.g`, PR #205 |
 | D-VAN \(m = 2\) \(\mathbb Z/8\) summand (Gate 1B) | Passes | same |
-| D-VAN \(m = 5\) anchor (Gate 1E) | Pending, gated on A-5b (issue #47) | D-VAN spec |
+| D-VAN \(m = 5\) anchor (Gate 1E) | Pending, gated on A-5b kernel (issue #47, current sweep on PID 22335) | D-VAN spec |
 | K-4a T4a (\(\varepsilon\) derivation, \(\varepsilon \equiv 1\)) | Complete | PR #206, issue #196 |
-| K-4a T4b (\(\varepsilon\) callable implementation) | In flight | issue #197 |
-| K-4a T6 (orchestrator), T7 (\(m = 3\) anchor) | Blocked on T4b | issues #200, #201; PR #222 (extension) |
-| K-4b \(m = 5\) production | Blocked on sparse-trace \(\Omega_0\) | issue #220 (in flight), K-4b spec |
-| K-4c \(m = 7\) production | Future work | depends on K-4b + D-VAN Phase 2 |
+| K-4a T4b (\(\varepsilon\) callable implementation) | Superseded by T4c (#208) | issue #197, closed |
+| K-4a T4c (spectral `trace_on_W`, \(m = 3\)) | Complete | PR #218, issue #208 |
+| K-4a T6 (orchestrator) | Complete | PR #224 (+ test fix PR #228), issue #200 |
+| K-4a Phase 2 \(m = 3\) anchor (T7) | Passes, 39/39 assertions, 3.4 s wall | `tests/test_k4a_classify.g`, issue #201, PR #224 |
+| K-4a \(m = 2\) anchor (bonus) | Passes (same test file, T4) | `tests/test_k4a_classify.g`, PR #224 |
+| K-4b \(m = 5\) production driver | Scaffolded, gated on #220 + lifting `n_max_supported` cap | `scripts/run_k4b_m5.sh`, PR #227 |
+| Sparse `trace_on_W` for \(m = 5, 7\) | In flight | issue #220 |
+| K-4c \(m = 7\) production | Future work, blocked on Q-int B2-6 / m=7 unblock path | depends on K-4b + D-VAN Phase 2 |
 | BRW-folded \(S\) for \(E_+(2)\) | Byte-for-byte matches `modular_data/32/49/1.txt` | `compute_canonical_blocks.g`, untwisted modular data |
 | BRW-folded \(S\) for \(E_+(7)\) | Canonical blocks persist in \(\sim 9\,\mathrm{GB}\) | `compute_canonical_blocks.g` |
 
@@ -549,7 +562,13 @@ Whatever the verdict, record:
 
 **Galois action.** §7.3 notes that the matcher tests raw cyclotomic equality, not Galois-quotient equivalence. This is the correct choice for our application (the orbifold construction produces a specific Galois conjugate), but it would need relaxation for a hypothetical Galois-quotient MTC isomorphism class question.
 
-**Cross-validation in the disagreement case.** The disagreement triage of §8.4 has not been exercised on a real disagreement, by design: both pipelines are still being built out, and the \(m = 3\) anchor is the first place a genuine double-pipeline check can occur. The protocol is therefore aspirational at time of writing, to be refined as actual data accumulates.
+**Cross-validation in the disagreement case.** The disagreement triage of §8.4 has not been exercised on a real disagreement. The \(m = 3\) anchor is the first place a genuine double-pipeline check has been completed: both K-4a (via `K4aClassify(3) = "trivial"`, PR #224) and D-VAN (via `ResIsTrivialOnDetectingFamily(3, \cdot) = true` on each of the 35 basis vectors, PR #205) agree at \(m = 3\) on the known-untwisted ground truth. The protocol therefore has its first joint anchor; refinement of the triage flow with real disagreement data must wait until either \(m = 5\) or a constructed false-positive \(\omega\) is fed through.
+
+**Sparse `trace_on_W` performance at \(m = 5, 7\).** The trace-only / character-orthogonality reformulation of `BuildKRRSpectralCharacters` (issue #220, in flight) is the gating performance question for K-4a at \(m = 5\) and \(m = 7\). The math is standard (decompose a representation into irreps via traces in cyclotomic arithmetic), but the engineering — exposing \(\mathrm{Tr}(T_h^j)\) without materialising the full \(2^{2k}\)-entry \(T_h\) matrix — is non-trivial; the acceptance target is \(<30\) min total for all class reps at \(m = 5\) per the issue's spec.
+
+**A-5b batched back-substitution (#177, R2-3 series).** The current bottleneck in the \(E_+(5)\) kernel sweep is concentrated in `IsCoboundary2Mod2WithLiftVec`'s back-substitution loop. A live perf sample on the production sweep shows \(\approx 99.7\%\) interpreter overhead in the inner loop; PRs #221 (`BocksteinH1ToH2`) and #225 (`IsCoboundary2Mod2WithLiftWitness`) replaced the nested for-loops with `KroneckerProduct`, and a batched back-substitution variant is being prepared as the next R2-3 follow-up. This is in the \(\ker(\mathrm{Tr})\) infrastructure, not the methodology pipelines themselves; it gates D-VAN \(m = 5\) (Gate 1E).
+
+**`BoundaryMatrixGF2` vectorisation.** A separate optimisation, distinct from the `KroneckerProduct` route in #221/#225, targets `BoundaryMatrixGF2` in the structured solver. The expected speedup is modest but combinatorial in the chain of upstream calls; tracked as a follow-up to #221.
 
 ### 9.3 Limitations
 
