@@ -17,6 +17,7 @@
   "test_fsi_wrapper":                  {"wall_s_median": 0, "wall_s_runs": []},
   "test_fusion_coefficient":           {"wall_s_median": 0, "wall_s_runs": []},
   "test_gauge_invariants":             {"wall_s_median": 0, "wall_s_runs": []},
+  "test_hap_lhs_resolution":           {"wall_s_median": 0, "wall_s_runs": []},
   "test_integral_bockstein":           {"wall_s_median": 0, "wall_s_runs": []},
   "test_integral_cohomology":          {"wall_s_median": 0, "wall_s_runs": []},
   "test_krr_full_s_t":                 {"wall_s_median": 0, "wall_s_runs": []},
