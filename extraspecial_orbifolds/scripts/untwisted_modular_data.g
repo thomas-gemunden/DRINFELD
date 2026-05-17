@@ -84,10 +84,101 @@ BuildSimpleIndex := function(G)
     );
 end;;
 
+# ============================================================
+# Lazy variant — K-2c (#129)
+# ============================================================
+#
+# `BuildSimpleIndexLazy(G)` returns the same record shape as
+# `BuildSimpleIndex(G)` but defers the per-class CharacterTable builds
+# (and therefore `ct_centraliser[i]`, `cc_centraliser[i]`, `irreps[i]`,
+# `irrep_dims[i]`) until the FIRST access to that class. For E_+(7) the
+# eager version hits GAP's memory limit during cumulative CT builds for
+# ~16K classes; the single-query `SKeller(7, i, j)` path only ever needs
+# CTs for 2 classes (c1 and c2), so the lazy variant cuts the CT count
+# from O(|classes|) to O(1) per query.
+#
+# Eager fields (same cost as the non-lazy version):
+#   classes, reps, class_sizes, centralisers, num_irreps,
+#   global_offset, global_to_local, rank
+#
+# Lazy fields (each is a length-|classes| list initialised to `fail`;
+#   populated by `_EnsureClassData` on first access):
+#   ct_centraliser, cc_centraliser, irreps, irrep_dims
+#
+# `is_lazy := true` marker lets the accessors below auto-materialise.
+#
+# REMAINING BOTTLENECK at m=7: `BuildTransports` still iterates all
+# classes eagerly. The K-2 acceptance test (Test C) sees that ~20 min
+# cache build of which the CT portion is dominant, but transports are
+# also non-trivial at |G| = 32768 × 16K classes. Lazy transports are a
+# follow-up; tracked in #129 as Path 1's next step.
+BuildSimpleIndexLazy := function(G)
+    local classes, reps, class_sizes, centralisers, num_irreps,
+          global_offset, rank, glob_to_local, idx, i, k;
+    classes := ConjugacyClasses(G);
+    reps := List(classes, Representative);
+    class_sizes := List(classes, Size);
+    centralisers := List(reps, x -> Centralizer(G, x));
+    # NrConjugacyClasses is enough for global offsets — cheaper than
+    # the full CharacterTable build that `BuildSimpleIndex` does eagerly.
+    num_irreps := List(centralisers, NrConjugacyClasses);
+    rank := Sum(num_irreps);
+    global_offset := [0];
+    for i in [1..Length(num_irreps) - 1] do
+        global_offset[i + 1] := global_offset[i] + num_irreps[i];
+    od;
+    glob_to_local := [];
+    idx := 0;
+    for i in [1..Length(classes)] do
+        for k in [1..num_irreps[i]] do
+            idx := idx + 1;
+            glob_to_local[idx] := [i, k];
+        od;
+    od;
+    return rec(
+        group := G,
+        order := Order(G),
+        classes := classes,
+        reps := reps,
+        class_sizes := class_sizes,
+        centralisers := centralisers,
+        # Lazy fields — `fail` until first `_EnsureClassData` for this i.
+        ct_centraliser := List([1..Length(classes)], _ -> fail),
+        cc_centraliser := List([1..Length(classes)], _ -> fail),
+        irreps         := List([1..Length(classes)], _ -> fail),
+        irrep_dims     := List([1..Length(classes)], _ -> fail),
+        num_irreps := num_irreps,
+        global_offset := global_offset,
+        global_to_local := glob_to_local,
+        rank := rank,
+        is_lazy := true
+    );
+end;;
+
+# Materialise the per-class CharacterTable data for class i. No-op if
+# already materialised, or if `idx` is the eager version (no `is_lazy`).
+_EnsureClassData := function(idx, i)
+    local ct, cc, irr;
+    if not IsBound(idx.is_lazy) or idx.is_lazy = false then
+        return;
+    fi;
+    if idx.ct_centraliser[i] <> fail then
+        return;
+    fi;
+    ct := CharacterTable(idx.centralisers[i]);
+    cc := ConjugacyClasses(ct);
+    irr := Irr(ct);
+    idx.ct_centraliser[i] := ct;
+    idx.cc_centraliser[i] := cc;
+    idx.irreps[i] := irr;
+    idx.irrep_dims[i] := List(irr, chi -> chi[1]);
+end;;
+
 # Position of element x within ConjugacyClasses(C) (where C = centraliser).
 # Used to look up character values.
 ClassIndexInCentraliser := function(idx, i, x)
     local cc, j;
+    _EnsureClassData(idx, i);
     cc := idx.cc_centraliser[i];
     for j in [1..Length(cc)] do
         if x in cc[j] then return j; fi;
@@ -97,6 +188,7 @@ end;;
 
 # Evaluate the k-th irrep of C_G(g_i) at element x ∈ C_G(g_i).
 EvalIrr := function(idx, i, k, x)
+    _EnsureClassData(idx, i);
     return idx.irreps[i][k][ClassIndexInCentraliser(idx, i, x)];
 end;;
 
@@ -108,6 +200,10 @@ ComputeUntwistedT := function(idx)
     local Tdiag, i, k, glob, ki, dim, val;
     Tdiag := [];
     for i in [1..Length(idx.classes)] do
+        # ClassIndexInCentraliser already calls _EnsureClassData for lazy
+        # idxs, but we read irrep_dims / irreps directly below, so trigger
+        # materialisation here too (no-op for eager idxs).
+        _EnsureClassData(idx, i);
         ki := ClassIndexInCentraliser(idx, i, idx.reps[i]);
         for k in [1..idx.num_irreps[i]] do
             dim := idx.irrep_dims[i][k];
