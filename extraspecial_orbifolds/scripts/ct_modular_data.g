@@ -116,7 +116,7 @@ _CTComputeSBlock := function(intertwiner_data, i, j)
     local idx, transport, M, Ni, Nj, elts_i, elts_j, ts_i, ts_j,
           ai, bi, a, b, t_a, s_b, b_tilde, a_tilde, k, l, ord,
           cen_i_elts, c, elt_to_idx_j, eps, eps_chi_b, chi2_val,
-          g_i, g_j;
+          g_i, g_j, t_i, t_j;
 
     idx := intertwiner_data.idx;
     transport := intertwiner_data.transport;
@@ -125,12 +125,16 @@ _CTComputeSBlock := function(intertwiner_data, i, j)
     Ni := idx.num_irreps[i];
     Nj := idx.num_irreps[j];
     M := List([1..Ni], k -> List([1..Nj], l -> 0));
-    elts_i := transport[i].elements;
-    elts_j := transport[j].elements;
-    ts_i := transport[i].t_of;
-    ts_j := transport[j].t_of;
+    # K-2c (#129): route per-class reads through GetTransport so this
+    # block worker handles both eager and lazy transport lists.
+    t_i := GetTransport(transport, idx, i);
+    t_j := GetTransport(transport, idx, j);
+    elts_i := t_i.elements;
+    elts_j := t_j.elements;
+    ts_i := t_i.t_of;
+    ts_j := t_j.t_of;
     cen_i_elts := AsList(idx.centralisers[i]);
-    elt_to_idx_j := transport[j].elt_to_idx;
+    elt_to_idx_j := t_j.elt_to_idx;
     ord := idx.order;
 
     if Length(elts_j) <= Length(cen_i_elts) then

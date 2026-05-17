@@ -101,11 +101,12 @@ SKellerRebuildCache := function(m)
     local t0, Gbuilt, idata, entry, key;
     t0 := Runtime();
     Gbuilt := SKellerBuildEmAsPcOrPerm(m);
-    # K-2c (#129): use the lazy intertwiner data so that CharacterTable
-    # builds happen on-demand per class (only c1 and c2 for a single
-    # SKeller(m, i, j) call) rather than eagerly for every class. At
-    # m=7 this should turn the CT portion of cache build from minutes
-    # into O(1) per query. Note: BuildTransports is still eager.
+    # K-2c (#129): use the lazy intertwiner data so that both the
+    # CharacterTable builds AND the per-class transport BFS happen on-
+    # demand per class (only c1 and c2 for a single SKeller(m, i, j)
+    # call) rather than eagerly for every class. At m=7 this turns the
+    # cache build from minutes into O(1) per query and the per-query
+    # cost into O(|G|) for the two queried classes.
     idata := BuildIntertwinerDataUntwistedLazy(Gbuilt.group);
     entry := rec(
         group := Gbuilt.group,
