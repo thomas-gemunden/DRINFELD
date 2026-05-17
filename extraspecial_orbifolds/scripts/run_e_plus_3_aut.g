@@ -172,7 +172,8 @@ if A3D_FULL_AUTNT then
     t_fc := Runtime();;
     N_cache_size := 64;;
     N_oracle := MakeStreamingFusionOracle(md.S,
-                    rec(cache_size := N_cache_size));;
+                    rec(cache_size := N_cache_size,
+                        integer_path := true));;
     t_fc_wall := (Runtime() - t_fc) / 1000.;;
     Print("MakeStreamingFusionOracle (cache_size=",
           N_cache_size, ") wall: ", t_fc_wall, " s\n");
