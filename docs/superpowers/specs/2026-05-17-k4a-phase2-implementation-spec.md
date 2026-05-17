@@ -2,10 +2,29 @@
 
 **Date:** 2026-05-17
 **Workstream prefix:** K-4a
-**Status:** Design (this doc); see issue tree below for implementation tracking.
+**Status:** Design (this doc); amended 2026-05-17 post-T4a (see Amendment below).
 **Parent EPIC:** #187 (K-4)
-**Phase 1 (in progress):** T1 #192 (Q_8 classifier), T3 #195 (Abelian E closed-form), T4a #196 (ε_a math derivation)
-**Phase 2 (this doc):** T2 #194, T4b #197, T5a #198, T5b #199, T6 #200, T7 #201
+**Phase 1 (shipped):** T1 #192 (Q_8 classifier), T3 #195 (Abelian E closed-form), T4a #196 (ε_a math derivation)
+**Phase 2 (this doc):** T2 #194, ~~T4b #197~~ (downscoped), **T4c #208** (new), T5a #198, T5b #199, T6 #200, T7 #201
+
+## Amendment 2026-05-17 (post-T4a)
+
+K-4a-T4a (#196, PR #206) concluded that **ε ≡ 1 is the correct gauge choice** for KRR's CT case. CGR §5.2 (eqs 5.18-5.22) shows the modular data is independent of the ε_a choice up to relabelling of characters χ. The Rayleigh-quotient hypothesis from #196 was tested and falsified at m=3 (KRR's explicit formula 4.4.7 shows the vacuum vector is not a simultaneous eigenvector of all T_h).
+
+**Phase 2 task restructure**:
+
+| Original | Status post-T4a |
+|----------|-----------------|
+| T4b (#197) — Implementation: ε_a callable | Downscoped to a one-liner `epsilon := function(g1, g2, a, b) return 1; end`. Lives inline in T5b's epsilon wiring; no separate file. |
+| **(new) T4c (#208)** — Spectral `trace_on_W` from KRR lattice intertwiners | Now the actual critical-path implementation. Replaces the substantive part of T4b. Implements `BuildKRRSpectralCharacters(m)` — joint eigendecomposition of {T_h} on each W_a, character matching to `Irr(C_G(a))`. |
+| T5b (#199) — CT modular data | Largely unchanged. With ε ≡ 1, σ(h\|g) = ε_h(g) · ε_g(h) = 1; the existing `ProjectorFormula` works as-is. The lattice content moves into `trace_on_W` (T4c output). |
+| T5a (#198), T6 (#200), T7 (#201) | Unchanged shape; consume T4c output instead of T4b output. |
+
+**Where the lattice content actually lives**: T4c. K-4a's substantive math is in `BuildKRRSpectralCharacters` — identifying which character χ each twisted-module piece corresponds to via joint eigendecomposition of {T_h : h ∈ generators of C_G(a)}.
+
+**Anchor**: K-3 (#40) confirms ε ≡ 1 + standard `Irr(C_G(a))` characters reproduce S^0 at m=3 (re-verified 2026-05-17, 295,360 entries, 0 mismatches). T4c's m=3 anchor (subsuming T7) will additionally confirm KRR's spectral characters match standard characters up to permutation (forced by α=0 at m=3 per Keller).
+
+The spec body below predates this amendment; the design described there remains the reference architecture, with the substitutions in the table above applied.
 
 ## Goal
 
