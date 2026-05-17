@@ -24,9 +24,13 @@
 #   1. Build E_+(3) as a pc-group via BRWH3Action(3).em (cached).
 #   2. Compute untwisted modular data (S, T) via
 #      ComputeUntwistedModularData; rank = 2272.
-#   3. Compute fusion coefficients N := FusionCoefficientsFromS(S)
-#      and quantum dimensions QD := QuantumDimensionsFromS(S).
-#   4. Run AutNT(N, T, QD) (V-5c) to get |Aut(N^0, T^0)|.
+#   3. Build a STREAMING fusion oracle (A-3d / #45 sparse refactor) on
+#      top of S — Verlinde rows are computed on demand from S via the
+#      P-4 matrix-multiply form and cached in a bounded LRU.  This
+#      avoids materialising the dense O(r^3) tensor (~94 GB at r=2272)
+#      that PR #181 left as the blocker.  Compute quantum dimensions
+#      QD := QuantumDimensionsFromS(S).
+#   4. Run AutNT(N_oracle, T, QD) (V-5c) to get |Aut(N^0, T^0)|.
 #   5. Compute the BRW lower bound and assert
 #      |Aut| >= |BRW(3)/E_+(3)|.
 #   6. Persist result to computed/aut_nt/3/untwisted.g.
@@ -47,6 +51,7 @@ fi;
 
 Read("untwisted_modular_data.g");
 Read("aut_nt_partition.g");
+Read("fusion_oracle.g");      # A-3d (#45): streaming N rows for r=2272
 Read("aut_nt_refine.g");
 Read("aut_nt.g");
 Read("brw_h3_action.g");      # for BRWH3Action(3).em (pc-group form)
@@ -104,29 +109,40 @@ for pair in Tcollect do
 od;
 
 # ----------------------------------------------------------------------
-# Step 3: fusion coefficients + quantum dimensions.
+# Step 3: streaming fusion oracle + quantum dimensions.
 #
-# FusionCoefficientsFromS uses the P-4/#113 native matrix-multiply
-# reformulation: per i build M_i = S * diag(S[i] / S[1]) * Sbar^T via
-# GAP's native matmul. Per-i cost O(r^3); total O(r^4).
-# For r = 2272 this is ~5.3e13 mult-ops in native code.
+# A-3d (#45) sparse refactor.  Instead of materialising the full
+# O(r^3) fusion tensor (~94 GB at r = 2272) we build a streaming
+# oracle that computes one row N_i = S * diag(S[i]/S[1]) * Sbar^T
+# on demand and caches a bounded number of rows in an LRU.  Memory
+# is O(cache_size * r^2); each cache miss costs one matmul.  See
+# `fusion_oracle.g`.
+#
+# The cache size below controls the memory-vs-recompute tradeoff.
+# A larger cache reduces recomputation inside the AutNT search but
+# uses more RAM.  Default 64 trades ~32 GB of cached rows against
+# repeated row recomputes in the refinement passes (see acceptance-
+# criterion test_a3d_sparse_fusion.g for the microbench rationale).
 # ----------------------------------------------------------------------
 
-Print("\n--- Step 3: fusion coefficients + quantum dimensions ---\n");
+Print("\n--- Step 3: streaming fusion oracle + quantum dimensions ---\n");
 
 t_qd := Runtime();;
 QD := QuantumDimensionsFromS(md.S);;
 t_qd_wall := (Runtime() - t_qd) / 1000.;;
 Print("QuantumDimensionsFromS wall: ", t_qd_wall, " s\n");
 
-Print("Computing fusion coefficients N (this is the big O(r^4) step)...\n");
 t_fc := Runtime();;
-N_fusion := FusionCoefficientsFromS(md.S);;
+N_cache_size := 64;;
+N_oracle := MakeStreamingFusionOracle(md.S,
+                rec(cache_size := N_cache_size));;
 t_fc_wall := (Runtime() - t_fc) / 1000.;;
-Print("FusionCoefficientsFromS wall: ", t_fc_wall, " s\n");
+Print("MakeStreamingFusionOracle (cache_size=",
+      N_cache_size, ") wall: ", t_fc_wall, " s\n");
+Print("oracle.rank = ", N_oracle.rank, "\n");
 
-Assert(0, Length(N_fusion) = md.idx.rank,
-       "FusionCoefficientsFromS returned wrong dimension");
+Assert(0, N_oracle.rank = md.idx.rank,
+       "Streaming oracle rank disagrees with idx.rank");
 
 # ----------------------------------------------------------------------
 # Step 4: AutNT.
@@ -140,14 +156,15 @@ Assert(0, Length(N_fusion) = md.idx.rank,
 # even with skip_generators, we'd lose nothing essential.
 # ----------------------------------------------------------------------
 
-Print("\n--- Step 4: AutNT(N, T, QD) ---\n");
+Print("\n--- Step 4: AutNT(N_oracle, T, QD) ---\n");
 
 t_aut := Runtime();;
-aut_result := AutNT(N_fusion, md.T, QD);;
+aut_result := AutNT(N_oracle, md.T, QD);;
 t_aut_wall := (Runtime() - t_aut) / 1000.;;
 Print("AutNT wall: ", t_aut_wall, " s\n");
 Print("|Aut(N^0, T^0)| = ", aut_result.order, "\n");
 Print("# generators returned: ", Length(aut_result.generators), "\n");
+Print("Oracle stats: ", FusionOracle_StatsString(N_oracle), "\n");
 
 # ----------------------------------------------------------------------
 # Step 5: BRW lower bound + assertion.
@@ -237,7 +254,7 @@ PrintTo(stream,
     "#   BRWH3Action(3).em (pc form)   : ", String(t_em_wall), " s\n",
     "#   ComputeUntwistedModularData  : ", String(t_md_wall), " s\n",
     "#   QuantumDimensionsFromS       : ", String(t_qd_wall), " s\n",
-    "#   FusionCoefficientsFromS      : ", String(t_fc_wall), " s\n",
+    "#   MakeStreamingFusionOracle    : ", String(t_fc_wall), " s\n",
     "#   AutNT                        : ", String(t_aut_wall), " s\n",
     "#   BRW(3) + order               : ", String(t_brw_lb_wall), " s\n",
     "#   TOTAL                        : ", String(total_wall), " s\n",
@@ -277,13 +294,13 @@ PrintTo(stream,
     "    generators_count   := ", n_gens_persisted, ",\n",
     "    generators         := ", aut_result.generators, ",\n",
     "    timings            := rec(\n",
-    "        brwh3_action_em   := ", t_em_wall, ",\n",
-    "        compute_md        := ", t_md_wall, ",\n",
-    "        quantum_dim       := ", t_qd_wall, ",\n",
-    "        fusion_coeffs     := ", t_fc_wall, ",\n",
-    "        aut_nt            := ", t_aut_wall, ",\n",
-    "        brw_lower         := ", t_brw_lb_wall, ",\n",
-    "        total             := ", total_wall, "\n",
+    "        brwh3_action_em       := ", t_em_wall, ",\n",
+    "        compute_md            := ", t_md_wall, ",\n",
+    "        quantum_dim           := ", t_qd_wall, ",\n",
+    "        fusion_oracle_build   := ", t_fc_wall, ",\n",
+    "        aut_nt                := ", t_aut_wall, ",\n",
+    "        brw_lower             := ", t_brw_lb_wall, ",\n",
+    "        total                 := ", total_wall, "\n",
     "    )\n",
     ");;\n");
 CloseStream(stream);
