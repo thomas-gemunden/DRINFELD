@@ -207,7 +207,7 @@ K4AAssertEqual(
 
 # Timing record sanity.
 K4AAssertTrue("T2: timing.wall_seconds > 0",
-              K4A_T2_RES.timing.wall_seconds > 0);
+              K4A_T2_RES.timing.wall_seconds > 0.0);
 K4AAssertTrue("T2: per-branch timings present",
               IsBound(K4A_T2_RES.timing.E_branch)
               and IsBound(K4A_T2_RES.timing.D8_branch)
