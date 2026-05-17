@@ -96,7 +96,8 @@ end;;
 
 BuildPerClassCocycleBasis := function(setup, gRep, C)
     local key, elts, n, basis, k, exp, R, ncells, table, idx_map,
-          a, b, r, i, ChainAt, v1, v2, v3, contrib, result;
+          a, b, r, i, ChainAt, v1, v2, v3, contrib, result,
+          r_half, table_gf2, row, one_gf2;
 
     key := Concatenation("G", _SafeIdString(setup.group),
                          "_g", String(gRep),
@@ -150,8 +151,30 @@ BuildPerClassCocycleBasis := function(setup, gRep, C)
     # interpreter loop. At m=5 with n² = 1M rows × k = 165 cols, the matmul
     # is ~165M ops; the compiled path is ~10x the interpreted one.
     ConvertToMatrixRep(table);
-    result := rec(C := C, table := table, elts := elts, n := n,
-                  idx_map := idx_map);
+    # A-5b R2-8 (#258 + #266 follow-up): precompute the GF(2) bit-r-extracted
+    # view of `table` for the Path A reduction in
+    # PerVecTransgressionShared in the unified driver.
+    #
+    # Path A (vec_target[exp_index]=0) needs only
+    # `bit_{log2(r)}` of (table * vec_target mod exp). Order-2 basis
+    # cocycle values are in {0, r} ⊂ Z/exp, so for order-2 columns
+    # k != exp_index, vec_target[k]*table[i][k] mod exp ∈ {0, r}, and
+    # bit_{log2(r)} of the sum reduces (over GF(2)) to
+    #   sum_k (vec_target[k] mod 2) * bit_{log2(r)}(table[i][k]).
+    # The order-4 column (k = exp_index) is zeroed by the Path A
+    # precondition `vec_target[exp_index] = 0`, so its bit pattern
+    # doesn't matter. This single compiled GF(2) matvec replaces the
+    # 1M-int `table * vec_target` allocation + the bit-extract List
+    # comprehension on the Path A hot path.
+    #
+    # Formula generalises across exp = 2 (r=1, bit_0) and exp = 4 (r=2, bit_1).
+    r_half := exp / 2;   # = 1 at exp=2 (bit_0), 2 at exp=4 (bit_1), 4 at exp=8 (bit_2), ...
+    one_gf2 := One(GF(2));
+    table_gf2 := List(table, row ->
+        List(row, x -> (QuoInt(x, r_half) mod 2) * one_gf2));
+    ConvertToMatrixRep(table_gf2, GF(2));
+    result := rec(C := C, table := table, table_gf2 := table_gf2,
+                  elts := elts, n := n, idx_map := idx_map);
     _basis_cache_by_class.(key) := result;
     return result;
 end;;
