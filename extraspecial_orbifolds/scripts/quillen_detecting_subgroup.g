@@ -401,6 +401,53 @@ D8Section_E_plus := function(m)
                 note := "D_8 = E_+(1) section" );
 end;;
 
+# ---- Q_8 section -------------------------------------------------------
+#
+# A Q_8 = E_-(1) section of E_+(m) exists for m >= 2 (E_+(2) has 2
+# conjugacy classes of Q_8 subgroups; E_+(3) has 56; counts grow with
+# m). For m = 1, E_+(1) = D_8 contains no Q_8, so the function errors.
+#
+# Why Q_8 sections matter (#154 / #153): the cyclic summand A(4) of
+# H^3(E_+(m); U(1)) has order Z/4 at m >= 3 (Z/8 at m = 2). Restriction
+# to D_8 sections kills the order-2 sub-element 2 * A(4)_gen (the
+# Harada-Kono transfer-restriction obstruction). Q_8 has H^3(Q_8; U(1))
+# = Z/8, is NOT a Q-isotropic preimage, and empirically detects
+# 2 * A(4)_gen faithfully. So {E, D_8, Q_8} is the AM04-style detecting
+# family on which Z(Vec_G^omega) -triviality can be read off.
+#
+# Convention. We pick the FIRST Q_8 conjugacy class representative
+# returned by ConjugacyClassesSubgroups, mirroring `D8Section_E_plus`'s
+# canonical choice. Multiple non-conjugate Q_8 sections exist for m
+# >= 2; under the AM04 detecting-family injectivity claim (issue #193),
+# any single representative gives the same triviality verdict on
+# H^3(G; U(1)).
+#
+# Mirrors the structure of `D8Section_E_plus`. Q_8 is `SmallGroup(8,4)`
+# in GAP's catalogue, so the IdGroup filter is `[8, 4]`.
+Q8Section_E_plus := function(m)
+    local G, maxsub, candidates, H;
+    G := EPlusGroup(m);
+    if m = 1 then
+        Error("Q8Section_E_plus: E_+(1) = D_8 contains no Q_8 ",
+              "subgroup; Q_8 sections only exist for m >= 2");
+    fi;
+    # Find a Q_8 subgroup. Subgroups of order 8 in E_+(m) that are
+    # nonabelian and isomorphic to Q_8 (SmallGroup(8, 4)).
+    maxsub := List(ConjugacyClassesSubgroups(G), Representative);
+    candidates := Filtered(maxsub, S -> Order(S) = 8
+                                    and not IsAbelian(S)
+                                    and IdGroup(S) = [8, 4]);
+    if Length(candidates) = 0 then
+        Error("Q8Section_E_plus: no Q_8 section found in E_+(", m, ")");
+    fi;
+    H := candidates[1];
+    return rec( parent := G,
+                subgroup := H,
+                m := m,
+                order := Order(H),
+                note := "Q_8 = E_-(1) section" );
+end;;
+
 # ---- H^3 of the detecting subgroup ------------------------------------
 #
 # Compute H^3(E; Z) where E is the maximal elementary abelian rank-(m+1)
