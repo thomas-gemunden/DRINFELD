@@ -396,7 +396,27 @@ for orb_info in orbits_data do
 od;
 
 # Build per-orbit cocycle-basis caches.
-Print("Building per-orbit cocycle-basis caches...\n");
+#
+# A-7-perf-1 (#271): we use BuildPerClassCocycleBasisForOrbit, which
+# (a) builds the rep cache via brute force (one Syzygy chain per (a, b)
+#     pair in C(rep)),
+# (b) for each sibling target_idx in the orbit, transports the rep table
+#     via the BRW path's cumulative H^3 matrix + phi_path-induced
+#     permutation, and stores the result in _basis_cache_by_class.
+#
+# At m=2 / m=3 the rep-cache cost is small; the transport population
+# is mostly a convenience for downstream code that calls
+# BuildPerClassCocycleBasis per class (e.g. TransgressionKernelExact).
+#
+# The inner per-vec loop below (PerVecTransgressionShared) still uses
+# orbit_caches[oi] (the rep cache) + H3VecAtTarget to transport the
+# vec; not the per-class siblings. This keeps the BRW-symmetry path
+# unchanged at the cocycle-level boolean answer. The two paths
+# disagree on the COCYCLE-level table (transport differs by a
+# 2-coboundary on C(sib), invisible to IsCoboundary2Split), but the
+# driver's inner loop and the transport-built sibling caches both
+# give the SAME boolean coboundary answer for any vec.
+Print("Building per-orbit cocycle-basis caches (with sibling transport)...\n");
 t_caches := Runtime();;
 orbit_caches := [];;
 for orb_info in orbits_data do
@@ -404,24 +424,40 @@ for orb_info in orbits_data do
     C := Centralizer(G, rep);
     Print("  orbit start ", orb_info.start_idx, " (|C| = ", Order(C),
           ", n*n*k = ", Order(C)^2 * k,
-          ", rep order = ", Order(rep), ") ... ");
+          ", rep order = ", Order(rep),
+          ", orbit size ", Length(orb_info.orbit), ") ... ");
     t_one := Runtime();
     if IsOne(rep) then
+        # Identity class: c_g(h, k) = omega(id, h, k) - omega(h, id, k)
+        # + omega(h, k, id) = 0 for normalized omega. Build an
+        # all-zero table without the n²·k Syzygy chain.
         cache_elts := AsList(C);
         cache_n := Length(cache_elts);
         cache_table := List([1..cache_n * cache_n],
                             r -> List([1..k], i -> 0));
+        ConvertToMatrixRep(cache_table);
         cache_idx_map := NewDictionary(cache_elts[1], true, cache_elts);
         for cache_a in [1..cache_n] do
             AddDictionary(cache_idx_map, cache_elts[cache_a], cache_a);
         od;
+        # GF(2) view: also all zero.
+        cache_table_gf2 := List([1..cache_n * cache_n],
+                                 r -> List([1..k], i -> Zero(GF(2))));
+        ConvertToMatrixRep(cache_table_gf2, GF(2));
+        # Identity class is a singleton orbit at m=2, 3, 5, 7; no
+        # sibling transport needed.
         Add(orbit_caches, rec(C := C, table := cache_table,
+                               table_gf2 := cache_table_gf2,
                                elts := cache_elts, n := cache_n,
                                idx_map := cache_idx_map));
         Print((Runtime() - t_one) / 1000., " s (degenerate, identity class)\n");
     else
-        Add(orbit_caches, BuildPerClassCocycleBasis(setup, rep, C));
-        Print((Runtime() - t_one) / 1000., " s\n");
+        # Non-identity orbit: build rep cache + sibling transport caches.
+        Add(orbit_caches,
+            BuildPerClassCocycleBasisForOrbit(setup, conj_action, orb_info,
+                                               h3_matrices_consistent));
+        Print((Runtime() - t_one) / 1000., " s (",
+              Length(orb_info.orbit), " classes via transport)\n");
     fi;
 od;
 Print("Per-orbit caches wall: ", (Runtime() - t_caches) / 1000., " s total\n");
