@@ -55,22 +55,75 @@
 # by r. So |Aut(N,T)| × r^4 total work. For r = 22 this is ~10^5;
 # for r = 184 it is ~10^9 in the worst case — slow but OK in GAP.
 #
+# A-3d (#45) sparse-N refactor.  At E_+(3) (rank 2272) the dense
+# Verlinde fusion tensor needs ~94 GB of memory, blocking AutNT
+# entirely.  AutNT now accepts either a dense 3D list (legacy) or a
+# fusion oracle record produced by `fusion_oracle.g`; the oracle
+# streams rows lazily from the S-matrix and caches a bounded number,
+# letting the full pipeline run within practical memory bounds.
+#
 # Globals installed by this file:
 #   AutNT(N, T, QD[, opts])     — main entry point.
 #   IsAutomorphismCandidate(σ, N) — verify σ preserves N.
+#
+# `N` may be a dense 3D list OR a fusion oracle record from
+# `fusion_oracle.g`.  When AutNT is called against E_+(3) (rank 2272,
+# A-3d / #45) the dense form needs ~94 GB; supply a streaming oracle
+# via `MakeStreamingFusionOracle(S, opts)` instead.
+
+if not IsBound(IsFusionOracle) then
+    # Same path-resolution dance as aut_nt_refine.g: prefer the path
+    # next to this .g file so we can be Read from any cwd.
+    _aut_nt_fo := fail;;
+    if INPUT_FILENAME() <> fail
+       and INPUT_FILENAME() <> "stream"
+       and INPUT_FILENAME() <> "*stdin*"
+       and Length(INPUT_FILENAME()) > Length("/aut_nt.g") then
+        _aut_nt_fo := Concatenation(
+            INPUT_FILENAME(){[1..Length(INPUT_FILENAME())
+                              - Length("/aut_nt.g")]},
+            "/fusion_oracle.g");
+    fi;
+    if _aut_nt_fo <> fail
+       and IsExistingFile(_aut_nt_fo) then
+        Read(_aut_nt_fo);
+    elif IsExistingFile("fusion_oracle.g") then
+        Read("fusion_oracle.g");
+    elif IsExistingFile("../fusion_oracle.g") then
+        Read("../fusion_oracle.g");
+    else
+        Error("aut_nt.g: cannot locate fusion_oracle.g; please Read ",
+              "fusion_oracle.g explicitly before this file (or run ",
+              "from extraspecial_orbifolds/scripts/).");
+    fi;
+fi;
 
 # ---- Verification ----------------------------------------------------
+#
+# Compares N_{σ(i),σ(j)}^{σ(k)} against N_{ij}^k by streaming row-by-row.
+# Cost: r^3 individual probes.  For an oracle backend the row of the
+# image side is fetched once per i; the cost is dominated by oracle
+# .row computations + r^2 entry comparisons per row.
 
 IsAutomorphismCandidate := function(sigma, N)
-    local r, i, j, k;
+    local r, i, j, k, oracle, row_i, row_si;
     r := Length(sigma);
-    if Length(N) <> r then
+    # Wrap dense lists into a dense oracle for uniform access.  This is
+    # a thin shim — no copy happens.
+    if IsFusionOracle(N) then
+        oracle := N;
+    else
+        oracle := MakeDenseFusionOracle(N);
+    fi;
+    if oracle.rank <> r then
         return false;
     fi;
     for i in [1 .. r] do
+        row_i := oracle.row(i);
+        row_si := oracle.row(sigma[i]);
         for j in [1 .. r] do
             for k in [1 .. r] do
-                if N[sigma[i]][sigma[j]][sigma[k]] <> N[i][j][k] then
+                if row_si[sigma[j]][sigma[k]] <> row_i[j][k] then
                     return false;
                 fi;
             od;
@@ -375,7 +428,12 @@ end;
 
 # ---- Main entry point ------------------------------------------------
 # AutNT(N, T, QD[, opts])
-#   N      : fusion ring as 3D list.
+#   N      : fusion ring as either
+#              * a 3D list of non-negative integers (the legacy form), or
+#              * a fusion oracle record (from `fusion_oracle.g`).  The
+#                oracle streams rows lazily from S; use this form at
+#                E_+(3) (rank 2272) where the dense tensor would need
+#                ~94 GB.  See `MakeStreamingFusionOracle(S, opts)`.
 #   T      : T-vector (list of cyclotomics).
 #   QD     : quantum-dimension vector.
 #   opts   : optional record. Fields:
@@ -389,12 +447,12 @@ end;
 #              generators := list of σ as length-r lists).
 
 AutNT := function(arg)
-    local N, T, QD, opts, r, p0, p, sigma_partial, image_used,
-          order, generators;
+    local N_in, N, T, QD, opts, r, p0, p, sigma_partial, image_used,
+          order, generators, n_rank;
     if Length(arg) < 3 or Length(arg) > 4 then
         Error("AutNT: expected 3 or 4 arguments (N, T, QD[, opts]).");
     fi;
-    N := arg[1];
+    N_in := arg[1];
     T := arg[2];
     QD := arg[3];
     if Length(arg) = 4 then
@@ -412,8 +470,18 @@ AutNT := function(arg)
     if Length(QD) <> r then
         Error("AutNT: |T| = ", r, " but |QD| = ", Length(QD), ".");
     fi;
-    if Length(N) <> r then
-        Error("AutNT: |T| = ", r, " but |N| = ", Length(N), ".");
+    # Polymorphic on N_in: dense 3D list OR fusion oracle.  In the
+    # dense case Length(N_in) is the rank; in the oracle case the rank
+    # is N_in.rank.  We carry both through the recursion as `N`.
+    if IsFusionOracle(N_in) then
+        n_rank := N_in.rank;
+        N := N_in;
+    else
+        n_rank := Length(N_in);
+        N := N_in;
+    fi;
+    if n_rank <> r then
+        Error("AutNT: |T| = ", r, " but rank of N = ", n_rank, ".");
     fi;
     # Initial Aut(N, T)-invariant partition + stable refinement.
     p0 := InitialPartition(N, T, QD);

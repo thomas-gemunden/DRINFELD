@@ -24,17 +24,29 @@
 #       Verlinde-formula expansion N[i][j][k]; returns a 3D list of
 #       non-negative cyclotomic integers. The caller is responsible for
 #       sanity-checking integrality (we do so in the tests, not here).
+#       Memory cost is O(r^3); for r >= ~1000 prefer the streaming
+#       oracle path described below.
+#   FusionRowFromS(S, i)
+#       Computes only the i-th fusion row N_i (an r-by-r matrix with
+#       N_i[j][k] = N_{ij}^k) via the same matrix-multiply form used
+#       by FusionCoefficientsFromS.  Memory: O(r^2).  Use this when
+#       you want streamed-row access without materialising the full
+#       O(r^3) tensor.  See `fusion_oracle.g` for the higher-level
+#       streaming wrapper used by AutNT at E_+(3) (A-3d / #45).
 #   ColourFromPartition(r, partition)
 #       Inverse map: list of length r where colour[i] is the index of
 #       the block containing i (1-based). Errors if `partition` is not
 #       a partition of {1, ..., r}.
 #   FusionRowSignature(i, N, colour)
 #       The sorted multiset sig defined above (a GAP list, sorted).
+#       `N` may be a dense 3D list or a fusion oracle (see
+#       `fusion_oracle.g`); the function dispatches on type.
 #   RefineByFusion(partition, N)
 #       The main entry point. Iterates colour refinement to a fixed
 #       point; returns the refined partition, with blocks sorted by
 #       their representative's signature string (deterministic) and
-#       indices ascending inside each block.
+#       indices ascending inside each block.  `N` may be dense or a
+#       fusion oracle.
 #
 # The output partition `q` is a refinement of the input partition `p`:
 # every block of `q` is a subset of some block of `p`. The refinement
@@ -54,6 +66,44 @@
 # probes plus O(r^2 log r) sorting per row. For r ≤ ~10^3 this is
 # easily within seconds; backtracking (V-5c) will dominate at the
 # E_+(3) scale.
+
+# A-3d (#45) sparse refactor. RefineByFusion / FusionRowSignature now
+# also accept a fusion-oracle record from `fusion_oracle.g` (in lieu of
+# a dense N tensor). The oracle interface streams rows lazily and
+# caches a bounded number; this keeps memory at O(cache_size * r^2)
+# rather than O(r^3) at rank r = 2272 (E_+(3) untwisted modular data).
+# When the input is already a dense 3D list the behaviour is unchanged
+# (modulo the thin AsFusionOracle wrap).
+
+if not IsBound(IsFusionOracle) then
+    # Single-shot Read.  We try a few standard paths so that callers
+    # need not pre-load fusion_oracle.g themselves.  In existing tests
+    # the test driver Reads fusion_oracle.g explicitly (so this block
+    # is skipped); the fallback handles direct `Read("aut_nt_refine.g")`
+    # invocations from the scripts/ directory cwd.
+    _aut_nt_refine_fo := fail;;
+    if INPUT_FILENAME() <> fail
+       and INPUT_FILENAME() <> "stream"
+       and INPUT_FILENAME() <> "*stdin*"
+       and Length(INPUT_FILENAME()) > Length("/aut_nt_refine.g") then
+        _aut_nt_refine_fo := Concatenation(
+            INPUT_FILENAME(){[1..Length(INPUT_FILENAME())
+                              - Length("/aut_nt_refine.g")]},
+            "/fusion_oracle.g");
+    fi;
+    if _aut_nt_refine_fo <> fail
+       and IsExistingFile(_aut_nt_refine_fo) then
+        Read(_aut_nt_refine_fo);
+    elif IsExistingFile("fusion_oracle.g") then
+        Read("fusion_oracle.g");
+    elif IsExistingFile("../fusion_oracle.g") then
+        Read("../fusion_oracle.g");
+    else
+        Error("aut_nt_refine.g: cannot locate fusion_oracle.g; ",
+              "please Read fusion_oracle.g explicitly before this file ",
+              "(or run from extraspecial_orbifolds/scripts/).");
+    fi;
+fi;
 
 # ---- Verlinde formula -----------------------------------------------
 # N_{ij}^k = Σ_a (S[i][a] * S[j][a] * conj(S[k][a])) / S[1][a]
@@ -103,6 +153,39 @@ FusionCoefficientsFromS := function(S)
     return N;
 end;
 
+# ---- Single fusion row from S ----------------------------------------
+# Memory: O(r^2).  Same matrix-multiply form as the loop body in
+# FusionCoefficientsFromS, but returns just one row.  Useful when we
+# want to stream rows into RefineByFusion / AutNT without materialising
+# the full O(r^3) tensor (A-3d / #45).
+#
+# Returns: r-by-r list with FusionRowFromS(S, i)[j][k] = N_{ij}^k.
+
+FusionRowFromS := function(S, i)
+    local r, s1, Sbar_T, lambdas, a, S_scaled;
+    r := Length(S);
+    if r = 0 then
+        Error("FusionRowFromS: S is empty.");
+    fi;
+    if i < 1 or i > r then
+        Error("FusionRowFromS: index i = ", i,
+              " out of range [1..", r, "].");
+    fi;
+    s1 := S[1];
+    Sbar_T := TransposedMat(List(S, row -> List(row, ComplexConjugate)));
+    lambdas := [];
+    for a in [1 .. r] do
+        if s1[a] <> 0 then
+            lambdas[a] := S[i][a] / s1[a];
+        else
+            lambdas[a] := 0;
+        fi;
+    od;
+    S_scaled := List(S, row ->
+        List([1 .. r], a -> row[a] * lambdas[a]));
+    return S_scaled * Sbar_T;
+end;
+
 # ---- Partition <-> colouring -----------------------------------------
 ColourFromPartition := function(r, partition)
     local colour, b, i;
@@ -133,12 +216,20 @@ end;
 # small ranks, and SortedList gives a canonical representation.
 
 FusionRowSignature := function(i, N, colour)
-    local r, sig, j, k;
+    local r, sig, j, k, row;
     r := Length(colour);
+    # Polymorphic on N: dense 3D list OR fusion oracle (see
+    # `fusion_oracle.g`).  In both cases we fetch the i-th row once and
+    # iterate; for an oracle this triggers cached/streaming computation.
+    if IsFusionOracle(N) then
+        row := N.row(i);
+    else
+        row := N[i];
+    fi;
     sig := [];
     for j in [1 .. r] do
         for k in [1 .. r] do
-            Add(sig, [colour[j], colour[k], N[i][j][k]]);
+            Add(sig, [colour[j], colour[k], row[j][k]]);
         od;
     od;
     Sort(sig);
@@ -229,5 +320,5 @@ RefineByFusion := function(partition, N)
 end;
 
 Print("Loaded aut_nt_refine.g (RefineByFusion, RefineOnePass, ",
-      "FusionRowSignature, FusionCoefficientsFromS, ",
+      "FusionRowSignature, FusionCoefficientsFromS, FusionRowFromS, ",
       "ColourFromPartition, PartitionCanonical).\n");
