@@ -213,10 +213,19 @@ K4AAssertTrue("T2: per-branch timings present",
               and IsBound(K4A_T2_RES.timing.D8_branch)
               and IsBound(K4A_T2_RES.timing.Q8_branch));
 
-# ---- T3: error at m >= 4 -----------------------------------------------
+# ---- T3: deferral at m = 4 and m >= 6 ----------------------------------
+#
+# Post-cap-lift to m = 5 (K-4b m=5 production run, this PR): the
+# orchestrator now supports m in {2, 3, 5}; m = 4 errors out with the
+# "not in scope" message (BW(4) does not give a KRR Phi extension); m =
+# 6 errors as "not yet supported (m = 7 stub blocked on #236)". The
+# m = 5 case is exercised in `tests/test_k4a_classify_m5_smoke.g`
+# (post-run smoke against the persisted result file) — running it
+# end-to-end here would take ~30-40 minutes, so we do not exercise it
+# in the m = 3 anchor regression.
 
 Print("\n=================================================================\n");
-Print("T3: error at m >= 4 (pointing at issue #220)\n");
+Print("T3: deferral at m = 4 and m = 6 (m = 5 now supported)\n");
 Print("=================================================================\n");
 
 # CALL_WITH_CATCH is the GAP idiom for catching an Error inside a
@@ -232,12 +241,12 @@ BreakOnError := K4A_T3_OK_SAVE;;
 K4AAssertEqual("T3: K4aClassify(4) errored (caught, first slot = false)",
                K4A_T3_OUT[1], false);
 
-# Also call at m = 5 for the same expectation.
+# Also call at m = 6 for the same expectation (m = 7 stub block).
 BreakOnError := false;;
-K4A_T3_OUT5 := CALL_WITH_CATCH(K4aClassify, [5]);;
+K4A_T3_OUT6 := CALL_WITH_CATCH(K4aClassify, [6]);;
 BreakOnError := K4A_T3_OK_SAVE;;
-K4AAssertEqual("T3: K4aClassify(5) errored (caught)",
-               K4A_T3_OUT5[1], false);
+K4AAssertEqual("T3: K4aClassify(6) errored (caught)",
+               K4A_T3_OUT6[1], false);
 
 # ---- T4: optional m = 2 smoke test -------------------------------------
 
