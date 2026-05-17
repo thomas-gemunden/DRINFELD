@@ -68,8 +68,96 @@ end;;
 # subspace-membership testing.
 _IsCoboundary2Mod2_SemCache := [];;
 
+# R2-3 (#177): supplementary "batched" view of the same factorisation.
+# `pivot_cols` is the list of column indices that are pivots (= the
+# non-zero entries of sem.heads). `Y_full` is the rank × ncols GF(2) matrix
+# stacking sem.vectors in pivot-column-ascending order and reduced to
+# reduced row echelon form (each pivot column is canonical-basis-vector-
+# valued: 1 at the pivot row, 0 elsewhere). With these in hand, the
+# row-space-membership test "is b in row-space(M)?" becomes the matrix
+# identity
+#   b == b{pivot_cols} * Y_full   (mod the pivot bits which both sides
+#                                   share; equivalently:
+#                                   IsZero(b + b{pivot_cols} * Y_full))
+# (over GF(2), '-' and '+' coincide). This expresses the entire back-
+# substitution as a single compiled GF(2) matrix product `B_P * Y_full`
+# when batched across many RHSes; see IsCoboundary2Mod2VecBatch.
+#
+# CRITICAL: SemiEchelonMatTransformation returns rows in *semi-echelon*
+# form, where above-pivot entries may be non-zero (only below-pivot is
+# guaranteed zero). For the simple "c_k = b[p_k]" decomposition to hold,
+# we need the *reduced* row echelon form. We compute it via the cheap
+# back-substitution pass below — since sem.vectors is already in
+# semi-echelon, reducing to RREF only requires zeroing above-pivot
+# entries, which is O(rank^2 · ncols / 64) GF(2) work (well under a
+# second at rank ≤ 2048, ncols ≤ 4M) and done ONCE per cached sem.
+#
+# Note on the missing slice: we deliberately KEEP Y_full at rank × ncols
+# rather than slicing to rank × (ncols - rank). The slicing saves trivial
+# memory (rank << ncols typically) and the matmul `B_P * Y_full + B` has
+# the property that, at pivot columns, `(B_P * Y_full)[j][p_k] = B_P[j][k]
+# = B[j][p_k]`, so the XOR cancels and pivot columns of the residual are
+# zero by construction. The residual reduces to B_N + B_P * Y_N at
+# non-pivot columns, exactly the quantity we test for zero.
+_BuildBatchedSolverArtefacts := function(sem)
+    local nrows, ncols, nonzero_heads, pivot_cols, rank, Y_full,
+          k, k_prime, src_row, x;
+    nrows := Length(sem.vectors);
+    if nrows = 0 then
+        # Trivial: rank 0. sem.heads has length = cols of the matrix M
+        # we factorised. Build the empty artefacts so the caller can
+        # short-circuit on "is b zero?".
+        ncols := Length(sem.heads);
+        return rec(
+            pivot_cols := [],
+            Y_full     := [],
+            rank       := 0,
+            ncols      := ncols);
+    fi;
+    ncols := Length(sem.vectors[1]);
+    nonzero_heads := Filtered([1..Length(sem.heads)], i -> sem.heads[i] <> 0);
+    # `pivot_cols` is in ascending column order (Filtered preserves index
+    # order). The k-th pivot column corresponds to the row sem.heads[p_k].
+    pivot_cols := nonzero_heads;
+    rank := Length(pivot_cols);
+
+    # Stack the pivot rows in pivot-column-ascending order. Y_full[k]
+    # has pivot at column pivot_cols[k] (= 1) and zeros at pivot
+    # columns pivot_cols[k'] for k' > k (below-pivot rule). Entries at
+    # pivot_cols[k'] for k' < k may be non-zero; we reduce them next.
+    Y_full := [];
+    for k in [1..rank] do
+        src_row := sem.vectors[sem.heads[pivot_cols[k]]];
+        # ShallowCopy so we can reduce in place without mutating sem.
+        Add(Y_full, ShallowCopy(src_row));
+    od;
+    ConvertToMatrixRep(Y_full, GF(2));
+
+    # Back-substitute: for k = rank down to 2, zero out the entries of
+    # Y_full[k'] (k' < k) at column pivot_cols[k]. Since Y_full[k] has 1
+    # at pivot_cols[k] and 0 at pivot_cols[k''] for k'' > k, this is one
+    # AddRowVector per (k', k) pair where the bit is set. Total
+    # interpreter overhead is O(rank^2) = ~4M ops at rank=2048, but each
+    # op is one compiled AddRowVector. Time-budget: ~seconds, paid once
+    # per cached sem; amortised across thousands of subsequent solves.
+    for k in [rank, rank - 1 .. 2] do
+        for k_prime in [1 .. k - 1] do
+            x := Y_full[k_prime][pivot_cols[k]];
+            if not IsZero(x) then
+                AddRowVector(Y_full[k_prime], Y_full[k], -x);
+            fi;
+        od;
+    od;
+
+    return rec(
+        pivot_cols := pivot_cols,
+        Y_full     := Y_full,
+        rank       := rank,
+        ncols      := ncols);
+end;;
+
 _GetCachedSemForAT := function(A)
-    local entry, sem, nonzero_heads;
+    local entry, sem, nonzero_heads, batched;
     for entry in _IsCoboundary2Mod2_SemCache do
         if IsIdenticalObj(entry.A, A) then return entry; fi;
     od;
@@ -84,8 +172,13 @@ _GetCachedSemForAT := function(A)
     # combined of total CPU. Precompute the non-zero-head index list once
     # per cached sem and iterate that instead.
     nonzero_heads := Filtered([1..Length(sem.heads)], i -> sem.heads[i] <> 0);
+    # R2-3 (#177): precompute the batched-back-sub artefacts (pivot_cols,
+    # Y_full matrix in RREF) for the multi-RHS path used by
+    # IsCoboundary2Mod2VecBatch.
+    batched := _BuildBatchedSolverArtefacts(sem);
     Add(_IsCoboundary2Mod2_SemCache,
-        rec(A := A, sem := sem, nonzero_heads := nonzero_heads));
+        rec(A := A, sem := sem, nonzero_heads := nonzero_heads,
+            batched := batched));
     return _IsCoboundary2Mod2_SemCache[Length(_IsCoboundary2Mod2_SemCache)];
 end;;
 
@@ -253,7 +346,7 @@ end;;
 _LiftSemCache := [];;
 
 _GetLiftSemForC := function(C)
-    local entry, img, B, M, sem, nonzero_heads;
+    local entry, img, B, M, sem, nonzero_heads, batched;
     for entry in _LiftSemCache do
         if IsIdenticalObj(entry.C, C) then return entry; fi;
     od;
@@ -268,7 +361,10 @@ _GetLiftSemForC := function(C)
     sem := SemiEchelonMatTransformation(M);
     # R2-2 (#177): same head-skip optimisation as _GetCachedSemForAT.
     nonzero_heads := Filtered([1..Length(sem.heads)], i -> sem.heads[i] <> 0);
-    Add(_LiftSemCache, rec(C := C, sem := sem, nonzero_heads := nonzero_heads));
+    # R2-3 (#177): batched-back-sub artefacts for IsCoboundary2Mod2WithLiftVecBatch.
+    batched := _BuildBatchedSolverArtefacts(sem);
+    Add(_LiftSemCache, rec(C := C, sem := sem, nonzero_heads := nonzero_heads,
+                            batched := batched));
     return _LiftSemCache[Length(_LiftSemCache)];
 end;;
 
@@ -303,4 +399,253 @@ IsCoboundary2Mod2WithLiftVec := function(C, c_g_vec)
         fi;
     od;
     return IsZero(b);
+end;;
+
+# ======================================================================
+# R2-3 (#177): batched multi-RHS back-substitution.
+#
+# Motivation (live A-5b profile, May 2026): the per-call back-sub loop
+# `for i in nonzero_heads do if b[i] <> 0 then AddRowVector(...) fi od;`
+# was found to spend 99.7% of CPU in the GAP interpreter (loop, list-elm,
+# eq-test, if-branch) and only 0.3% in compiled GF(2) row-add work, even
+# after the R2-2 head-skip patch. Per generator at m=5 the A-5b sweep
+# issues ~1023 such back-subs against the same cached `sem` (one per
+# BRW-orbit target across the largest orbit), so a single batched call
+# can amortise the interpreter cost across all RHSes.
+#
+# Algorithm: see _BuildBatchedSolverArtefacts above. In summary, we
+# precompute the rank × ncols GF(2) matrix Y_full (reduced row echelon
+# form of sem.vectors, with pivot columns canonical-basis valued); the
+# row-space-membership test for a stacked batch B of RHSes then reduces
+# to `residual := B + B{:, pivot_cols} * Y_full`, one compiled GF(2)
+# matmul + matrix add. Each chunk's `IsZero(residual[j])` answers the
+# membership question for RHS j.
+#
+# Measured speedup on the back-sub portion alone (pre-converted GF(2)
+# input, |C|=128, 1023 RHSes): ~100x vs the per-call sweep. With
+# integer input (legacy convention), the integer→GF(2) reduction
+# (interpreter List comprehension over n²) becomes the bottleneck and
+# the visible speedup drops to ~2x; the production caller in
+# run_e_plus_5_kernel.g pre-converts to avoid this.
+
+# _RowSpanResidualBatch(batched_sem, B) — given the batched artefacts and
+# a list/matrix B of GF(2) rows (one per RHS), return the residual matrix
+# whose row j is zero iff B[j] is in row-space(M). Internal helper used
+# by both the kernel-only and lift batched paths.
+#
+# Formulation: residual := B + B{:, pivot_cols} * Y_full. By construction
+# (Y_full is in RREF), the pivot columns of `B_P * Y_full` equal those of
+# B, so XOR cancels them, leaving the non-pivot residual we test for zero.
+# This is one compiled GF(2) matmul + one compiled GF(2) matrix add,
+# replacing rank × numRHS interpreter AddRowVector iterations.
+_RowSpanResidualBatch := function(batched, B)
+    local numRHS, pivot_cols, Y_full, B_P, residual;
+    numRHS := Length(B);
+    if numRHS = 0 then return []; fi;
+    pivot_cols := batched.pivot_cols;
+    Y_full := batched.Y_full;
+    if batched.rank = 0 then
+        # Empty row-space: residual == B itself (zero only when B[j] = 0).
+        return B;
+    fi;
+    # Compiled column-slice to GF(2). ConvertToMatrixRep is essential:
+    # without it, the multiply below falls back to interpreter rows.
+    B_P := List(B, b -> b{pivot_cols});
+    ConvertToMatrixRep(B_P, GF(2));
+    # Compiled GF(2) matmul (PROD_GF2MAT_GF2MAT):
+    #   (numRHS × rank) × (rank × ncols) → (numRHS × ncols).
+    # Then compiled GF(2) matrix add (SUM_GF2MAT_GF2MAT) with B. After
+    # XOR, pivot columns of the residual are zero by construction; the
+    # non-pivot columns hold B_N + B_P * Y_N, the back-sub residual.
+    residual := B_P * Y_full;
+    residual := residual + B;
+    return residual;
+end;;
+
+# _StackBVectorsForBatch(c_g_vec_list) — convert a list of length-n² integer
+# (or GF(2)) row-vectors into a single GF(2) matrix B in compiled form.
+# Each row is reduced mod 2 and converted to GF(2). Used by both batched
+# entry points.
+#
+# If a row is already a GF(2) vector (e.g. caller pre-reduced to save the
+# intermediate integer-vector memory), we pass it through unchanged. This
+# matters at m=5: the per-target c_g_table is a length-n² INTEGER list,
+# and holding ~1023 of them simultaneously at n²=1M would consume ~8 GB.
+# The caller is expected to pre-reduce to GF(2) inside its per-target loop
+# so each integer c_g_table can be GC'd immediately.
+_StackBVectorsForBatch := function(c_g_vec_list)
+    local one, B, c_g_vec, row, first_is_gf2;
+    if IsEmpty(c_g_vec_list) then return []; fi;
+    one := One(GF(2));
+    # Detect pre-reduced GF(2) input. IsGF2VectorRep guards the fast path;
+    # if the user pre-converted, we just stack and convert to matrix rep.
+    first_is_gf2 := IsGF2VectorRep(c_g_vec_list[1]);
+    B := [];
+    if first_is_gf2 then
+        for row in c_g_vec_list do
+            Add(B, row);
+        od;
+    else
+        for c_g_vec in c_g_vec_list do
+            row := List(c_g_vec, x -> (x mod 2) * one);
+            ConvertToVectorRep(row, GF(2));
+            Add(B, row);
+        od;
+    fi;
+    ConvertToMatrixRep(B, GF(2));
+    return B;
+end;;
+
+# Batch size for chunked back-sub. The full batched matrix at m=5 is
+# (numRHS × n²) bits = (~1023 × ~4M) ≈ 512 MB peak in the worst case;
+# we chunk to bound peak memory. CHUNK = 256 caps each chunk's
+# residual + intermediates at ~32 MB at the largest centraliser (n=2048).
+# This is a tuning knob: smaller chunks recover more memory but lose
+# matmul-batching efficiency; larger chunks risk allocation pressure.
+_IS_COBOUNDARY2_BATCH_CHUNK := 256;;
+
+# _RunBatchedRowSpanTest(batched, c_g_vec_list) — chunked dispatcher for
+# a single batched row-space-membership test. Reduces the input to GF(2)
+# per-chunk (so peak GF(2)-matrix memory is bounded by chunk_size × ncols)
+# and applies _RowSpanResidualBatch to each chunk. Returns a list of
+# booleans of length |c_g_vec_list|.
+_RunBatchedRowSpanTest := function(batched, c_g_vec_list)
+    local num, results, chunk_size, chunk_start, chunk_end, chunk_inputs,
+          chunk_B, residual, j;
+    num := Length(c_g_vec_list);
+    results := EmptyPlist(num);
+    chunk_size := _IS_COBOUNDARY2_BATCH_CHUNK;
+    # GAP's `[start, second .. end]` arithmetic-progression syntax requires
+    # `(end - start)` to be divisible by `(second - start)`, which is not
+    # guaranteed here (the final chunk is usually short). We use a while
+    # loop with explicit increment instead.
+    chunk_start := 1;
+    while chunk_start <= num do
+        chunk_end := Minimum(num, chunk_start + chunk_size - 1);
+        chunk_inputs := c_g_vec_list{[chunk_start..chunk_end]};
+        chunk_B := _StackBVectorsForBatch(chunk_inputs);
+        if batched.rank = 0 then
+            # Trivial row-space (M had rank 0): in-span iff b is itself zero.
+            for j in [1..Length(chunk_B)] do
+                Add(results, IsZero(chunk_B[j]));
+            od;
+        else
+            residual := _RowSpanResidualBatch(batched, chunk_B);
+            for j in [1..Length(residual)] do
+                Add(results, IsZero(residual[j]));
+            od;
+        fi;
+        chunk_start := chunk_start + chunk_size;
+    od;
+    return results;
+end;;
+
+# IsCoboundary2Mod2VecBatch(H, c_g_vec_list)
+#
+# Batched analogue of IsCoboundary2Mod2Vec. Takes a list of length-n²
+# integer/GF(2) vectors (the c_g values for each RHS) and returns a list of
+# booleans of the same length: result[j] = (c_g_vec_list[j] is a GF(2)
+# coboundary on H).
+#
+# Equivalent (element-for-element) to
+#   List(c_g_vec_list, b -> IsCoboundary2Mod2Vec(H, b))
+# but expressed as a single compiled GF(2) matmul against the cached
+# Y_full matrix instead of numRHS × rank interpreter iterations of
+# AddRowVector. Live profile (May 2026) showed the per-call back-sub
+# was 99.7% interpreter overhead; the batched form recovers this.
+IsCoboundary2Mod2VecBatch := function(H, c_g_vec_list)
+    local A, entry;
+    A := BoundaryMatrixGF2(H);              # cached
+    entry := _GetCachedSemForAT(A);         # cached factorisation
+    return _RunBatchedRowSpanTest(entry.batched, c_g_vec_list);
+end;;
+
+# IsCoboundary2Mod2WithLiftVecBatch(C, c_g_vec_list)
+#
+# Batched analogue of IsCoboundary2Mod2WithLiftVec. Returns a list of
+# booleans: result[j] is true iff c_g_vec_list[j] (interpreted mod 2)
+# lies in the Bockstein image + B² (i.e. lifts to a Z/2^k coboundary).
+#
+# Algorithm: run both batched tests in sequence on a single GF(2) chunk —
+# first against the boundary subspace M_kernel = TransposedMat(BoundaryMatrixGF2(C))
+# and for the RHSes that fail that test, the lift subspace
+# M_lift = [BocksteinH1ToH2(C); boundary]. The lift test subsumes the
+# kernel test mathematically (B² is a subspace of [img; B²]), but we
+# preserve the staged check to match the per-call behaviour of
+# IsCoboundary2Mod2WithLiftVec: rapid early-exit on coboundary inputs.
+#
+# IMPORTANT (perf): the integer→GF(2) reduction (`(x mod 2) * one` over a
+# length-n² row) is the bulk of the per-call cost at small/moderate
+# centraliser sizes. We do it ONCE per chunk, shared between the kernel
+# and lift residual tests, rather than re-converting in a naive
+# `IsCoboundary2Mod2VecBatch then _RunBatchedRowSpanTest` chain.
+IsCoboundary2Mod2WithLiftVecBatch := function(C, c_g_vec_list)
+    local A, kernel_entry, lift_entry, kernel_batched, lift_batched,
+          num, results, chunk_size, chunk_start, chunk_end, chunk_inputs,
+          chunk_B, kernel_residual, lift_todo_local, lift_subset,
+          lift_sub_residual, j, jj, chunk_results, chunk_len;
+    num := Length(c_g_vec_list);
+    if num = 0 then return []; fi;
+    A := BoundaryMatrixGF2(C);
+    kernel_entry := _GetCachedSemForAT(A);
+    kernel_batched := kernel_entry.batched;
+    lift_entry := _GetLiftSemForC(C);
+    lift_batched := lift_entry.batched;
+
+    results := EmptyPlist(num);
+    chunk_size := _IS_COBOUNDARY2_BATCH_CHUNK;
+    chunk_start := 1;
+    while chunk_start <= num do
+        chunk_end := Minimum(num, chunk_start + chunk_size - 1);
+        chunk_inputs := c_g_vec_list{[chunk_start..chunk_end]};
+        chunk_len := Length(chunk_inputs);
+        # Stack & convert to GF(2) ONCE. The kernel and lift residual
+        # tests below both consume this matrix; this halves the
+        # integer→GF(2) cost vs. running the two tests independently.
+        chunk_B := _StackBVectorsForBatch(chunk_inputs);
+
+        # Stage 1: kernel-only test (cocycle is a coboundary?).
+        if kernel_batched.rank = 0 then
+            kernel_residual := chunk_B;
+        else
+            kernel_residual := _RowSpanResidualBatch(kernel_batched, chunk_B);
+        fi;
+
+        # Build the per-chunk results list, marking unresolved rows for
+        # the Stage 2 lift test.
+        chunk_results := EmptyPlist(chunk_len);
+        lift_todo_local := [];
+        for j in [1..chunk_len] do
+            if IsZero(kernel_residual[j]) then
+                Add(chunk_results, true);
+            else
+                Add(chunk_results, false);   # provisional; may flip true.
+                Add(lift_todo_local, j);
+            fi;
+        od;
+
+        # Stage 2: lift test, only for rows that failed Stage 1.
+        if not IsEmpty(lift_todo_local) then
+            lift_subset := chunk_B{lift_todo_local};
+            # GAP's `M{idxlist}` on a GF(2)-matrix returns a plain list of
+            # GF(2) vectors, not a GF(2) matrix; force the compressed
+            # matrix representation so the matmul in _RowSpanResidualBatch
+            # dispatches to PROD_GF2MAT_GF2MAT, not the generic fallback.
+            ConvertToMatrixRep(lift_subset, GF(2));
+            if lift_batched.rank = 0 then
+                lift_sub_residual := lift_subset;
+            else
+                lift_sub_residual := _RowSpanResidualBatch(lift_batched,
+                                                            lift_subset);
+            fi;
+            for jj in [1..Length(lift_todo_local)] do
+                if IsZero(lift_sub_residual[jj]) then
+                    chunk_results[lift_todo_local[jj]] := true;
+                fi;
+            od;
+        fi;
+        Append(results, chunk_results);
+        chunk_start := chunk_start + chunk_size;
+    od;
+    return results;
 end;;

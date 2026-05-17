@@ -260,11 +260,39 @@ Print("\nAlready completed (resume): ", Length(completed_idx), " / ", k,
 # per-class boolean list.
 PerVecTransgressionShared := function(vec)
     local results, oi, orb_info, basis_cache, target_idx, vec_target,
-          c_g_table;
+          c_g_table, exp_index, r, exp, batch_inputs, batch_targets,
+          c_prime_bits, batch_results, j, ti, one_gf2;
     results := List([1..n_classes], j -> "?");
+    # R2-3 (#177): batch the Path A (mod-2 + Bockstein lift) calls inside
+    # each orbit. All targets in an orbit share the same basis_cache.C, so
+    # the cached factorisation Y_full is reused across all RHSes in the batch.
+    # Path Z (order-exp generator) is handled per-call as before — it's hit
+    # only on the order-exp generator's transports (the single such generator
+    # in the H^3 torsion at E_+(5)) and the dispatch logic is unchanged.
+    # Path A precondition (same as in IsCoboundary2SplitVec): every coord we
+    # batch must have torsion[i] in {2, exponent}. For E_+(5) with torsion
+    # [2,...,2,4] this is trivially true. We assert once up-front to fail
+    # loudly if a downstream torsion shape ever violates the precondition.
+    for ti in [1..Length(setup.torsion)] do
+        Assert(0, setup.torsion[ti] = 2 or setup.torsion[ti] = setup.exponent,
+               Concatenation("PerVecTransgressionShared: torsion[",
+                             String(ti), "] = ", String(setup.torsion[ti]),
+                             " not in {2, exponent=", String(setup.exponent),
+                             "} — mixed sub-exp torsion not supported"));
+    od;
+    exp_index := Position(setup.torsion, setup.exponent);
+    exp := setup.exponent;
+    r := exp / 2;
+    one_gf2 := One(GF(2));
     for oi in [1..Length(orbits_data)] do
         orb_info := orbits_data[oi];
         basis_cache := orbit_caches[oi];
+        # Two-pass: first gather Path A inputs (pre-reduced to GF(2) so the
+        # n²-long integer c_g_table is dropped after each iteration; holding
+        # ~1023 integer c_g_tables simultaneously at n²~1M would cost ~8 GB),
+        # dispatching Path Z calls inline.
+        batch_inputs := [];
+        batch_targets := [];
         for target_idx in orb_info.orbit do
             vec_target := H3VecAtTarget(orb_info.start_idx, target_idx,
                                          orb_info.parent, orb_info.gen_used,
@@ -272,15 +300,36 @@ PerVecTransgressionShared := function(vec)
             # GAP's compiled matrix-vector product on integer rows. ~10-50x
             # faster than the prior `List(table, row -> Sum([1..k], ...))`
             # comprehension because the dot product is in the compiled
-            # kernel, not the interpreter loop. At m=5 this drops the
-            # n²-row × k-term cost by orders of magnitude per call.
+            # kernel, not the interpreter loop.
             c_g_table := basis_cache.table * vec_target;
-            # Vectorised solver: skips the n² function calls + dictionary
-            # lookups in IsCoboundary2Mod2's b-vector loop.
-            results[target_idx] :=
-                IsCoboundary2SplitVec(basis_cache.C, c_g_table, vec_target,
-                                       setup);
+            if exp_index <> fail and vec_target[exp_index] <> 0 then
+                # Path Z: per-call. Synthesises a c_g function and calls
+                # IsCoboundary2Z2k. Hit only on order-exp transports.
+                results[target_idx] :=
+                    IsCoboundary2SplitVec(basis_cache.C, c_g_table, vec_target,
+                                           setup);
+            else
+                # Path A: reduce to GF(2) inline and queue for the batched
+                # call. Hoisting `one_gf2` saves an interpreter dispatch per
+                # element of the length-n² result.
+                c_prime_bits := List(c_g_table,
+                                     x -> ((((x mod exp) / r) mod 2)
+                                           * one_gf2));
+                ConvertToVectorRep(c_prime_bits, GF(2));
+                Add(batch_inputs, c_prime_bits);
+                Add(batch_targets, target_idx);
+            fi;
         od;
+        # Single batched back-substitution per orbit. Compiled GF(2) matmul
+        # against the cached Y_full; live-profile expectation: 5-100× speedup
+        # vs. the prior per-call loop (which was 99.7% interpreter overhead).
+        if not IsEmpty(batch_inputs) then
+            batch_results := IsCoboundary2Mod2WithLiftVecBatch(
+                basis_cache.C, batch_inputs);
+            for j in [1..Length(batch_targets)] do
+                results[batch_targets[j]] := batch_results[j];
+            od;
+        fi;
     od;
     return results;
 end;;
