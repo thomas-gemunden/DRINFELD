@@ -26,7 +26,7 @@
 # verification at m=3. The m=5 case is unverified by Keller, and this
 # test only shows the pipeline is no longer structurally trivial.
 
-_SCRIPT_DIR := "/Users/thomasgemunden/Projects/group_cohomology/DRINFELD-wt-k4-fam/extraspecial_orbifolds/scripts";;
+_SCRIPT_DIR := "/Users/thomasgemunden/Projects/group_cohomology/DRINFELD-wt-k4irrep/extraspecial_orbifolds/scripts";;
 ChangeDirectoryCurrent(_SCRIPT_DIR);
 
 S_PASSES := 0;;

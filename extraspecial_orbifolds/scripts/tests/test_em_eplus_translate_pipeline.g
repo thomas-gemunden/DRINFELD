@@ -17,7 +17,7 @@
 # is done by test_k4a_classify.g). They specifically validate the
 # bridging step.
 
-_SCRIPT_DIR := "/Users/thomasgemunden/Projects/group_cohomology/DRINFELD-wt-k4-fam/extraspecial_orbifolds/scripts";;
+_SCRIPT_DIR := "/Users/thomasgemunden/Projects/group_cohomology/DRINFELD-wt-k4irrep/extraspecial_orbifolds/scripts";;
 ChangeDirectoryCurrent(_SCRIPT_DIR);
 
 PIPE_PASSES := 0;;
