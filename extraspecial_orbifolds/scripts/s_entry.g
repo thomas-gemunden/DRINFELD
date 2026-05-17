@@ -212,7 +212,7 @@ end;;
 # -----------------------------------------------------------------
 
 SEntry_TransportFor := function(s, class_idx)
-    local key, elts, ts, a, t;
+    local key, elts, ts, a, t, elt_to_idx, k;
     key := String(class_idx);
     if IsBound(s.transport_cache.(key)) then
         return s.transport_cache.(key);
@@ -223,7 +223,17 @@ SEntry_TransportFor := function(s, class_idx)
         t := RepresentativeAction(s.G, s.idx.reps[class_idx], a);
         Add(ts, t);
     od;
-    s.transport_cache.(key) := rec(elements := elts, t_of := ts);
+    # K-2c (#129): include the elt_to_idx dictionary required by
+    # ComputeSBlock's Path B (P-9, #126). Without it, on-demand block
+    # construction via SEntry_GetOrComputeBlock errored on the
+    # `transport[j].elt_to_idx` read at m=5. This brings the cache
+    # record into shape-parity with `BuildTransportForClass`.
+    elt_to_idx := NewDictionary(s.idx.reps[class_idx], true);
+    for k in [1..Length(elts)] do
+        AddDictionary(elt_to_idx, elts[k], k);
+    od;
+    s.transport_cache.(key) := rec(elements := elts, t_of := ts,
+                                    elt_to_idx := elt_to_idx);
     return s.transport_cache.(key);
 end;;
 
