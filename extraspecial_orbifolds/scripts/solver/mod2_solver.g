@@ -100,7 +100,7 @@ _IsCoboundary2Mod2_SemCache := [];;
 # zero by construction. The residual reduces to B_N + B_P * Y_N at
 # non-pivot columns, exactly the quantity we test for zero.
 _BuildBatchedSolverArtefacts := function(sem)
-    local nrows, ncols, nonzero_heads, pivot_cols, rank, Y_full,
+    local nrows, ncols, nonzero_heads, pivot_cols, rank, Y_full, Y_full_T,
           k, k_prime, src_row, x;
     nrows := Length(sem.vectors);
     if nrows = 0 then
@@ -111,6 +111,7 @@ _BuildBatchedSolverArtefacts := function(sem)
         return rec(
             pivot_cols := [],
             Y_full     := [],
+            Y_full_T   := [],
             rank       := 0,
             ncols      := ncols);
     fi;
@@ -149,9 +150,36 @@ _BuildBatchedSolverArtefacts := function(sem)
         od;
     od;
 
+    # R2-4 (#246): pre-transpose Y_full once at cache time, store as
+    # Y_full_T (shape ncols × rank).
+    #
+    # Background — live A-5b profile (May 2026, PID 44998, post-PR-233):
+    # `FuncTRANSPOSED_GF2MAT` accounts for ~14% of total CPU per live
+    # sample. The original hypothesis (issue #246) was that this came
+    # from a per-batch transpose inside `PROD_GF2MAT_GF2MAT(B_P, Y_full)`
+    # in `_RowSpanResidualBatch`. Direct measurement disconfirmed this
+    # — at |C|=512 the matmul itself runs in 52 ms while a standalone
+    # `TRANSPOSED_GF2MAT(Y_full)` on the same operand takes 69 ms, so
+    # `PROD_GF2MAT_GF2MAT` cannot be computing a full internal transpose.
+    # See the long-form discussion in `_RowSpanResidualBatch` below.
+    #
+    # We still pre-transpose Y_full at cache time, both to (a) match the
+    # spec literally and (b) expose a ready-to-use Y_full_T for future
+    # call sites — the next hot spot to address is probably the per-call
+    # `A_F2_T := TransposedMat(BoundaryMatrixGF2(C))` in
+    # `iterated_bockstein.g`'s `IsCoboundary2Z2k` (line 380), which IS
+    # rebuilt every invocation in the m=5 Z2k hot path.
+    #
+    # Cost: one TransposedMat at cache time per cached sem (4 entries
+    # total at m=5). Cheap (sub-second at rank ≤ 2048, ncols ≤ 4M) and
+    # amortised across thousands of subsequent batched solves.
+    Y_full_T := TransposedMat(Y_full);
+    ConvertToMatrixRep(Y_full_T, GF(2));
+
     return rec(
         pivot_cols := pivot_cols,
         Y_full     := Y_full,
+        Y_full_T   := Y_full_T,
         rank       := rank,
         ncols      := ncols);
 end;;
@@ -438,6 +466,37 @@ end;;
 # B, so XOR cancels them, leaving the non-pivot residual we test for zero.
 # This is one compiled GF(2) matmul + one compiled GF(2) matrix add,
 # replacing rank × numRHS interpreter AddRowVector iterations.
+#
+# R2-4 (#246) note: per-batch `B_P * Y_full` directly invokes the
+# compiled `PROD_GF2MAT_GF2MAT` kernel. A live A-5b profile (May 2026,
+# PID 44998 post-PR-233) attributed ~14% of total CPU to
+# `FuncTRANSPOSED_GF2MAT`. We considered three formulations:
+#
+#   (1) `B_P * Y_full` — the original. Calls `PROD_GF2MAT_GF2MAT(B_P, Y_full)`.
+#       Direct measurement (|C|=512, numRHS=256, rank=510, ncols=262144):
+#       52 ms per call, while a standalone `TRANSPOSED_GF2MAT(Y_full)`
+#       on the same operand takes 69 ms. Since the matmul is faster than
+#       the transpose alone, `PROD_GF2MAT_GF2MAT` cannot be computing the
+#       full transpose internally — its greased algorithm avoids it.
+#
+#   (2) Row-by-row `b_p * Y_full` via `PROD_GF2VEC_GF2MAT`. No internal
+#       transpose (per-bit row XOR on Y_full's rows), but loses greasing.
+#       Measured (same scale): 98 ms total in _RowSpanResidualBatch —
+#       50% slower than (1).
+#
+#   (3) Pre-transposed `Y_full_T * b_p` via `PROD_GF2MAT_GF2VEC`. Per-row
+#       dot product. Measured: 2 000 ms per call. Unusable.
+#
+# Conclusion: (1) is the fastest by a clear margin. The live-profile 14%
+# TRANSPOSED_GF2MAT cost most likely originates outside this matmul
+# (the strongest candidates are the per-call `TransposedMat(BoundaryMatrixGF2(C))`
+# in `iterated_bockstein.g`'s `IsCoboundary2Z2k` and `_GetLiftSemForC`,
+# the latter of which is at cache time but rebuilds A_F2_T each call to
+# `_GetLiftSemForC`). Pre-transposing Y_full at cache time (now stored
+# as `batched.Y_full_T`) is retained for callers that need it and to
+# leave a clear surface for any future call site that does benefit from
+# a pre-transposed pivot-row matrix; this `_RowSpanResidualBatch`
+# itself keeps formulation (1).
 _RowSpanResidualBatch := function(batched, B)
     local numRHS, pivot_cols, Y_full, B_P, residual;
     numRHS := Length(B);

@@ -13,6 +13,28 @@
 #
 # Invoke from anywhere via absolute path:
 #   /opt/homebrew/bin/gap -q -b /Users/thomasgemunden/Projects/group_cohomology/DRINFELD-wt-a5b-batched-backsub/extraspecial_orbifolds/scripts/tests/test_iscoboundary2_batched.g
+#
+# R2-4 (#246) post-fix microbench (Apple M-class, GAP 4.15.1, |C|=128,
+# 1023 RHSes, GF(2) input, batched call only):
+#
+#   pre-fix  (PR #233)  : 0.015 s, ~95×  speedup vs naive
+#   post-fix (PR #246)  : 0.014-0.015 s, ~97-102× speedup vs naive
+#
+# i.e. wall-time is unchanged at this scale. Rationale: the spec
+# anticipated ~15% wall improvement on the assumption that the live
+# A-5b profile's `FuncTRANSPOSED_GF2MAT` (14% CPU) originated from a
+# per-batch internal transpose inside `PROD_GF2MAT_GF2MAT(B_P, Y_full)`.
+# Direct measurement disconfirmed this hypothesis: at |C|=512 the
+# matrix-matrix product itself runs in 52 ms while a standalone
+# `TRANSPOSED_GF2MAT(Y_full)` on the same operand takes 69 ms, so the
+# matmul cannot be doing a full internal transpose. (See the discussion
+# in `_RowSpanResidualBatch`.) The Y_full_T artefact is still cached
+# (one-time cost ≤ 1 s at m=5 scale), to (a) match the spec literally
+# and (b) provide a ready-to-use pre-transposed matrix for future hot
+# paths — the most likely actual source of the 14% live cost is the
+# per-call `A_F2_T := TransposedMat(BoundaryMatrixGF2(C))` in
+# `iterated_bockstein.g`'s `IsCoboundary2Z2k`, which is rebuilt every
+# Path-Z invocation.
 
 # Locate solver/ relative to this test file. The repo layout is fixed.
 ICB_ROOT := "/Users/thomasgemunden/Projects/group_cohomology/DRINFELD-wt-a5b-batched-backsub";;
