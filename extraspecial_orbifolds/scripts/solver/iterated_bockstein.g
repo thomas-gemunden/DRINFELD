@@ -100,6 +100,43 @@ _GetCachedAF2T := function(C)
     return A_F2_T;
 end;;
 
+# Module-level cache for the multiplication table mult[i][j] := idx(elts[i] * elts[j]).
+#
+# A-5b R2-6 (#258 follow-up): IB_DeltaBeta does
+#   ij := idx(elts[i] * elts[j])
+# inside a nested n×n loop, where idx is `Position(elts, h)` — an O(n)
+# linear scan over the centraliser. That makes IB_DeltaBeta O(n³).
+# At m=5 with n = |C| = 1024, that's ~10⁹ ops per IB_DeltaBeta call,
+# and IB_RecCob calls it per recursion level × 2^num_basis enumerated α.
+#
+# Precomputing mult_table once per C reduces IB_DeltaBeta to a pure
+# O(n²) integer-arithmetic loop with O(1) compiled list lookups, and
+# allows IB_AlphaCupAlpha-style operations to be done with vectorised
+# indexing instead of element-by-element function calls.
+_ItBock_MULT_CACHE := [];;
+
+_GetCachedMultTable := function(C)
+    local entry, elts, n, idx_dict, mult, i, j, prod_ij;
+    for entry in _ItBock_MULT_CACHE do
+        if IsIdenticalObj(entry.C, C) then return entry; fi;
+    od;
+    elts := AsList(C);
+    n := Length(elts);
+    idx_dict := NewDictionary(elts[1], true, elts);
+    for i in [1..n] do AddDictionary(idx_dict, elts[i], i); od;
+    mult := List([1..n], i -> List([1..n], j -> 0));
+    for i in [1..n] do
+        for j in [1..n] do
+            prod_ij := elts[i] * elts[j];
+            mult[i][j] := LookupDictionary(idx_dict, prod_ij);
+        od;
+    od;
+    entry := rec(C := C, elts := elts, n := n,
+                 idx_dict := idx_dict, mult := mult);
+    Add(_ItBock_MULT_CACHE, entry);
+    return entry;
+end;;
+
 # IsCoboundary2Mod2WithLiftWitness(C, c) — witness-returning variant of
 # IsCoboundary2Mod2WithLift.
 #
@@ -283,6 +320,24 @@ IB_DeltaBeta := function(beta_int, elts, n, idx, modulus)
     return delta_beta;
 end;;
 
+# A-5b R2-6 (#258 follow-up): mult-cached variant. mult[i][j] is the
+# 1-based index of elts[i] * elts[j] in elts, precomputed once per C.
+# Pure O(n²) integer arithmetic; no Position lookups.
+IB_DeltaBetaMult := function(beta_int, n, mult, modulus)
+    local delta_beta, i, j, mult_i, beta_i, b;
+    delta_beta := List([1..n*n], i -> 0);
+    for i in [1..n] do
+        mult_i := mult[i];
+        beta_i := beta_int[i];
+        for j in [1..n] do
+            b := beta_i + beta_int[j] - beta_int[mult_i[j]];
+            # `mod` is positive in GAP; for negative b we adjust:
+            delta_beta[(i-1)*n + j] := b mod modulus;
+        od;
+    od;
+    return delta_beta;
+end;;
+
 # Strict F_2 coboundary test on a c_table (modulus 2^L); returns the
 # F_2 witness (as a list of 0/1 integers) or fail.
 IB_StrictF2Witness := function(c_table, A_F2_T, n)
@@ -342,7 +397,14 @@ end;;
 
 # IB_RecCob — the core recursion. Tests "[c_table] = 0 in H²(C; Z/modulus)"
 # where modulus = 2^L. Uses precomputed centraliser data.
-IB_RecCob := function(c_table, modulus, elts, n, idx, A_F2_T, hom_basis)
+#
+# A-5b R2-6 (#258 follow-up): the `mult` argument is the precomputed
+# multiplication-index table from _GetCachedMultTable(C); when present,
+# IB_DeltaBeta is dispatched to IB_DeltaBetaMult (pure O(n²) integer
+# arithmetic) instead of the O(n³) Position-based path. `elts` and
+# `idx` are kept in the signature for compatibility with the legacy
+# fallback but are unused on the mult path.
+IB_RecCob := function(c_table, modulus, elts, n, idx, A_F2_T, hom_basis, mult)
     local L, beta_int, delta_beta, c_table_next, mask, alpha,
           alpha_cup_alpha, c_table_shifted, num_basis;
     if modulus = 2 then
@@ -355,7 +417,11 @@ IB_RecCob := function(c_table, modulus, elts, n, idx, A_F2_T, hom_basis)
     if beta_int = fail then return false; fi;
 
     # Compute d_1 at modulus / 2.
-    delta_beta := IB_DeltaBeta(beta_int, elts, n, idx, modulus);
+    if mult <> fail then
+        delta_beta := IB_DeltaBetaMult(beta_int, n, mult, modulus);
+    else
+        delta_beta := IB_DeltaBeta(beta_int, elts, n, idx, modulus);
+    fi;
     c_table_next := IB_DivBy2(c_table, delta_beta, modulus / 2);
 
     # Now test [c_table_next] in im(β: H¹(F_2) -> H²(Z/(modulus/2)))
@@ -379,7 +445,7 @@ IB_RecCob := function(c_table, modulus, elts, n, idx, A_F2_T, hom_basis)
         c_table_shifted := List([1..n*n], i ->
             (c_table_next[i] - alpha_cup_alpha[i]) mod (modulus / 2));
         if IB_RecCob(c_table_shifted, modulus / 2, elts, n, idx,
-                     A_F2_T, hom_basis) then
+                     A_F2_T, hom_basis, mult) then
             return true;
         fi;
     od;
@@ -390,7 +456,7 @@ end;;
 # Tests whether [c] = 0 in H²(C; Z/2^k). c is a 2-cochain function
 # (h, k) -> Z (values reduced mod 2^k internally). k >= 1.
 IsCoboundary2Z2k := function(C, c, k)
-    local elts, n, idx, c_table, modulus, A_F2_T, hom_basis, i, j;
+    local mult_rec, elts, n, idx, c_table, modulus, A_F2_T, hom_basis, i, j;
     if k < 1 then
         Error("IsCoboundary2Z2k: k must be >= 1");
     fi;
@@ -398,9 +464,13 @@ IsCoboundary2Z2k := function(C, c, k)
         return IsCoboundary2Mod2(C, c);
     fi;
 
-    elts := AsList(C);
-    n := Length(elts);
-    idx := function(h) return Position(elts, h); end;
+    # A-5b R2-6 (#258 follow-up): use cached mult table so IB_DeltaBeta
+    # is O(n²) instead of O(n³). The cached record also holds elts so we
+    # don't re-AsList.
+    mult_rec := _GetCachedMultTable(C);
+    elts := mult_rec.elts;
+    n := mult_rec.n;
+    idx := function(h) return LookupDictionary(mult_rec.idx_dict, h); end;
 
     modulus := 2^k;
     c_table := List([1..n*n], i -> 0);
@@ -417,5 +487,6 @@ IsCoboundary2Z2k := function(C, c, k)
     A_F2_T := _GetCachedAF2T(C);
     hom_basis := IB_F2HomBasis(C);
 
-    return IB_RecCob(c_table, modulus, elts, n, idx, A_F2_T, hom_basis);
+    return IB_RecCob(c_table, modulus, elts, n, idx, A_F2_T, hom_basis,
+                     mult_rec.mult);
 end;;
