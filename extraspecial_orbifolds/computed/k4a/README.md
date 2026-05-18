@@ -40,13 +40,16 @@ detecting subgroups (E, D_8, Q_8), then by AM04+Quillen restriction-
 injectivity on H^3 of E_+(5), ω = 0 in H^3(E_+(5); U(1)) — confirming
 Keller's α = 0 at m = 5.
 
-Literature state: at m = 3, [Keller24] §6 (arXiv:2410.18638) verifies
-α = 0 directly by constructing the untwisted holomorphic VOA from the
-BW(3) = E_8 lattice orbifold. At m = 5 and m = 7, [KRR24]
-(arXiv:2411.13646) verify only the necessary conditions (cochain-level
-c_g ≡ 1 + [vEMS17] level-matching) and conjecture sufficiency. The
-verdict here would be the first computational evidence of [α] = 0 at
-m = 5.
+Literature state: at m = 3, α = 0 is verified by direct construction
+of the untwisted holomorphic VOA from the BW(3) = E_8 lattice
+orbifold — a well-established result in the VOA literature (the
+specific solo-Keller arXiv citation that previous agents recorded in
+the codebase, `arXiv:2410.18638`, turns out to be unrelated; the
+exact bibliographic pointer needs an audit). At m = 5 and m = 7,
+[KRR24] (arXiv:2411.13646) verify only the necessary conditions
+(cochain-level c_g ≡ 1 + [vEMS17] level-matching) and conjecture
+sufficiency. The verdict here would be the first computational
+evidence of [α] = 0 at m = 5.
 
 Cross-validation pending: A-5b's m=5 kernel data (when its production
 sweep finishes) gives an independent answer on where ω lives in
