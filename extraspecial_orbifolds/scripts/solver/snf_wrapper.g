@@ -95,9 +95,10 @@ _SafeIdString := function(grp)
 end;;
 
 BuildPerClassCocycleBasis := function(setup, gRep, C)
-    local key, elts, n, basis, k, exp, R, ncells, table, idx_map,
-          a, b, r, i, ChainAt, v1, v2, v3, contrib, result,
-          r_half, table_gf2, row, one_gf2;
+    local key, elts, n, basis, basis_T, k, exp, R, ncells, table, idx_map,
+          a, b, x, result,
+          r_half, table_gf2, row, one_gf2, table_rows,
+          contrib_row, contrib_b, S, chunk;
 
     key := Concatenation("G", _SafeIdString(setup.group),
                          "_g", String(gRep),
@@ -115,32 +116,88 @@ BuildPerClassCocycleBasis := function(setup, gRep, C)
     R := setup.R;
     ncells := R!.dimension(3);
 
-    # Chain-level encoding of a triple: same `v` StandardCocycle builds
-    # internally, before the dot product with the cocycle vector.
-    ChainAt := function(g, h, kk)
-        local S, v, x;
-        S := Syzygy(R, [g, h, kk]);
-        Apply(S, x -> x[1]);
-        v := ListWithIdenticalEntries(ncells, 0);
-        for x in S do
-            v[AbsoluteValue(x)] := v[AbsoluteValue(x)] + SignInt(x);
-        od;
-        return v;
-    end;
+    # A-7 perf-5 (#281): row-batched Syzygy table + compiled matmul.
+    #
+    # Original loop did 3 Syzygy calls per (a, b) plus a k-fold dot-product
+    # inner loop `for i in [1..k] do table[r][i] := (contrib * basis[i]) mod exp; od;`.
+    # The dot products are interpreted-mode per-element calls dispatching k
+    # times. Profile (eplus3_build_per_class_cocycle_basis.txt) showed
+    # PosPlist/EqPlist dominating inside the Syzygy chain walk — that cost
+    # is unavoidable at this layer (it IS the Syzygy computation), but the
+    # post-Syzygy assembly was wasted per-row interpreter dispatch.
+    #
+    # New strategy (Route A in #281):
+    #   1. For each outer row `a`, walk b in [1..n] building ONE dense
+    #      contribution vector per b: accumulate +Syzygy(rep, a, b),
+    #      -Syzygy(a, rep, b), +Syzygy(a, b, rep) into a single length-
+    #      ncells integer vector. Saves 2× length-ncells allocations and
+    #      the v1-v2+v3 subtract pass that the original code did.
+    #   2. Stack the n contribution vectors into an n × ncells matrix.
+    #   3. chunk := (contrib_row * basis_T) mod exp where basis_T is the
+    #      ncells × k matrix whose i-th column is basis[i]. This dispatches
+    #      to GAP's compiled integer matmul (PROD_MAT_MAT), replacing the
+    #      n*k per-(a,b) interpreted dot products with one compiled matmul
+    #      per row-batch.
+    #   4. Append chunk rows to table_rows.
+    #
+    # Memory: peak per-row buffer = n × ncells integers. At m=5,
+    # n=2048, ncells likely a few hundred → tens of MB temp, negligible
+    # vs the n² × k final table.
+    #
+    # Same 3 × n² Syzygy calls as the original — we do not avoid the
+    # chain-walk computation. The savings are in:
+    #   (a) one compiled matmul per row vs n*k interpreted dot products,
+    #   (b) one mod-exp pass per row chunk vs n*k per-cell mods,
+    #   (c) one accumulator vector per (a, b) instead of three (v1, v2, v3
+    #       + v1-v2+v3 subtraction pass).
 
-    table := List([1..n*n], r -> List([1..k], i -> 0));
+    # Build basis_T: ncells × k integer matrix with column i = basis[i].
+    # GAP matrices are row-major; we want each row of contrib_row to be
+    # multiplied by all k cocycle basis vectors. Standard math: (1 × ncells)
+    # × (ncells × k) = (1 × k). So basis_T must have shape (ncells × k),
+    # i.e. basis_T[j][i] = basis[i][j].
+    basis_T := TransposedMatMutable(basis);
+    ConvertToMatrixRep(basis_T);
+
+    table_rows := EmptyPlist(n * n);
     for a in [1..n] do
+        # Build the (n × ncells) contribution matrix for this fixed `a`.
+        # Each row b is the *signed sum* of three Syzygy chain encodings.
+        contrib_row := EmptyPlist(n);
         for b in [1..n] do
-            r := (a-1)*n + b;
-            v1 := ChainAt(gRep, elts[a], elts[b]);
-            v2 := ChainAt(elts[a], gRep, elts[b]);
-            v3 := ChainAt(elts[a], elts[b], gRep);
-            contrib := v1 - v2 + v3;   # in Z^ncells
-            for i in [1..k] do
-                table[r][i] := (contrib * basis[i]) mod exp;
+            contrib_b := ListWithIdenticalEntries(ncells, 0);
+            # + Syzygy(rep, elts[a], elts[b])
+            S := Syzygy(R, [gRep, elts[a], elts[b]]);
+            Apply(S, x -> x[1]);
+            for x in S do
+                contrib_b[AbsoluteValue(x)] := contrib_b[AbsoluteValue(x)]
+                                                + SignInt(x);
             od;
+            # - Syzygy(elts[a], rep, elts[b])
+            S := Syzygy(R, [elts[a], gRep, elts[b]]);
+            Apply(S, x -> x[1]);
+            for x in S do
+                contrib_b[AbsoluteValue(x)] := contrib_b[AbsoluteValue(x)]
+                                                - SignInt(x);
+            od;
+            # + Syzygy(elts[a], elts[b], rep)
+            S := Syzygy(R, [elts[a], elts[b], gRep]);
+            Apply(S, x -> x[1]);
+            for x in S do
+                contrib_b[AbsoluteValue(x)] := contrib_b[AbsoluteValue(x)]
+                                                + SignInt(x);
+            od;
+            Add(contrib_row, contrib_b);
+        od;
+        # Promote to integer matrix rep for compiled matmul.
+        ConvertToMatrixRep(contrib_row);
+        # chunk := (contrib_row * basis_T) mod exp, shape (n × k).
+        chunk := (contrib_row * basis_T) mod exp;
+        for b in [1..n] do
+            Add(table_rows, chunk[b]);
         od;
     od;
+    table := table_rows;
     idx_map := NewDictionary(elts[1], true, elts);
     for a in [1..n] do
         AddDictionary(idx_map, elts[a], a);
