@@ -17,7 +17,19 @@
 # is done by test_k4a_classify.g). They specifically validate the
 # bridging step.
 
-_SCRIPT_DIR := "/Users/thomasgemunden/Projects/group_cohomology/DRINFELD-wt-k4irrep/extraspecial_orbifolds/scripts";;
+# Derive _SCRIPT_DIR from the test file's own absolute path so the test
+# runs unchanged across worktrees (#275 fix: was hardcoded to a stale
+# predecessor worktree path).
+_SCRIPT_SELF := INPUT_FILENAME();;
+if _SCRIPT_SELF = fail or _SCRIPT_SELF = "stream" then
+    Error("test_em_eplus_translate_pipeline.g: INPUT_FILENAME() ",
+          "unavailable; Read by absolute path.");
+fi;
+_SCRIPT_SELFDIR := _SCRIPT_SELF{
+    [1..Length(_SCRIPT_SELF)
+       - Length("/test_em_eplus_translate_pipeline.g")]};;
+_SCRIPT_DIR := _SCRIPT_SELFDIR{
+    [1..Length(_SCRIPT_SELFDIR) - Length("/tests")]};;
 ChangeDirectoryCurrent(_SCRIPT_DIR);
 
 PIPE_PASSES := 0;;
@@ -227,17 +239,32 @@ PAssertTrue("P3: at least one (k_H, j_H) has multiplicity 2",
             PIPE_HAS_NONTRIVIAL);
 
 # Compute CT modular data with the multiplicity-injected restriction.
-# The T-matrix entries: T = chi(a)/chi(e). The mult factor cancels in
-# the ratio, so T should still equal baseline. But the S matrix has
-# off-diagonal products of two traces, so it differs.
+#
+# NORMALISATION RECONCILIATION (#275): under the corrected semantics,
+# the H-side trace_on_W is the H-untwisted character chi_l_H(h_H) and
+# does NOT scale by the parent's spectral multiplicities. Per
+# CGR/Bantay (and the K-4a-T4a research note §5.5), mult_chi is a
+# categorical labeling, not a scalar weight in the S/T formulae.
+# Therefore:
+#   * T-matrix: chi(a)/chi(e) — same as baseline.
+#   * S-matrix: chi(b_tilde)^* * chi(a_tilde)^* — also same as baseline,
+#     because the synthetic multiplicities are only attached as a
+#     diagnostic field on the restricted record and do not propagate
+#     through new_trace_on_W. (Multiplicities would change S only if
+#     they signaled a genuine non-trivial cocycle by being zero or
+#     fractional, i.e. by indicating that chi is absent from Omega_0;
+#     pure integer multiplicities reflecting "this many copies" do
+#     not.)
 PIPE_CT_MULTS := ComputeCTModularData(
     PIPE_RESTRICTED_E_MULTS, PIPE_EA.subgroup);;
 PAssertEqual("P3: mult-injected T entries == baseline (mult cancels in ratio)",
              DiagonalOfMat(PIPE_CT_MULTS.T), DiagonalOfMat(PIPE_CT_BASELINE.T));
-# S matrix has mult-squared factors; on entries where both class-indices
-# are the central class, S differs by 4. So Sum(S) probably differs.
-PAssertTrue("P3: mult-injected S differs from baseline S in some entry",
-            PIPE_CT_MULTS.S <> PIPE_CT_BASELINE.S);
+# Post-#275: S matrix is in the same normalisation as baseline since
+# mult-scaling has been stripped from new_trace_on_W. The multiplicity
+# field is exposed as a diagnostic via .multiplicity_lookup, but does
+# not propagate to the CT modular data arithmetic.
+PAssertEqual("P3 (#275): mult-injected S equals baseline S (mult is labeling, not scalar)",
+             PIPE_CT_MULTS.S, PIPE_CT_BASELINE.S);
 
 # ---- P4: m = 5 plumbing smoke ----
 Print("\n==========================================================\n");

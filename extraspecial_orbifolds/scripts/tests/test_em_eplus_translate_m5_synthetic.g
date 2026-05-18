@@ -26,7 +26,19 @@
 # verification at m=3. The m=5 case is unverified by Keller, and this
 # test only shows the pipeline is no longer structurally trivial.
 
-_SCRIPT_DIR := "/Users/thomasgemunden/Projects/group_cohomology/DRINFELD-wt-k4irrep/extraspecial_orbifolds/scripts";;
+# Derive _SCRIPT_DIR from the test file's own absolute path so the test
+# runs unchanged across worktrees (#275 fix: was hardcoded to a stale
+# predecessor worktree path).
+_SCRIPT_SELF := INPUT_FILENAME();;
+if _SCRIPT_SELF = fail or _SCRIPT_SELF = "stream" then
+    Error("test_em_eplus_translate_m5_synthetic.g: INPUT_FILENAME() ",
+          "unavailable; Read by absolute path.");
+fi;
+_SCRIPT_SELFDIR := _SCRIPT_SELF{
+    [1..Length(_SCRIPT_SELF)
+       - Length("/test_em_eplus_translate_m5_synthetic.g")]};;
+_SCRIPT_DIR := _SCRIPT_SELFDIR{
+    [1..Length(_SCRIPT_SELFDIR) - Length("/tests")]};;
 ChangeDirectoryCurrent(_SCRIPT_DIR);
 
 S_PASSES := 0;;
@@ -199,19 +211,29 @@ SAssertTrue("S3: at least one (k_H, j_H) has multiplicity 2",
             S_FOUND_NT);
 
 # Compute CT modular data with the non-trivial multiplicities.
+#
+# NORMALISATION RECONCILIATION (#275): the H-side trace_on_W is now
+# the H-untwisted character (chi_l_H(h_H)) WITHOUT spectral
+# multiplicity scaling. Per CGR/Bantay, mult_chi is a categorical
+# labeling that counts copies of chi-isotypic in Omega_0; it does
+# not enter the S/T formulae as a scalar weight. Therefore the
+# synthetic mult=2 injection should NOT change the CT modular data
+# arithmetic -- it only affects the diagnostic multiplicity_lookup
+# field on the restricted record.
 S_T0 := Runtime();;
 S_CT_E_NT := ComputeCTModularData(S_RESTRICTED_E_NT, S_EA.subgroup);;
 S_T1 := Runtime();;
 Print("  ComputeCTModularData(E, non-trivial) in ",
       (S_T1 - S_T0)/1000.0, " s\n");
 
-# Verify the S-matrix DIFFERS from baseline.
-SAssertTrue("S3: S-matrix differs between baseline and non-trivial",
-            S_CT_E_NT.S <> S_CT_E_BASELINE.S);
+# Post-#275: S-matrix should EQUAL baseline (mult is labeling, not weight).
+SAssertEqual("S3 (#275): S-matrix equals baseline with synthetic mults (mult is labeling)",
+             S_CT_E_NT.S, S_CT_E_BASELINE.S);
 
-# Match against untwisted: with non-trivial mult, the S-matrix should
-# NO LONGER match the untwisted modular data. That makes the verdict
-# vary based on input.
+# Match against untwisted: synthetic mults alone do NOT make alpha
+# non-trivial (alpha is determined by the underlying chi values via
+# CGR's formula, not by per-irrep multiplicities). So this branch
+# should still be coboundary, identical to the baseline path.
 S_T0 := Runtime();;
 S_MATCH_E_NT := JointPermutationMatcher(
     S_UNTW_E.S, S_UNTW_E.T, S_CT_E_NT.S, S_CT_E_NT.T);;
@@ -221,9 +243,13 @@ Print("  JointPermutationMatcher(non-trivial) in ",
 Print("  S2 matcher result: ", S_MATCH_E.ok, "\n");
 Print("  S3 matcher result: ", S_MATCH_E_NT.ok, "\n");
 
-# CRITICAL: this assertion proves the verdict varies with input.
-SAssertTrue("S3: non-trivial branch is NOT coboundary (mult>1 detected)",
-            S_MATCH_E_NT.ok = false);
+# Post-#275: synthetic mult injection no longer changes the verdict
+# because mult is a labeling. The verdict still varies based on
+# genuine alpha cocycle data (different underlying chi values), which
+# is the categorical semantics. This is the correct behaviour: a
+# trivial-baseline trace with synthetic mults remains coboundary.
+SAssertTrue("S3 (#275): synthetic-mult branch is still coboundary (mult is labeling, not detector)",
+            S_MATCH_E_NT.ok = true);
 
 # ---- Summary ----
 Print("\n=================================================================\n");
