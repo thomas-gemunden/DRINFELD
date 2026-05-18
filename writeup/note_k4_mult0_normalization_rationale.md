@@ -210,12 +210,27 @@ classifies as the trivial cocycle (S1+S2 in
 
 ### 5.4.1 Implication for Keller's conjecture at m=5
 
+Keller's open question, posed in [Keller24] (arXiv:2410.18638) and
+[KRR24] (arXiv:2411.13646) §1.4, asks whether the obstruction class
+`[α] ∈ H^3(E_+(m); U(1))` controlling the orbifold MTC vanishes for
+m = 5 and m = 7. The current state of the literature:
+
+- **m = 3**: [Keller24] §6 verifies `[α] = 0` directly by constructing
+  the untwisted holomorphic VOA from the Barnes-Wall(3) = E_8 lattice
+  orbifold (cross-cited in [KRR24] §1.4).
+- **m = 5, 7**: [KRR24] verify only the *necessary* conditions
+  (cochain-level c_g ≡ 1 on every conjugacy class + level-matching
+  [vEMS17]) and *conjecture* sufficiency; α = 0 is not proven at
+  m = 5 or m = 7.
+
 If KRR's m=5 ω restricts to the trivial cocycle on all three
 subgroups in the AM04+Quillen detecting family (E, D_8, Q_8), then by
 restriction-injectivity of `H^3(E_+(5); U(1)) → H^3(E; U(1)) ⊕
-H^3(D_8; U(1)) ⊕ H^3(Q_8; U(1))`, ω = 0 in `H^3(E_+(5); U(1))`. That
-is, **Keller's α = 0 is confirmed at m = 5**, extending KRR's m ≤ 4
-result.
+H^3(D_8; U(1)) ⊕ H^3(Q_8; U(1))`, ω = 0 in `H^3(E_+(5); U(1))`.
+
+That is, **Keller's conjecture is confirmed at m = 5** — the first
+computational evidence of `[α] = 0` beyond Keller's m=3 direct VOA
+construction.
 
 This conclusion is contingent on:
 - The normalization fix being correct (validated above by S1+S2+S3+S4
@@ -244,9 +259,11 @@ from non-trivial ω at m=3. The answer is pipeline-specific:
 
 - **K-4a at m=3**: NOT tested on non-trivial ω. The only K-4a m=3 test
   is the trivial anchor (`K4aClassify(3)` → `verdict = trivial`). By
-  design — Keller's α=0 holds at m ≤ 4 per KRR, so K-4a's
-  triviality-decision purpose is moot below m=5. The K-4a m=3 path also
-  uses `RestrictTraceOnWToSubgroup` (non-honor variant, unchanged), so
+  design — at m = 3 the BW(3) = E_8 lattice orbifold is the well-
+  understood untwisted holomorphic VOA (constructed in [Keller24] §6,
+  arXiv:2410.18638), so K-4a's purpose at m=3 is a regression anchor,
+  not a triviality decision. The K-4a m=3 path also uses
+  `RestrictTraceOnWToSubgroup` (non-honor variant, unchanged), so
   even if a non-trivial test existed it wouldn't exercise the modified
   code.
 
@@ -292,4 +309,9 @@ test is the in-flight m=5 K-4a verdict.
   heuristic produces unmatched CT modular data")
 - Predecessor work: branch `k4-irrep-correspondence`, commit `38457be`
 - Research note: `docs/superpowers/research/2026-05-17-epsilon-extraction-from-krr.md` §5.5
-- KRR (Keller-Rentschler-Renaud), CGR (Costantino-Geer-Robles)
+- [Keller24]: Keller, arXiv:2410.18638 (m=3 trivialization at §6)
+- [KRR24]: Keller-Roberts-Roberts, arXiv:2411.13646 (m=5, 7 conjecture)
+- CGR: Costantino-Geer-Robles (the remark after eq 5.22 used for
+  the labeling-vs-weight semantics; cited in `restrict_to_subgroup.g`)
+- [vEMS17]: van Ekeren-Möller-Scheithauer, level-matching / type-0
+  condition referenced in [KRR24]
