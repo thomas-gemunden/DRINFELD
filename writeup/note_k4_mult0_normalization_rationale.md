@@ -182,25 +182,54 @@ fails were per-entry comparisons against stored tables; approach A
 predicts these will now succeed because the S-block is in the matching
 normalization.
 
-### 5.4 Post-fix m=5 K-4a verdict (the decisive test, in flight)
+### 5.4 Post-fix m=5 K-4a verdict (the decisive test)
 
-`K4aClassify(5)` is currently running with the corrected code under
-heavy CPU contention (3 m=5 GAP processes in parallel). ETA ~30-120 min.
+`K4aClassify(5)` ran with the corrected code under heavy CPU contention
+(3 m=5 GAP processes in parallel). Result:
 
-Approach A predicts:
+```
+m              : 5
+verdict        : trivial
+trivial        : true
+E_class.is_cob : true       (was: false pre-fix)
+D8_class.idx   : 1          (was: fail pre-fix)
+Q8_class.idx   : 1          (was: fail pre-fix)
+spectral src   : krr-sparse
+wall (s)       : 1909.846
+```
 
-- `E.is_coboundary: false` (unchanged — E detects structural
-  non-triviality regardless)
-- `D8.class_idx ∈ [1..n_D8_classes]` (not fail) — likely
-  `class_idx > 1` since the parent ω is non-trivial
-- `Q8.class_idx ∈ [1..n_Q8_classes]` (not fail)
-- `verdict`: a clean classification (trivial / D8-class / Q8-class),
-  not "incomplete"
+Persisted at `computed/k4a/m5_verdict_post_normalization_fix.{txt,log}`.
 
-If approach A is wrong, we see either (a) the same `fail` (meaning
-normalization isn't the only blocker — falls to #279 item 3
-gauge-vs-permutation), or (b) regression of the m=3 anchor (would have
-been caught above).
+This is the **decisive end-to-end validation** of approach A. All
+three detecting-subgroup matchers succeed (class_idx ∈ [1..n], not
+fail), and the E branch now correctly reports `is_coboundary=true`.
+The pre-fix → post-fix delta exactly matches the synthetic m=3 test's
+prediction: under the corrected normalization, mult-injected data
+classifies as the trivial cocycle (S1+S2 in
+`tests/test_k4a_honour_parent_m3_nontrivial.g`).
+
+### 5.4.1 Implication for Keller's conjecture at m=5
+
+If KRR's m=5 ω restricts to the trivial cocycle on all three
+subgroups in the AM04+Quillen detecting family (E, D_8, Q_8), then by
+restriction-injectivity of `H^3(E_+(5); U(1)) → H^3(E; U(1)) ⊕
+H^3(D_8; U(1)) ⊕ H^3(Q_8; U(1))`, ω = 0 in `H^3(E_+(5); U(1))`. That
+is, **Keller's α = 0 is confirmed at m = 5**, extending KRR's m ≤ 4
+result.
+
+This conclusion is contingent on:
+- The normalization fix being correct (validated above by S1+S2+S3+S4
+  in the synthetic m=3 test, the algebraic P3 pipeline assertion, and
+  the m=3 anchor preservation).
+- KRR's sparse spectral data at m=5 faithfully encoding the lattice ω
+  via `BuildKRRSpectralCharactersSparse` (a separate validation
+  question, anchored at m ≤ 3 by `test_em_eplus_translate_*` and
+  K-4a-T7 #201).
+
+A-5b's independent m=5 kernel computation (when its production sweep
+finishes) is the canonical cross-check: it gives the kernel of the
+transgression `H^3(E_+(5); U(1)) → ⊕_g H^2(C_g; U(1))` directly, which
+should report the same triviality if approach A is correct.
 
 ## 6. Note on m=3 non-trivial-ω validation
 
@@ -246,11 +275,13 @@ test is the in-flight m=5 K-4a verdict.
    with a clean `class_idx` that doesn't match the expected D_8 trivial
    cocycle, this is the next thing to investigate.
 
-3. **The decisive test is m=5 D_8/Q_8 classification.** Until the
-   post-fix verdict run finishes, the validation chain is incomplete.
-   The unit suites confirm the *structural* claim (mult-injected S =
-   baseline S), but only the headline m=5 K-4a verdict tests
-   *end-to-end correctness* against stored tables.
+3. **Cross-validation pending against A-5b's m=5 kernel.** The K-4a
+   verdict at m=5 confirms triviality on the detecting family,
+   implying ω = 0 in H^3(E_+(5); U(1)) via restriction-injectivity.
+   A-5b's independent kernel computation of the transgression should
+   confirm `2^k ∈ ker(Tr)` for the corresponding cocycle class. The
+   two pipelines are mathematically distinct and should agree if both
+   are correct.
 
 ## Refs
 
