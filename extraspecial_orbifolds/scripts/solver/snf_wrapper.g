@@ -94,11 +94,177 @@ _SafeIdString := function(grp)
     return Concatenation("order", String(Order(grp)));
 end;;
 
+# ------------------------------------------------------------------
+# A-7 perf-5b (#281): HAP-level prefix-Syzygy sharing.
+#
+# HAP's Syzygy(R, [g1, g2, g3]) is built from 4 length-2 sub-Syzygies
+# (see /opt/homebrew/.../pkg/hap/lib/Homology/syzygy.gi lines 61-67):
+#
+#   Syz = Mult(g1, Syz([g2, g3])) + Syz([g1, g2*g3])
+#         - Syz([g1*g2, g3]) - Syz([g1, g2]);
+#   return Homotopy(2, Syz);
+#
+# For BuildPerClassCocycleBasis we compute three length-3 Syzygies per
+# (a, b) pair, one for each position of gRep:
+#
+#   Triple #1: Syz([gRep, a, b]) -- ends with - Syz([gRep, a])
+#   Triple #2: Syz([a, gRep, b]) -- ends with - Syz([a, gRep])
+#   Triple #3: Syz([a, b, gRep]) -- starts with Mult(a, Syz([b, gRep]))
+#                                 and ends with - Syz([a, b])
+#
+# Two sharing opportunities:
+#
+#   (a) HOIST: within the inner b-loop (fixed a), Syz([gRep, a]) and
+#       Syz([a, gRep]) are CONSTANT. We compute them once per a and
+#       reuse across all b. Saves 2 length-2 Syzygy calls per (a,b),
+#       i.e. 2*(n-1) per a, i.e. 2*n*(n-1) overall.
+#
+#   (b) SHARE within (a, b): Syz([a, b]) appears in BOTH Triple #1 (as
+#       Mult(gRep, Syz([a,b]))) and Triple #3 (as -Syz([a,b])). We
+#       compute it once and reuse. Saves 1 length-2 Syzygy call per
+#       (a,b), i.e. n*n overall.
+#
+# Total saving: ~3*n*(n-1) + n*n length-2 Syzygy calls out of the
+# original 4*3*n*n = 12*n*n. At m=3, n=128: ~50K of 197K length-2
+# calls saved (~25%). At m=5, n=2048: ~13M of 50M (~26%).
+#
+# CORRECTNESS: We are NOT changing the math. We replicate the exact
+# code in syzygy.gi's n=3 branch, just with the b-invariant pieces
+# hoisted and the within-(a,b) shared piece computed once. The output
+# `Syzygy(R, [g1, g2, g3])` is bit-for-bit identical to a fresh HAP
+# call. The per-triple correctness check in tests/test_perf5b_prefix
+# verifies this on a sample of m=3 triples.
+#
+# We DO NOT change the OUTSIDE-Homotopy-2 quadratic AddFreeWords cost
+# -- those are the four AddFreeWords calls that combine the length-2
+# sub-syzygies. The savings are purely in the SUBSEQUENT length-2
+# Syzygy computations.
+#
+# The helper inlines the n=3 case from syzygy.gi using R!.homotopy
+# and R!.elts directly. _MultByElt and _Homotopy2 mirror Mult and the
+# word-level Homotopy(2, ...) in syzygy.gi's local closures.
+# ------------------------------------------------------------------
+
+_MultByElt := function(R_elts, x, w)
+    # w is a word [[sign, elt_idx], ...]; return [[sign, idx(x*elts[idx])], ...].
+    return List(w, y -> [y[1], Position(R_elts, x * R_elts[y[2]])]);
+end;;
+
+_Homotopy2 := function(R, w)
+    # Word-level Homotopy(2, w): for each cell x in w, look up
+    # R!.homotopy(2, x) (which is internally memoised by HAP's
+    # Contraction cache) and AddFreeWords accumulate the result.
+    local ans, x;
+    ans := [];
+    for x in w do
+        ans := AddFreeWords(ans, R!.homotopy(2, x));
+    od;
+    return ans;
+end;;
+
+# _Syzygy3FromParts(R, g1, S_g2g3, S_g1_g2g3, S_g1g2_g3, S_g1_g2)
+#
+# Inlined version of HAP's Syzygy(R, [g1, g2, g3]) that accepts the
+# four length-2 sub-syzygies as arguments instead of re-computing them.
+# Output is bit-identical to Syzygy(R, [g1, g2, g3]).
+_Syzygy3FromParts := function(R, g1, S_g2g3, S_g1_g2g3, S_g1g2_g3, S_g1_g2)
+    local R_elts, Syz;
+    R_elts := R!.elts;
+    # Replicate syzygy.gi lines 62-67:
+    #   Syz := Mult(g1, Syz([g2, g3]));
+    #   Syz := AddFreeWords(Syz, Syz([g1, g2*g3]));
+    #   Syz := AddFreeWords(Syz, NegateWord(Syz([g1*g2, g3])));
+    #   Syz := AddFreeWords(Syz, NegateWord(Syz([g1, g2])));
+    #   return Homotopy(2, Syz);
+    Syz := _MultByElt(R_elts, g1, S_g2g3);
+    Syz := AddFreeWords(Syz, S_g1_g2g3);
+    Syz := AddFreeWords(Syz, NegateWord(S_g1g2_g3));
+    Syz := AddFreeWords(Syz, NegateWord(S_g1_g2));
+    return _Homotopy2(R, Syz);
+end;;
+
+# _Syzygy3CombinedWord(R, gRep, a, b, S_gRep_a, S_a_gRep, S_a_b,
+#                       S_gRep_ab, S_gRep_a_b, S_gRep_b, S_a_gRep_b,
+#                       S_a_gRep_b_2, S_b_gRep, S_a_b_gRep, S_ab_gRep)
+#
+# Combines the THREE length-3 Syzygy words for (gRep, a, b) in all
+# three positions of gRep, into ONE word that, when Homotopy(2, _)-ed,
+# gives the same per-cell contribution vector as the original three
+# Homotopy(2, _) calls combined with signs +1, -1, +1.
+#
+# Math:
+#   contrib(Syz([g1,g2,g3])) = (Homotopy(2, W1 + W2 - W3 - W4))
+#
+# Letting:
+#   W1 := Mult(gRep, S_a_b) + S_gRep_ab - S_gRep_a_b - S_gRep_a       (Triple #1)
+#   W2 := Mult(a, S_gRep_b) + S_a_gRep_b - S_a_gRep_b_2 - S_a_gRep    (Triple #2)
+#   W3 := Mult(a, S_b_gRep) + S_a_b_gRep - S_ab_gRep - S_a_b          (Triple #3)
+#
+# Then:
+#   Triple_combined := W1 - W2 + W3
+#   contrib_b       := Homotopy(2, Triple_combined) extracted to length-ncells vec
+#
+# Linearity of Homotopy at the word level (it's a Sum over cells of
+# AddFreeWords) means Homotopy(2, W1 - W2 + W3) gives the same per-
+# cell sum as Homotopy(2,W1) - Homotopy(2,W2) + Homotopy(2,W3) when
+# we then sum signs into a length-ncells vector. AddFreeWords reduces
+# cancelling cells in (W1 - W2 + W3), so the combined Homotopy(2,_)
+# call may be substantially faster than three independent calls.
+#
+# Names: S_<x>_<y> is Syzygy(R, [x, y]).
+# Args (12): (g1*g2 = "g1g2" infix in name to avoid confusion).
+#   S_gRep_a    : Syz([gRep, a])       -- T1 last term
+#   S_a_gRep    : Syz([a, gRep])       -- T2 last term
+#   S_a_b       : Syz([a, b])          -- T3 last term AND T1 inside Mult
+#   S_gRep_ab   : Syz([gRep, a*b])     -- T1 second term
+#   S_gRep_a_b  : Syz([gRep*a, b])     -- T1 third term (NEGATED in T1)
+#   S_gRep_b    : Syz([gRep, b])       -- T2 inside Mult
+#   S_a_gRep_b  : Syz([a, gRep*b])     -- T2 second term
+#   S_a_gRep_b_2: Syz([a*gRep, b])     -- T2 third term (NEGATED in T2)
+#   S_b_gRep    : Syz([b, gRep])       -- T3 inside Mult
+#   S_a_b_gRep  : Syz([a, b*gRep])     -- T3 second term
+#   S_ab_gRep   : Syz([a*b, gRep])     -- T3 third term (NEGATED in T3)
+_Syzygy3CombinedWord := function(R, gRep, a, S_gRep_a, S_a_gRep, S_a_b,
+                                 S_gRep_ab, S_gRep_a_b, S_gRep_b,
+                                 S_a_gRep_b, S_a_gRep_b_2, S_b_gRep,
+                                 S_a_b_gRep, S_ab_gRep)
+    local R_elts, W1, W2, W3, W;
+    R_elts := R!.elts;
+    # W1 (Triple #1 = Syz([gRep, a, b])):
+    #   Mult(gRep, S_a_b) + S_gRep_ab - S_gRep_a_b - S_gRep_a
+    W1 := _MultByElt(R_elts, gRep, S_a_b);
+    W1 := AddFreeWords(W1, S_gRep_ab);
+    W1 := AddFreeWords(W1, NegateWord(S_gRep_a_b));
+    W1 := AddFreeWords(W1, NegateWord(S_gRep_a));
+    # W2 (Triple #2 = Syz([a, gRep, b])):
+    #   Mult(a, S_gRep_b) + S_a_gRep_b - S_a_gRep_b_2 - S_a_gRep
+    W2 := _MultByElt(R_elts, a, S_gRep_b);
+    W2 := AddFreeWords(W2, S_a_gRep_b);
+    W2 := AddFreeWords(W2, NegateWord(S_a_gRep_b_2));
+    W2 := AddFreeWords(W2, NegateWord(S_a_gRep));
+    # W3 (Triple #3 = Syz([a, b, gRep])):
+    #   Mult(a, S_b_gRep) + S_a_b_gRep - S_ab_gRep - S_a_b
+    W3 := _MultByElt(R_elts, a, S_b_gRep);
+    W3 := AddFreeWords(W3, S_a_b_gRep);
+    W3 := AddFreeWords(W3, NegateWord(S_ab_gRep));
+    W3 := AddFreeWords(W3, NegateWord(S_a_b));
+    # W := W1 - W2 + W3
+    W := W1;
+    W := AddFreeWords(W, NegateWord(W2));
+    W := AddFreeWords(W, W3);
+    return _Homotopy2(R, W);
+end;;
+
 BuildPerClassCocycleBasis := function(setup, gRep, C)
     local key, elts, n, basis, basis_T, k, exp, R, ncells, table, idx_map,
           a, b, x, result,
           r_half, table_gf2, row, one_gf2, table_rows,
-          contrib_row, contrib_b, S, chunk;
+          contrib_row, contrib_b, S, chunk,
+          a_elt, b_elt, ab_elt, gRep_a, a_gRep, b_gRep, gRep_b,
+          S_gRep_a, S_a_gRep, S_a_b, S_gRep_b, S_b_gRep,
+          S_T1_S_g1_g2g3, S_T1_S_g1g2_g3,
+          S_T2_S_g1_g2g3, S_T2_S_g1g2_g3,
+          S_T3_S_g1_g2g3, S_T3_S_g1g2_g3;
 
     key := Concatenation("G", _SafeIdString(setup.group),
                          "_g", String(gRep),
@@ -144,12 +310,17 @@ BuildPerClassCocycleBasis := function(setup, gRep, C)
     # n=2048, ncells likely a few hundred → tens of MB temp, negligible
     # vs the n² × k final table.
     #
-    # Same 3 × n² Syzygy calls as the original — we do not avoid the
-    # chain-walk computation. The savings are in:
+    # Same 3 × n² length-3 Syzygy outputs as the original. Route A's
+    # savings are in:
     #   (a) one compiled matmul per row vs n*k interpreted dot products,
     #   (b) one mod-exp pass per row chunk vs n*k per-cell mods,
     #   (c) one accumulator vector per (a, b) instead of three (v1, v2, v3
     #       + v1-v2+v3 subtraction pass).
+    #
+    # A-7 perf-5b (this file): inside the (a, b) loop, the three length-3
+    # Syzygies are computed by _Syzygy3FromParts which takes pre-computed
+    # length-2 sub-syzygies. Hoisting + sharing reduces length-2 Syzygy
+    # calls by ~25% (see _Syzygy3FromParts docs above).
 
     # Build basis_T: ncells × k integer matrix with column i = basis[i].
     # GAP matrices are row-major; we want each row of contrib_row to be
@@ -159,29 +330,106 @@ BuildPerClassCocycleBasis := function(setup, gRep, C)
     basis_T := TransposedMatMutable(basis);
     ConvertToMatrixRep(basis_T);
 
+    # A-7 perf-5b (#281): HAP-level prefix-Syzygy sharing.
+    #
+    # For each outer `a`, two length-2 Syzygies are constant across the
+    # inner b-loop and are hoisted out:
+    #   S_gRep_a = Syzygy(R, [gRep, elts[a]])   -- last term of Triple #1
+    #   S_a_gRep = Syzygy(R, [elts[a], gRep])   -- last term of Triple #2
+    # Within each (a, b), Syz([a, b]) is computed ONCE and shared
+    # between Triple #1 (Mult(gRep, S_a_b)) and Triple #3 (-S_a_b).
+    #
+    # The triples themselves are inlined via _Syzygy3FromParts which
+    # accepts pre-computed length-2 sub-syzygies. Output of
+    # _Syzygy3FromParts is bit-identical to Syzygy(R, [...]).
+    #
+    # NOTE on speedup: the wall-time savings are smaller than initially
+    # hoped (Route B target was 5-30x; measured at m=3 ~0% wall). The
+    # length-2 Syzygy calls we eliminate are individually cheap because
+    # HAP's underlying Contraction lookup is memoised at the cell level
+    # (resFiniteGroup.gi:282 `ComputedContractions[i][z1][z2]`). After
+    # the first few (a, b) iterations the Contraction cache is hot, so
+    # the saved length-2 calls cost very little. The dominant cost is
+    # in the AddFreeWords combining 4 length-2 sub-syzygies into the
+    # length-3 word (3x per (a, b)), which our optimisation does NOT
+    # eliminate. See PERF5B_FEASIBILITY.md for the full analysis.
+    #
+    # We keep the refactor because it's slightly cleaner, costs nothing
+    # (within noise vs Route A baseline), and provides infrastructure
+    # for follow-up work (e.g. replacing AddFreeWords's quadratic
+    # linear-scan Position with a dict, which the profile suggests is
+    # the real lever).
     table_rows := EmptyPlist(n * n);
     for a in [1..n] do
+        a_elt := elts[a];
+        gRep_a := gRep * a_elt;
+        a_gRep := a_elt * gRep;
+        # HOIST out of b-loop: invariant length-2 syzygies for this a.
+        S_gRep_a := Syzygy(R, [gRep, a_elt]);
+        S_a_gRep := Syzygy(R, [a_elt, gRep]);
+
         # Build the (n × ncells) contribution matrix for this fixed `a`.
         # Each row b is the *signed sum* of three Syzygy chain encodings.
         contrib_row := EmptyPlist(n);
         for b in [1..n] do
+            b_elt := elts[b];
+            ab_elt := a_elt * b_elt;
+            b_gRep := b_elt * gRep;
+            gRep_b := gRep * b_elt;
+
+            # SHARE between Triple #1 (uses Mult(gRep, S_a_b)) and Triple #3
+            # (uses -S_a_b): compute Syz([a, b]) once.
+            S_a_b := Syzygy(R, [a_elt, b_elt]);
+
+            # Triple #1 = Syzygy(R, [gRep, a_elt, b_elt]).
+            # g1=gRep, g2=a_elt, g3=b_elt.
+            #   Sub-Syzygies: S([a,b]), S([gRep, a*b]), S([gRep*a, b]), S([gRep, a])
+            S_T1_S_g1_g2g3 := Syzygy(R, [gRep, ab_elt]);
+            S_T1_S_g1g2_g3 := Syzygy(R, [gRep_a, b_elt]);
+
+            # Triple #2 = Syzygy(R, [a_elt, gRep, b_elt]).
+            # g1=a_elt, g2=gRep, g3=b_elt.
+            #   Sub-Syzygies: S([gRep, b]), S([a, gRep*b]), S([a*gRep, b]), S([a, gRep])
+            S_gRep_b := Syzygy(R, [gRep, b_elt]);
+            S_T2_S_g1_g2g3 := Syzygy(R, [a_elt, gRep_b]);
+            S_T2_S_g1g2_g3 := Syzygy(R, [a_gRep, b_elt]);
+
+            # Triple #3 = Syzygy(R, [a_elt, b_elt, gRep]).
+            # g1=a_elt, g2=b_elt, g3=gRep.
+            #   Sub-Syzygies: S([b, gRep]), S([a, b*gRep]), S([a*b, gRep]), S([a, b])
+            S_b_gRep := Syzygy(R, [b_elt, gRep]);
+            S_T3_S_g1_g2g3 := Syzygy(R, [a_elt, b_gRep]);
+            S_T3_S_g1g2_g3 := Syzygy(R, [ab_elt, gRep]);
+
             contrib_b := ListWithIdenticalEntries(ncells, 0);
-            # + Syzygy(rep, elts[a], elts[b])
-            S := Syzygy(R, [gRep, elts[a], elts[b]]);
+            # + Syzygy(rep, elts[a], elts[b]) via _Syzygy3FromParts.
+            S := _Syzygy3FromParts(R, gRep,
+                                   S_a_b,
+                                   S_T1_S_g1_g2g3,
+                                   S_T1_S_g1g2_g3,
+                                   S_gRep_a);
             Apply(S, x -> x[1]);
             for x in S do
                 contrib_b[AbsoluteValue(x)] := contrib_b[AbsoluteValue(x)]
                                                 + SignInt(x);
             od;
-            # - Syzygy(elts[a], rep, elts[b])
-            S := Syzygy(R, [elts[a], gRep, elts[b]]);
+            # - Syzygy(elts[a], rep, elts[b]) via _Syzygy3FromParts.
+            S := _Syzygy3FromParts(R, a_elt,
+                                   S_gRep_b,
+                                   S_T2_S_g1_g2g3,
+                                   S_T2_S_g1g2_g3,
+                                   S_a_gRep);
             Apply(S, x -> x[1]);
             for x in S do
                 contrib_b[AbsoluteValue(x)] := contrib_b[AbsoluteValue(x)]
                                                 - SignInt(x);
             od;
-            # + Syzygy(elts[a], elts[b], rep)
-            S := Syzygy(R, [elts[a], elts[b], gRep]);
+            # + Syzygy(elts[a], elts[b], rep) via _Syzygy3FromParts.
+            S := _Syzygy3FromParts(R, a_elt,
+                                   S_b_gRep,
+                                   S_T3_S_g1_g2g3,
+                                   S_T3_S_g1g2_g3,
+                                   S_a_b);
             Apply(S, x -> x[1]);
             for x in S do
                 contrib_b[AbsoluteValue(x)] := contrib_b[AbsoluteValue(x)]
