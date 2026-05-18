@@ -415,7 +415,16 @@ for orb_info in orbits_data do
 od;
 
 # Build per-orbit cocycle-basis caches.
-Print("Building per-orbit cocycle-basis caches...\n");
+#
+# Driver consumes only the orbit-rep cache (via H3VecAtTarget to transport
+# the H^3 vec to sibling classes on-the-fly in PerVecTransgressionShared).
+# We therefore use the rep-only `BuildPerClassCocycleBasis(setup, rep, C)`
+# call here; the sibling-transport machinery
+# `BuildPerClassCocycleBasisForOrbit` from PR #276 stays available in
+# solver/snf_wrapper.g for downstream consumers that need per-class
+# sibling caches (e.g. the proposed perf-4' transgression-matrix
+# re-architecture). See #277 for rationale.
+Print("Building per-orbit cocycle-basis caches (rep-only)...\n");
 t_caches := Runtime();;
 orbit_caches := [];;
 for orb_info in orbits_data do
@@ -423,31 +432,39 @@ for orb_info in orbits_data do
     C := Centralizer(G, rep);
     Print("  orbit start ", orb_info.start_idx, " (|C| = ", Order(C),
           ", n*n*k = ", Order(C)^2 * k,
-          ", rep order = ", Order(rep), ") ... ");
+          ", rep order = ", Order(rep),
+          ", orbit size ", Length(orb_info.orbit), ") ... ");
     t_one := Runtime();
     if IsOne(rep) then
+        # Identity class: c_g(h, k) = omega(id, h, k) - omega(h, id, k)
+        # + omega(h, k, id) = 0 for normalized omega. Build an
+        # all-zero table without the n²·k Syzygy chain.
         cache_elts := AsList(C);
         cache_n := Length(cache_elts);
         cache_table := List([1..cache_n * cache_n],
                             r -> List([1..k], i -> 0));
-        # perf-4' fix: also build a zero table_gf2 so PerVecTransgressionShared's
-        # Path A (which accesses basis_cache.table_gf2) doesn't crash. The
-        # zero table_gf2 correctly represents the identity-class c_g = 0.
-        cache_table_gf2 := List([1..cache_n * cache_n],
-                                 r -> List([1..k], i -> Zero(GF(2))));
-        ConvertToMatrixRep(cache_table_gf2, GF(2));
+        ConvertToMatrixRep(cache_table);
         cache_idx_map := NewDictionary(cache_elts[1], true, cache_elts);
         for cache_a in [1..cache_n] do
             AddDictionary(cache_idx_map, cache_elts[cache_a], cache_a);
         od;
+        # GF(2) view: also all zero.
+        cache_table_gf2 := List([1..cache_n * cache_n],
+                                 r -> List([1..k], i -> Zero(GF(2))));
+        ConvertToMatrixRep(cache_table_gf2, GF(2));
+        # Identity class is a singleton orbit at m=2, 3, 5, 7; no
+        # sibling transport needed.
         Add(orbit_caches, rec(C := C, table := cache_table,
                                table_gf2 := cache_table_gf2,
                                elts := cache_elts, n := cache_n,
                                idx_map := cache_idx_map));
         Print((Runtime() - t_one) / 1000., " s (degenerate, identity class)\n");
     else
+        # Non-identity orbit: build the rep cache only. Sibling transport
+        # is not consumed by PerVecTransgressionShared (see header comment
+        # above this block).
         Add(orbit_caches, BuildPerClassCocycleBasis(setup, rep, C));
-        Print((Runtime() - t_one) / 1000., " s\n");
+        Print((Runtime() - t_one) / 1000., " s (rep-only)\n");
     fi;
 od;
 Print("Per-orbit caches wall: ", (Runtime() - t_caches) / 1000., " s total\n");

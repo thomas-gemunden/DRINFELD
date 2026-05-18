@@ -81,6 +81,11 @@ end;;
 # full class element sets and use set membership for fast lookup,
 # gated on element order. `class_elements[j]` is a sorted list of
 # matrices in class j; `class_orders[j]` is Order(Representative(cl_j)).
+#
+# Legacy O(n_classes) linear scan; kept for backwards compatibility
+# with helpers that have not been migrated to the dictionary path.
+# The hot inner loop in BRWConjugacyAction uses a NewDictionary keyed
+# by every element of the group, which is O(1) per lookup.
 # ---------------------------------------------------------------------
 
 ClassIndexOf := function(x, class_elements, class_orders)
@@ -92,6 +97,26 @@ ClassIndexOf := function(x, class_elements, class_orders)
         fi;
     od;
     Error("element does not lie in any conjugacy class of the group");
+end;;
+
+# ---------------------------------------------------------------------
+# A-7-perf-2 (#271): build a dictionary mapping every element g ∈ G to
+# the index j of the conjugacy class containing g. For E_+(m), |G| =
+# 2^{2m+1}, so the dictionary has 2^{2m+1} entries (32768 at m=7),
+# replacing the O(n_classes^2) linear-scan setup in BRWConjugacyAction
+# with O(|G|) build + O(1) lookup.
+# ---------------------------------------------------------------------
+
+BuildElementToClassIndexDict := function(G, classes)
+    local d, j, cl, g;
+    d := NewDictionary(One(G), true, G);
+    for j in [1..Length(classes)] do
+        cl := AsList(classes[j]);
+        for g in cl do
+            AddDictionary(d, g, j);
+        od;
+    od;
+    return d;
 end;;
 
 # ---------------------------------------------------------------------
@@ -140,8 +165,10 @@ _brw_conjugacy_action_cache := rec();;
 BRWConjugacyAction := function(m)
     local key, em_mat, iso_em, em, brw, classes, reps, class_sizes,
           class_orders, class_elements, types, orbit_partition, gens,
-          perms, image_lists, y, p, image_list, image_subgroup, n, i,
-          result;
+          perms, image_lists, y, p, image_list, image_subgroup, n, i, k,
+          result, class_idx_dict, conj, t_dict_start, t_dict_end,
+          t_loop_start, t_loop_end, gens_em, gens_em_lifted,
+          images_under_y, phi_y, t_hom_start, t_hom_end, t_hom_total_ms;
     Assert(0, m >= 1, "m must be a positive integer");
 
     key := Concatenation("m", String(m));
@@ -169,23 +196,65 @@ BRWConjugacyAction := function(m)
     types := ClassifyEmConjugacyClasses(em, classes);
     orbit_partition := OrbitPartitionFromTypes(types);
 
+    # A-7-perf-2 (#271): one-shot element -> class-index dictionary.
+    # At m=7, |em| = 2^15 = 32768 elements across 16385 classes; this
+    # converts the inner loop's class-index lookup from O(n_classes)
+    # (linear scan through class_elements) to O(1) (dict probe).
+    t_dict_start := Runtime();;
+    class_idx_dict := BuildElementToClassIndexDict(em, classes);
+    t_dict_end := Runtime();;
+
+    # A-7-perf-2a (#271 follow-up): cache the BRW conjugation action on
+    # em as a pc-group homomorphism per BRW generator.
+    #
+    # Each BRW generator y acts on em by g -> y*g*y^(-1). Mathematically
+    # BRW is defined to normalise em (extraspecial subgroup), so this
+    # action is an automorphism of em. Concretely: build the matrix-side
+    # conjugates of em's generators ONCE per y (|GeneratorsOfGroup(em)|
+    # matmuls + iso_em evals), then assemble a pc-group hom phi_y. The
+    # inner loop over class reps then collapses from a 128x128 cyclotomic
+    # matmul + iso_em eval (~150 ms each at m=7, ~16385 calls per BRW
+    # gen, ~2 h total) to a pc-group hom evaluation (~100 us each,
+    # ~100 s total). See acceptance test in
+    # tests/test_brw_conjugacy_action.g and issue #271 comment 4472495339.
+    gens_em := GeneratorsOfGroup(em);
+    gens_em_lifted := List(gens_em,
+                           g -> PreImagesRepresentative(iso_em, g));
+
     gens := GeneratorsOfGroup(brw);
     perms := [];
     image_lists := [];
+    t_hom_total_ms := 0;
+    t_loop_start := Runtime();;
     for i in [1..Length(gens)] do
         y := gens[i];
-        # y is a matrix in BRW; classes are pc-group classes. Translate:
-        # iso_em(y * iso_em^{-1}(rep_pc) * y^{-1}) is the pc-image of the
-        # conjugate.
-        image_list := List([1..n], k ->
-            ClassIndexOf(
-                Image(iso_em,
-                      y * PreImagesRepresentative(iso_em, reps[k]) * y^(-1)),
-                class_elements, class_orders));
+        # Build phi_y once per BRW generator. The matrix-arithmetic cost
+        # (|gens_em| matmuls + iso_em evals + GroupHomomorphismByImagesNC
+        # setup) lives here, not inside the per-class loop. NB: BRW
+        # conjugation is known to be an automorphism of em (see header
+        # comment); GroupHomomorphismByImagesNC skips the well-definedness
+        # check that ByImages (no NC) would run.
+        t_hom_start := Runtime();;
+        images_under_y := List(gens_em_lifted,
+                               g_lift -> Image(iso_em,
+                                               y * g_lift * y^(-1)));
+        phi_y := GroupHomomorphismByImagesNC(em, em,
+                                             gens_em, images_under_y);
+        t_hom_end := Runtime();;
+        t_hom_total_ms := t_hom_total_ms + (t_hom_end - t_hom_start);
+
+        # Per-class step: pc-group hom evaluation (fast), then O(1)
+        # dictionary lookup. No matrix arithmetic, no iso_em call.
+        image_list := EmptyPlist(n);
+        for k in [1..n] do
+            conj := Image(phi_y, reps[k]);
+            image_list[k] := LookupDictionary(class_idx_dict, conj);
+        od;
         Add(image_lists, image_list);
         p := PermList(image_list);
         Add(perms, p);
     od;
+    t_loop_end := Runtime();;
 
     image_subgroup := Group(perms);
 
@@ -206,7 +275,16 @@ BRWConjugacyAction := function(m)
         gens := gens,
         perms := perms,
         image_lists := image_lists,
-        image_subgroup := image_subgroup
+        image_subgroup := image_subgroup,
+        # A-7-perf-2 / A-7-perf-2a perf breakdown (s). brw_loop_s is the
+        # total loop wall (hom-build + per-class hom eval + dict lookup);
+        # hom_build_s is the sum of the matrix-side phi_y construction
+        # walls, which is the only remaining matrix-arithmetic cost.
+        timings := rec(
+            element_dict_s := (t_dict_end - t_dict_start) / 1000.0,
+            brw_loop_s     := (t_loop_end - t_loop_start) / 1000.0,
+            hom_build_s    := t_hom_total_ms / 1000.0
+        )
     );
     _brw_conjugacy_action_cache.(key) := result;
     return result;
