@@ -118,6 +118,12 @@ fi;
 if not IsBoundGlobal("_GetBridgeCache") then
     Read("cocyclebasis_quillen_bridge.g");
 fi;
+# D-VAN m=5 enumerator: _DETF_AllMaxEAsIn (issue #287). At m >= 4 this
+# returns 112 Lagrangian EAs directly without ConjugacyClassesSubgroups,
+# which OOMs/timeouts on |G| = 2048.
+if not IsBoundGlobal("_DETF_AllMaxEAsIn") then
+    Read("detecting_family_restriction.g");
+fi;
 
 # ----------------------------------------------------------------------
 # Generalised H^1 basis for arbitrary groups (variant of BasisH1F2).
@@ -556,13 +562,29 @@ _RC_PrecomputeSyzygiesOnT := function(R_G, T)
 end;;
 
 # Find all max-EA conj class reps in a pinned G.
+#
+# Delegates to `_DETF_AllMaxEAsIn` from detecting_family_restriction.g
+# (D-VAN m=5 OOM fix, issue #287):
+#
+#   * m <= 3: full ConjugacyClassesSubgroups enumeration (6 reps at m=2,
+#     30 at m=3). This preserves bit-for-bit m=2/m=3 anchor compatibility
+#     with the prior _RC_AllMaxEAsInG implementation.
+#   * m >= 4: direct Lagrangian-style enumeration. At m=5 ConjugacyClassesSubgroups
+#     on E_+(5) (|G|=2048) OOMs at 32 GB / >10 min wall. _DETF_AllMaxEAsIn
+#     returns 32 axis-aligned + 80 diagonal pair-swap Lagrangians = 112
+#     max EAs at m=5, empirically sufficient for Quillen restriction-
+#     injectivity (per #287's audit at #289).
+#
+# Return shape matches the original: a list of subgroups of G (each a
+# rank-(m+1) elementary abelian), suitable for further H^* restriction
+# work. _RC_GetCache iterates over this list and computes h1_basis_E,
+# M_E, cand_subst, poly_extractor, syz_table per EA — those are all
+# group-theoretic operations on the subgroup and so insensitive to
+# whether the list came from ConjugacyClassesSubgroups (m <= 3) or
+# direct Lagrangian construction (m >= 4).
 _RC_AllMaxEAsInG := function(G, m)
-    local expected_order, reps, candidates;
-    expected_order := 2 ^ (m + 1);
-    reps := List(ConjugacyClassesSubgroups(G), Representative);
-    candidates := Filtered(reps,
-                           S -> IsElementaryAbelian(S)
-                                and Order(S) = expected_order);
+    local candidates;
+    candidates := _DETF_AllMaxEAsIn(G, m);
     if Length(candidates) = 0 then
         Error("_RC_AllMaxEAsInG: no rank-", m + 1,
               " elementary abelian in G");
@@ -571,8 +593,10 @@ _RC_AllMaxEAsInG := function(G, m)
 end;;
 
 # Module-level config: max number of EAs to use. Set to a positive
-# integer to cap (helpful at m=5 where ConjugacyClassesSubgroups returns
-# many). Defaults to 0 (use all).
+# integer to cap. With _DETF_AllMaxEAsIn (issue #287) the EA count is
+# already bounded: 6 (m=2), 30 (m=3), 112 (m=5), so the cap is no longer
+# needed for OOM/timeout protection — it's kept as a safety guard.
+# Defaults to 0 (use all).
 _RC_MAX_EAS := 0;;
 
 _RC_GetCache := function(setup_G)
