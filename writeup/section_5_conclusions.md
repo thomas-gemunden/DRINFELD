@@ -168,11 +168,13 @@ three independent levels of granularity:
 - **K-4a full pipeline anchor** (PR #224 + #228,
   `tests/test_k4a_classify.g`, the K-4a-T7 acceptance gate at issue
   #201): `K4aClassify(3)` returns `verdict = "trivial"` in 3.4 s wall,
-  matching KRR's known \(\alpha = 0\) at \(m = 3\). All 39 acceptance
-  assertions PASS — T1 smoke (4), T2 \(m = 3\) trivial anchor (23),
-  T3 \(m \ge 4\) error path (4), T4 \(m = 2\) smoke (8). PR #228
-  contributed the float-vs-integer comparison one-line fix needed to
-  bring the test green; the underlying pipeline of #224 is unchanged.
+  matching the independently-understood \(\alpha = 0\) at \(m = 3\)
+  (BW(3) = E_8 orbifold theory; see [GK19, GK21] per [KRR24] §5.1).
+  All 39 acceptance assertions PASS — T1 smoke (4), T2 \(m = 3\)
+  trivial anchor (23), T3 \(m \ge 4\) error path (4), T4 \(m = 2\)
+  smoke (8). PR #228 contributed the float-vs-integer comparison
+  one-line fix needed to bring the test green; the underlying
+  pipeline of #224 is unchanged.
 
 - **D-VAN \(m = 3\) basis anchor** (Gate 1A,
   `tests/test_detecting_family_vanish.g`, PR #205): all 35 generators

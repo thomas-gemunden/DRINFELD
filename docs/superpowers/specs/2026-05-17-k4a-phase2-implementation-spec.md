@@ -403,7 +403,8 @@ Read("../k4a_classify.g");
 
 result := K4aClassify(3);
 
-# Acceptance: Keller's α at m=3 is verified to be trivial (per 2410.18638 §6).
+# Acceptance: at m=3 the BW(3)=E_8 lattice VOA orbifold is independently
+# understood to be untwisted (per [GK19, GK21] as cited by KRR §5.1).
 Assert(0, result.verdict = "trivial",
     Concatenation("K-4a m=3 anchor: expected trivial verdict, got ", String(result.verdict)));
 Assert(0, result.trivial = true,
