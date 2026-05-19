@@ -50,7 +50,8 @@ to run the resulting per-generator sweep crash-safely (T-5).
 
 The torsion subgroup of $H^2(C_G(g);\, U(1)) \cong H^3(C_G(g);\, \mathbb Z)$
 for $g \in E_+(m)$ is in every case a 2-group, by Adem–Milgram
-[AM04, §IV.7], and almost always splits as a direct sum of cyclic
+[AM04, §IV.4--§IV.5 (Thm 4.3, Thm 5.6)], and almost always splits as
+a direct sum of cyclic
 2-groups of small exponent. We replace the unified
 augmented-$\mathbb Z$ test with a dispatcher
 `IsCoboundary2Split` [`extraspecial_orbifolds/scripts/solver/iscoboundary2_split.g`]

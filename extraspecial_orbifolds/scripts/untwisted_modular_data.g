@@ -84,10 +84,102 @@ BuildSimpleIndex := function(G)
     );
 end;;
 
+# ============================================================
+# Lazy variant — K-2c (#129)
+# ============================================================
+#
+# `BuildSimpleIndexLazy(G)` returns the same record shape as
+# `BuildSimpleIndex(G)` but defers the per-class CharacterTable builds
+# (and therefore `ct_centraliser[i]`, `cc_centraliser[i]`, `irreps[i]`,
+# `irrep_dims[i]`) until the FIRST access to that class. For E_+(7) the
+# eager version hits GAP's memory limit during cumulative CT builds for
+# ~16K classes; the single-query `SKeller(7, i, j)` path only ever needs
+# CTs for 2 classes (c1 and c2), so the lazy variant cuts the CT count
+# from O(|classes|) to O(1) per query.
+#
+# Eager fields (same cost as the non-lazy version):
+#   classes, reps, class_sizes, centralisers, num_irreps,
+#   global_offset, global_to_local, rank
+#
+# Lazy fields (each is a length-|classes| list initialised to `fail`;
+#   populated by `_EnsureClassData` on first access):
+#   ct_centraliser, cc_centraliser, irreps, irrep_dims
+#
+# `is_lazy := true` marker lets the accessors below auto-materialise.
+#
+# K-2c FOLLOW-UP (this PR): `BuildTransportsLazy` + `GetTransport`
+# defer the per-class BFS the same way. Combined with the lazy index
+# above, `BuildIntertwinerDataUntwistedLazy` now pays only O(1) per
+# class for the single-query SKeller(m, i, j) path. See
+# `BuildTransportsLazy` below for the laziness contract and call-site
+# convention.
+BuildSimpleIndexLazy := function(G)
+    local classes, reps, class_sizes, centralisers, num_irreps,
+          global_offset, rank, glob_to_local, idx, i, k;
+    classes := ConjugacyClasses(G);
+    reps := List(classes, Representative);
+    class_sizes := List(classes, Size);
+    centralisers := List(reps, x -> Centralizer(G, x));
+    # NrConjugacyClasses is enough for global offsets — cheaper than
+    # the full CharacterTable build that `BuildSimpleIndex` does eagerly.
+    num_irreps := List(centralisers, NrConjugacyClasses);
+    rank := Sum(num_irreps);
+    global_offset := [0];
+    for i in [1..Length(num_irreps) - 1] do
+        global_offset[i + 1] := global_offset[i] + num_irreps[i];
+    od;
+    glob_to_local := [];
+    idx := 0;
+    for i in [1..Length(classes)] do
+        for k in [1..num_irreps[i]] do
+            idx := idx + 1;
+            glob_to_local[idx] := [i, k];
+        od;
+    od;
+    return rec(
+        group := G,
+        order := Order(G),
+        classes := classes,
+        reps := reps,
+        class_sizes := class_sizes,
+        centralisers := centralisers,
+        # Lazy fields — `fail` until first `_EnsureClassData` for this i.
+        ct_centraliser := List([1..Length(classes)], _ -> fail),
+        cc_centraliser := List([1..Length(classes)], _ -> fail),
+        irreps         := List([1..Length(classes)], _ -> fail),
+        irrep_dims     := List([1..Length(classes)], _ -> fail),
+        num_irreps := num_irreps,
+        global_offset := global_offset,
+        global_to_local := glob_to_local,
+        rank := rank,
+        is_lazy := true
+    );
+end;;
+
+# Materialise the per-class CharacterTable data for class i. No-op if
+# already materialised, or if `idx` is the eager version (no `is_lazy`).
+_EnsureClassData := function(idx, i)
+    local ct, cc, irr;
+    if not IsBound(idx.is_lazy) or idx.is_lazy = false then
+        return;
+    fi;
+    if idx.ct_centraliser[i] <> fail then
+        return;
+    fi;
+    ct := CharacterTable(idx.centralisers[i]);
+    cc := ConjugacyClasses(ct);
+    irr := Irr(ct);
+    idx.ct_centraliser[i] := ct;
+    idx.cc_centraliser[i] := cc;
+    idx.irreps[i] := irr;
+    idx.irrep_dims[i] := List(irr, chi -> chi[1]);
+end;;
+
 # Position of element x within ConjugacyClasses(C) (where C = centraliser).
 # Used to look up character values.
 ClassIndexInCentraliser := function(idx, i, x)
     local cc, j;
+    _EnsureClassData(idx, i);
     cc := idx.cc_centraliser[i];
     for j in [1..Length(cc)] do
         if x in cc[j] then return j; fi;
@@ -97,6 +189,7 @@ end;;
 
 # Evaluate the k-th irrep of C_G(g_i) at element x ∈ C_G(g_i).
 EvalIrr := function(idx, i, k, x)
+    _EnsureClassData(idx, i);
     return idx.irreps[i][k][ClassIndexInCentraliser(idx, i, x)];
 end;;
 
@@ -108,6 +201,10 @@ ComputeUntwistedT := function(idx)
     local Tdiag, i, k, glob, ki, dim, val;
     Tdiag := [];
     for i in [1..Length(idx.classes)] do
+        # ClassIndexInCentraliser already calls _EnsureClassData for lazy
+        # idxs, but we read irrep_dims / irreps directly below, so trigger
+        # materialisation here too (no-op for eager idxs).
+        _EnsureClassData(idx, i);
         ki := ClassIndexInCentraliser(idx, i, idx.reps[i]);
         for k in [1..idx.num_irreps[i]] do
             dim := idx.irrep_dims[i][k];
@@ -144,48 +241,119 @@ end;;
 #
 # Output is byte-for-byte identical: .elements is still the sorted
 # AsSSortedList(class) result, .t_of is parallel.
-BuildTransports := function(idx)
-    local transport, i, elts, rep, gens, t_by_elt, queue, head,
-          a, t_a, g, b, ts, k, elt_to_idx;
-    transport := [];
+#
+# K-2c (#129): per-class BFS extracted into `BuildTransportForClass` so
+# the lazy variant below can materialise one class at a time without
+# paying the eager iteration cost over all classes. `BuildTransports`
+# is now a thin loop over `BuildTransportForClass`.
+BuildTransportForClass := function(idx, class_idx)
+    local elts, rep, gens, t_by_elt, queue, head, a, t_a, g, b, ts, k,
+          elt_to_idx;
+    elts := AsSSortedList(idx.classes[class_idx]);
+    rep := idx.reps[class_idx];
     gens := GeneratorsOfGroup(idx.group);
+    # BFS from rep under conjugation, accumulating transports.
+    t_by_elt := NewDictionary(rep, true);
+    AddDictionary(t_by_elt, rep, One(idx.group));
+    queue := [rep];
+    head := 1;
+    while head <= Length(queue) do
+        a := queue[head];
+        t_a := LookupDictionary(t_by_elt, a);
+        for g in gens do
+            b := g * a * g^(-1);
+            if LookupDictionary(t_by_elt, b) = fail then
+                AddDictionary(t_by_elt, b, g * t_a);
+                Add(queue, b);
+            fi;
+        od;
+        head := head + 1;
+    od;
+    # Materialise transports in .elements order (sorted) for
+    # byte-for-byte compatibility with the original API.
+    ts := List(elts, a -> LookupDictionary(t_by_elt, a));
+    if ForAny(ts, t -> t = fail) then
+        Error("BuildTransportForClass: BFS did not cover class ",
+              class_idx);
+    fi;
+    # P-9 (#126): for ProjectorFormula's centraliser-intersection
+    # path, build a `b -> bi` lookup so we can find the transport
+    # index of a candidate b in O(log |class|) instead of O(|class|).
+    elt_to_idx := NewDictionary(rep, true);
+    for k in [1..Length(elts)] do
+        AddDictionary(elt_to_idx, elts[k], k);
+    od;
+    return rec(elements := elts, t_of := ts, elt_to_idx := elt_to_idx);
+end;;
+
+BuildTransports := function(idx)
+    local transport, i;
+    transport := [];
     for i in [1..Length(idx.classes)] do
-        elts := AsSSortedList(idx.classes[i]);
-        rep := idx.reps[i];
-        # BFS from rep under conjugation, accumulating transports.
-        t_by_elt := NewDictionary(rep, true);
-        AddDictionary(t_by_elt, rep, One(idx.group));
-        queue := [rep];
-        head := 1;
-        while head <= Length(queue) do
-            a := queue[head];
-            t_a := LookupDictionary(t_by_elt, a);
-            for g in gens do
-                b := g * a * g^(-1);
-                if LookupDictionary(t_by_elt, b) = fail then
-                    AddDictionary(t_by_elt, b, g * t_a);
-                    Add(queue, b);
-                fi;
-            od;
-            head := head + 1;
-        od;
-        # Materialise transports in .elements order (sorted) for
-        # byte-for-byte compatibility with the original API.
-        ts := List(elts, a -> LookupDictionary(t_by_elt, a));
-        if ForAny(ts, t -> t = fail) then
-            Error("BuildTransports: BFS did not cover class ", i);
-        fi;
-        # P-9 (#126): for ProjectorFormula's centraliser-intersection
-        # path, build a `b -> bi` lookup so we can find the transport
-        # index of a candidate b in O(log |class|) instead of O(|class|).
-        elt_to_idx := NewDictionary(rep, true);
-        for k in [1..Length(elts)] do
-            AddDictionary(elt_to_idx, elts[k], k);
-        od;
-        Add(transport, rec(elements := elts, t_of := ts,
-                           elt_to_idx := elt_to_idx));
+        Add(transport, BuildTransportForClass(idx, i));
     od;
     return transport;
+end;;
+
+# K-2c (#129): lazy variant of `BuildTransports`.
+#
+# Returns a plain GAP list `transport_lazy` of length
+# `Length(idx.classes)`, indexable as `transport_lazy[i]`. Initially
+# every slot holds `fail`; the slot for class `i` is materialised
+# (replaced by the `rec(elements, t_of, elt_to_idx)` record) only on
+# the first call to `GetTransport(transport_lazy, idx, i)` for that i.
+#
+# At m=7 (E_+(7), ~16K classes, |G|=32768) the eager
+# `BuildTransports` does ~16M BFS steps up-front, dominating cache
+# build alongside the CT builds (which K-2c already deferred via
+# `BuildSimpleIndexLazy`). For the single-query `SKeller(7, i, j)`
+# path only 2 class slots ever need materialisation, so this cuts the
+# transport cost from O(|classes| * |G|) to O(|G|) per query.
+#
+# CONSUMER CALL-SITE CONTRACT
+# ===========================
+# Every consumer that previously wrote
+#     elts_i := transport[i].elements;
+#     ts_i  := transport[i].t_of;
+#     e2i_j := transport[j].elt_to_idx;
+# MUST instead do
+#     t_i   := GetTransport(transport, idx, i);
+#     elts_i := t_i.elements;
+#     ts_i  := t_i.t_of;
+#     t_j   := GetTransport(transport, idx, j);
+#     e2i_j := t_j.elt_to_idx;
+# `GetTransport` is a no-op (just a list lookup) for already-
+# materialised slots, including transports produced by the eager
+# `BuildTransports`, so it is safe to use unconditionally with both
+# variants. Backward compatibility is preserved: the returned record
+# shape is identical to the eager version.
+BuildTransportsLazy := function(idx)
+    local transport, i;
+    transport := [];
+    for i in [1..Length(idx.classes)] do
+        Add(transport, fail);
+    od;
+    return transport;
+end;;
+
+# K-2c (#129): accessor used by transport consumers.
+# Materialises slot `i` of `transport` (a list returned by either
+# `BuildTransports` or `BuildTransportsLazy`) on first access and
+# returns the per-class record `rec(elements, t_of, elt_to_idx)`.
+#
+# Safe under either variant:
+#   * eager  transport[i] : already a record; returned unchanged.
+#   * lazy   transport[i] : initially `fail`; built via
+#                            `BuildTransportForClass(idx, i)` and
+#                            cached in-place.
+#
+# The function mutates `transport[i]` in-place; subsequent calls are
+# O(1) list lookups.
+GetTransport := function(transport, idx, i)
+    if transport[i] = fail then
+        transport[i] := BuildTransportForClass(idx, i);
+    fi;
+    return transport[i];
 end;;
 
 # =================================================================
@@ -205,15 +373,21 @@ end;;
 # |class_j| / |C_G(g_i)| (~10^3 - 10^4 for E_+(7) typical classes).
 ComputeSBlock := function(idx, transport, i, j)
     local M, Ni, Nj, elts_i, elts_j, ts_i, ts_j, ai, bi, a, b, t_a, s_b,
-          b_tilde, a_tilde, k, l, ord, cen_i_elts, c, elt_to_idx_j;
+          b_tilde, a_tilde, k, l, ord, cen_i_elts, c, elt_to_idx_j,
+          t_i, t_j;
     Ni := idx.num_irreps[i]; Nj := idx.num_irreps[j];
     M := List([1..Ni], k -> List([1..Nj], l -> 0));
-    elts_i := transport[i].elements;
-    elts_j := transport[j].elements;
-    ts_i := transport[i].t_of;
-    ts_j := transport[j].t_of;
+    # K-2c (#129): route per-class transport reads through GetTransport
+    # so this function transparently supports both eager (BuildTransports)
+    # and lazy (BuildTransportsLazy) transport lists.
+    t_i := GetTransport(transport, idx, i);
+    t_j := GetTransport(transport, idx, j);
+    elts_i := t_i.elements;
+    elts_j := t_j.elements;
+    ts_i := t_i.t_of;
+    ts_j := t_j.t_of;
     cen_i_elts := AsList(idx.centralisers[i]);
-    elt_to_idx_j := transport[j].elt_to_idx;
+    elt_to_idx_j := t_j.elt_to_idx;
     ord := idx.order;
     if Length(elts_j) <= Length(cen_i_elts) then
         # Path (A): iterate class_j directly (smaller of the two).

@@ -268,7 +268,7 @@ $$
 H^*(E_+(m); \mathbb F_2) \;\cong\; \mathbb F_2[c_2, x_1, \ldots, x_{2m}] \otimes \Lambda(y_1, \ldots, y_{2m}),
 $$
 with explicit relations expressing $c_2$ in terms of the $x_i, y_j$
-([Qui71, Thm. 5.4]; [AM04, IV.7]), together with the Bockstein
+([Qui71, Thm. 5.4]; [AM04, §IV.4-§IV.5 (Thm 4.3, Thm 5.6)]), together with the Bockstein
 spectral sequence relating $H^*(G; \mathbb F_2)$ to $H^*(G; \mathbb Z)$
 ([AM04, Ch. III.3]) and the connecting homomorphism
 $H^*(G; U(1)) \cong H^{*+1}(G; \mathbb Z)$ (since $H^*(G; \mathbb R) = 0$
@@ -290,9 +290,16 @@ sign conventions.
 for which $\mathrm{res}^G_H \colon H^3(E_+(7); U(1)) \to H^3(H; U(1))$
 is injective on the relevant subspace ([AM04, V.6]). Candidate
 detecting families for extraspecial 2-groups are recorded in
-[AM04, Ch. IV.7] and consist of a maximal elementary abelian subgroup
+[AM04, §IV.4-§IV.5 (Thm 4.3, Thm 5.6)] and consist of a maximal
+elementary abelian subgroup
 $(\mathbb F_2)^{m+1}$ together with an order-$2^3$ extraspecial
-section. For these subgroups HAP's `ResolutionFiniteGroup` is
+section. The citation chain in detail: Adem--Milgram framework
+(§IV.4--§IV.5) $\to$ Quillen 1971 Thm 5.10 (explicit
+$H^*(E_+(m); \mathbb F_2)$) $\to$ Harada--Kono 1987 Thm 1.1 (integer
+$A(k)$ summand) $\to$ UCT for $U(1)$ coefficients. See R-1
+(`docs/superpowers/research/2026-05-17-detecting-family-literature.md`)
+for the full synthesis.
+For these subgroups HAP's `ResolutionFiniteGroup` is
 tractable; one then computes
 $\ker \mathrm{Tr}_G \le \mathrm{res}^{-1}(\ker \mathrm{Tr}_H)$ and
 upgrades by checking the additional constraint coming from the

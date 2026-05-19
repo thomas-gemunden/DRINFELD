@@ -86,6 +86,36 @@ BuildIntertwinerDataUntwisted := function(G)
     );
 end;;
 
+# K-2c (#129): lazy variant for the single-query SKeller path.
+# Same shape as the eager version above but BOTH the inner index AND the
+# transports defer per-class work until first access.
+#
+# Use this when only a small number of (class_i, class_j) pairs will be
+# queried (e.g. SKeller(7, i, j) for a single (i, j)). For full S-matrix
+# work the eager version is still preferred since every class would be
+# touched anyway.
+#
+# K-2c FOLLOW-UP (this PR): BuildTransportsLazy + GetTransport mean that
+# at m=7 only the queried classes pay the BFS cost (each per-class BFS is
+# O(|G|) = ~30K ops vs ~16M ops for the eager full sweep across ~16K
+# classes). The consumers (`ComputeSBlock`, `ProjectorFormula`,
+# `_CTComputeSBlock`) route reads through `GetTransport` so the lazy
+# transport list is transparent to them.
+BuildIntertwinerDataUntwistedLazy := function(G)
+    local idx, transport;
+    idx := BuildSimpleIndexLazy(G);
+    transport := BuildTransportsLazy(idx);
+    return rec(
+        group := G,
+        idx := idx,
+        transport := transport,
+        trace_on_W := function(class_idx, irrep_idx, h)
+            return EvalIrr(idx, class_idx, irrep_idx, h);
+        end,
+        epsilon := function(g1, g2, a, b) return 1; end
+    );
+end;;
+
 
 # ============================================================
 # Simple-object descriptors W_g
@@ -127,7 +157,8 @@ end;;
 ProjectorFormula := function(W_g1, W_g2, intertwiner_data)
     local idx, transport, i, j, total, ord, elts_i, elts_j,
           ts_i, ts_j, ai, bi, a, b, t_a, s_b, b_in_C1, a_in_C2,
-          eps, chi1_val, chi2_val, cen_i_elts, c, elt_to_idx_j;
+          eps, chi1_val, chi2_val, cen_i_elts, c, elt_to_idx_j,
+          t_i, t_j;
     # P-9 (#126): we have two ways to enumerate commuting (a, b)
     # pairs in class_i × class_j:
     #   (A) iterate a ∈ class_i, b ∈ class_j, commutation test.
@@ -142,12 +173,17 @@ ProjectorFormula := function(W_g1, W_g2, intertwiner_data)
     transport := intertwiner_data.transport;
     i := W_g1.class_idx;
     j := W_g2.class_idx;
-    elts_i := transport[i].elements;
-    elts_j := transport[j].elements;
-    ts_i := transport[i].t_of;
-    ts_j := transport[j].t_of;
+    # K-2c (#129): GetTransport materialises per-class transports on
+    # demand when `transport` came from BuildTransportsLazy, and is a
+    # no-op when it came from eager BuildTransports.
+    t_i := GetTransport(transport, idx, i);
+    t_j := GetTransport(transport, idx, j);
+    elts_i := t_i.elements;
+    elts_j := t_j.elements;
+    ts_i := t_i.t_of;
+    ts_j := t_j.t_of;
     cen_i_elts := AsList(idx.centralisers[i]);
-    elt_to_idx_j := transport[j].elt_to_idx;
+    elt_to_idx_j := t_j.elt_to_idx;
     ord := idx.order;
     total := 0;
     if Length(elts_j) <= Length(cen_i_elts) then

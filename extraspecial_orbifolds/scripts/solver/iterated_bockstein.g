@@ -70,6 +70,73 @@ ChangeDirectoryCurrent(Filename(itb_orig_dir, ""));;
 # redefinition is safe).
 If_ := function(cond, a, b) if cond then return a; else return b; fi; end;;
 
+# Module-level cache for A_F2_T := TransposedMat(BoundaryMatrixGF2(C)).
+#
+# A-5b R2-5 (#258): the per-call rebuild of A_F2_T inside IsCoboundary2Z2k
+# was the dominant remaining bottleneck after the R2-3/R2-4 batched solver
+# landed. Live profile (May 2026, PID 44998 post-PR-233) attributed ~2.5 %
+# of total CPU to FuncTRANSPOSED_GF2MAT and the surrounding rebuild
+# accounted for the majority of the remaining ~95 % interpreter overhead
+# in ExecFor3/ExecAssList/EvalFunccall4args inside the Z2k Path-Z calls.
+#
+# At m=5 with |C|=1024 the boundary matrix is n^2 x n = 1M x 1024 = ~125 MB
+# (compressed GF(2)), and TransposedMat moves ~1 GB of bits each call. The
+# m=5 sweep issues thousands of Z2k calls per generator on a small number
+# (~4) of distinct centralisers (one per BRW orbit), so caching by
+# IsIdenticalObj(C) recovers nearly all of that cost.
+#
+# We mirror the pattern of _BoundaryMatrixGF2_cache in mod2_solver.g:
+# the BoundaryMatrixGF2(C) call returns an IsIdenticalObj-stable matrix
+# (also cached by C), so we key by C and hold the precomputed transpose.
+_ItBock_AF2T_CACHE := [];;
+
+_GetCachedAF2T := function(C)
+    local entry, A_F2_T;
+    for entry in _ItBock_AF2T_CACHE do
+        if IsIdenticalObj(entry.C, C) then return entry.A_F2_T; fi;
+    od;
+    A_F2_T := TransposedMat(BoundaryMatrixGF2(C));
+    Add(_ItBock_AF2T_CACHE, rec(C := C, A_F2_T := A_F2_T));
+    return A_F2_T;
+end;;
+
+# Module-level cache for the multiplication table mult[i][j] := idx(elts[i] * elts[j]).
+#
+# A-5b R2-6 (#258 follow-up): IB_DeltaBeta does
+#   ij := idx(elts[i] * elts[j])
+# inside a nested n×n loop, where idx is `Position(elts, h)` — an O(n)
+# linear scan over the centraliser. That makes IB_DeltaBeta O(n³).
+# At m=5 with n = |C| = 1024, that's ~10⁹ ops per IB_DeltaBeta call,
+# and IB_RecCob calls it per recursion level × 2^num_basis enumerated α.
+#
+# Precomputing mult_table once per C reduces IB_DeltaBeta to a pure
+# O(n²) integer-arithmetic loop with O(1) compiled list lookups, and
+# allows IB_AlphaCupAlpha-style operations to be done with vectorised
+# indexing instead of element-by-element function calls.
+_ItBock_MULT_CACHE := [];;
+
+_GetCachedMultTable := function(C)
+    local entry, elts, n, idx_dict, mult, i, j, prod_ij;
+    for entry in _ItBock_MULT_CACHE do
+        if IsIdenticalObj(entry.C, C) then return entry; fi;
+    od;
+    elts := AsList(C);
+    n := Length(elts);
+    idx_dict := NewDictionary(elts[1], true, elts);
+    for i in [1..n] do AddDictionary(idx_dict, elts[i], i); od;
+    mult := List([1..n], i -> List([1..n], j -> 0));
+    for i in [1..n] do
+        for j in [1..n] do
+            prod_ij := elts[i] * elts[j];
+            mult[i][j] := LookupDictionary(idx_dict, prod_ij);
+        od;
+    od;
+    entry := rec(C := C, elts := elts, n := n,
+                 idx_dict := idx_dict, mult := mult);
+    Add(_ItBock_MULT_CACHE, entry);
+    return entry;
+end;;
+
 # IsCoboundary2Mod2WithLiftWitness(C, c) — witness-returning variant of
 # IsCoboundary2Mod2WithLift.
 #
@@ -95,7 +162,7 @@ If_ := function(cond, a, b) if cond then return a; else return b; fi; end;;
 IsCoboundary2Mod2WithLiftWitness := function(C, c)
     local elts, n, c_F2, A_F2_T, phi, GA, abgens, ab_orders, hom_basis,
           alpha_vals, k, ord, num_basis, mask, alpha, alpha_cup_alpha,
-          residual, sol, beta_F2, i, j, idx_h, zero, one;
+          residual, sol, beta_F2, i, j, zero, one;
     elts := AsList(C);
     n := Length(elts);
     zero := Zero(GF(2));
@@ -111,7 +178,10 @@ IsCoboundary2Mod2WithLiftWitness := function(C, c)
     od;
     ConvertToVectorRep(c_F2, GF(2));
 
-    A_F2_T := TransposedMat(BoundaryMatrixGF2(C));
+    # A-5b R2-5 (#258): cached per-C (see _GetCachedAF2T below). This entry
+    # point is far cooler than IsCoboundary2Z2k but the same cache covers it
+    # for free.
+    A_F2_T := _GetCachedAF2T(C);
 
     # Build the F_2-functional basis for H¹(C; F_2) (mirrors
     # BocksteinH1ToH2's construction but keeps the alpha-as-1-cochain).
@@ -143,12 +213,13 @@ IsCoboundary2Mod2WithLiftWitness := function(C, c)
         od;
 
         # Build α∪α as a length-n² F_2 vector.
-        alpha_cup_alpha := List([1..n*n], i -> zero);
-        for i in [1..n] do
-            for j in [1..n] do
-                alpha_cup_alpha[(i-1)*n + j] := alpha[i] * alpha[j];
-            od;
-        od;
+        # A-5b R2-3 sibling (refs #186, #221): replaced an n^2 nested
+        # interpreter loop with a single compiled KroneckerProduct. The wrap
+        # `[alpha]` makes it a 1×n matrix; the `[1]` unwraps the result back
+        # to a length-n² row whose entry at column (i-1)*n+j is
+        # alpha[i] * alpha[j] — equivalent to the original loop body.
+        # Mirrors the BocksteinH1ToH2 fix in mod2_solver.g.
+        alpha_cup_alpha := KroneckerProduct([alpha], [alpha])[1];
         ConvertToVectorRep(alpha_cup_alpha, GF(2));
 
         # Test whether c_F2 - α∪α is a strict F_2 coboundary.
@@ -212,18 +283,23 @@ end;;
 # IB_AlphaCupAlpha(alpha, n) — the cup-square (α∪α)(h, k) := α(h)·α(k)
 # as a length-n² integer (0/1) cochain. Used to subtract Bockstein image
 # corrections from a Z/2^L cochain table at any level.
+#
+# A-5b R2-9 (#258 follow-up): replace nested for-loop with compiled
+# KroneckerProduct, matching the pattern landed in PR #221 / #225 for
+# BocksteinH1ToH2 and IsCoboundary2Mod2WithLiftWitness. KroneckerProduct
+# is called per α (up to 2^num_basis ≈ 2K-16K α candidates per Path Z
+# class at m=5), so the per-call O(n²) interpreted loop dominated Path
+# Z wall after the R2-5/R2-6/R2-7/R2-8 audit series eliminated the
+# Path A bottlenecks.
 IB_AlphaCupAlpha := function(alpha, n)
-    local v, i, j;
     if Length(alpha) = 0 then
         return List([1..n*n], i -> 0);
     fi;
-    v := List([1..n*n], i -> 0);
-    for i in [1..n] do
-        for j in [1..n] do
-            v[(i-1)*n + j] := alpha[i] * alpha[j];
-        od;
-    od;
-    return v;
+    # GAP's KroneckerProduct on two 1xn matrices [alpha], [alpha] returns
+    # a 1x(n*n) matrix whose only row is the outer product alpha ⊗ alpha,
+    # laid out as v[(i-1)*n + j] = alpha[i] * alpha[j] — exactly the
+    # cup-square. Returning [1] extracts the row.
+    return KroneckerProduct([alpha], [alpha])[1];
 end;;
 
 # IsCob_aux(C, c_table, modulus, hom_basis, A_F2_T, elts, n, idx) —
@@ -244,6 +320,24 @@ IB_DeltaBeta := function(beta_int, elts, n, idx, modulus)
         for j in [1..n] do
             ij := idx(elts[i] * elts[j]);
             delta_beta[(i-1)*n + j] := (beta_int[i] + beta_int[j] - beta_int[ij]) mod modulus;
+        od;
+    od;
+    return delta_beta;
+end;;
+
+# A-5b R2-6 (#258 follow-up): mult-cached variant. mult[i][j] is the
+# 1-based index of elts[i] * elts[j] in elts, precomputed once per C.
+# Pure O(n²) integer arithmetic; no Position lookups.
+IB_DeltaBetaMult := function(beta_int, n, mult, modulus)
+    local delta_beta, i, j, mult_i, beta_i, b;
+    delta_beta := List([1..n*n], i -> 0);
+    for i in [1..n] do
+        mult_i := mult[i];
+        beta_i := beta_int[i];
+        for j in [1..n] do
+            b := beta_i + beta_int[j] - beta_int[mult_i[j]];
+            # `mod` is positive in GAP; for negative b we adjust:
+            delta_beta[(i-1)*n + j] := b mod modulus;
         od;
     od;
     return delta_beta;
@@ -278,9 +372,10 @@ IB_TableMod2WithLift := function(c_table, n, A_F2_T, hom_basis)
         if Length(alpha) = 0 then
             alpha_cup_alpha_F2 := List([1..n*n], i -> zero);
         else
-            alpha_cup_alpha_F2 := List([1..n*n], i -> 0);
-            alpha_cup_alpha_F2 := List(IB_AlphaCupAlpha(alpha, n),
-                                       v -> v * one);
+            # A-5b R2-9 (#258 follow-up): the previous code allocated a
+            # zero-list then immediately overwrote it; drop the wasted
+            # allocation. The `* one` promotion is compiled (vec * scalar).
+            alpha_cup_alpha_F2 := IB_AlphaCupAlpha(alpha, n) * one;
         fi;
         ConvertToVectorRep(alpha_cup_alpha_F2, GF(2));
         residual := b_F2 - alpha_cup_alpha_F2;
@@ -308,7 +403,14 @@ end;;
 
 # IB_RecCob — the core recursion. Tests "[c_table] = 0 in H²(C; Z/modulus)"
 # where modulus = 2^L. Uses precomputed centraliser data.
-IB_RecCob := function(c_table, modulus, elts, n, idx, A_F2_T, hom_basis)
+#
+# A-5b R2-6 (#258 follow-up): the `mult` argument is the precomputed
+# multiplication-index table from _GetCachedMultTable(C); when present,
+# IB_DeltaBeta is dispatched to IB_DeltaBetaMult (pure O(n²) integer
+# arithmetic) instead of the O(n³) Position-based path. `elts` and
+# `idx` are kept in the signature for compatibility with the legacy
+# fallback but are unused on the mult path.
+IB_RecCob := function(c_table, modulus, elts, n, idx, A_F2_T, hom_basis, mult)
     local L, beta_int, delta_beta, c_table_next, mask, alpha,
           alpha_cup_alpha, c_table_shifted, num_basis;
     if modulus = 2 then
@@ -321,7 +423,11 @@ IB_RecCob := function(c_table, modulus, elts, n, idx, A_F2_T, hom_basis)
     if beta_int = fail then return false; fi;
 
     # Compute d_1 at modulus / 2.
-    delta_beta := IB_DeltaBeta(beta_int, elts, n, idx, modulus);
+    if mult <> fail then
+        delta_beta := IB_DeltaBetaMult(beta_int, n, mult, modulus);
+    else
+        delta_beta := IB_DeltaBeta(beta_int, elts, n, idx, modulus);
+    fi;
     c_table_next := IB_DivBy2(c_table, delta_beta, modulus / 2);
 
     # Now test [c_table_next] in im(β: H¹(F_2) -> H²(Z/(modulus/2)))
@@ -345,7 +451,7 @@ IB_RecCob := function(c_table, modulus, elts, n, idx, A_F2_T, hom_basis)
         c_table_shifted := List([1..n*n], i ->
             (c_table_next[i] - alpha_cup_alpha[i]) mod (modulus / 2));
         if IB_RecCob(c_table_shifted, modulus / 2, elts, n, idx,
-                     A_F2_T, hom_basis) then
+                     A_F2_T, hom_basis, mult) then
             return true;
         fi;
     od;
@@ -356,7 +462,7 @@ end;;
 # Tests whether [c] = 0 in H²(C; Z/2^k). c is a 2-cochain function
 # (h, k) -> Z (values reduced mod 2^k internally). k >= 1.
 IsCoboundary2Z2k := function(C, c, k)
-    local elts, n, idx, c_table, modulus, A_F2_T, hom_basis, i, j;
+    local mult_rec, elts, n, idx, c_table, modulus, A_F2_T, hom_basis, i, j;
     if k < 1 then
         Error("IsCoboundary2Z2k: k must be >= 1");
     fi;
@@ -364,9 +470,13 @@ IsCoboundary2Z2k := function(C, c, k)
         return IsCoboundary2Mod2(C, c);
     fi;
 
-    elts := AsList(C);
-    n := Length(elts);
-    idx := function(h) return Position(elts, h); end;
+    # A-5b R2-6 (#258 follow-up): use cached mult table so IB_DeltaBeta
+    # is O(n²) instead of O(n³). The cached record also holds elts so we
+    # don't re-AsList.
+    mult_rec := _GetCachedMultTable(C);
+    elts := mult_rec.elts;
+    n := mult_rec.n;
+    idx := function(h) return LookupDictionary(mult_rec.idx_dict, h); end;
 
     modulus := 2^k;
     c_table := List([1..n*n], i -> 0);
@@ -376,8 +486,13 @@ IsCoboundary2Z2k := function(C, c, k)
         od;
     od;
 
-    A_F2_T := TransposedMat(BoundaryMatrixGF2(C));
+    # A-5b R2-5 (#258): A_F2_T is built once per C and cached. Previously
+    # this was rebuilt every IsCoboundary2Z2k call — at m=5 with |C|=1024
+    # each rebuild moves ~1 GB of bits through TransposedMat, and the sweep
+    # issues thousands of calls. The transpose dominates remaining wall.
+    A_F2_T := _GetCachedAF2T(C);
     hom_basis := IB_F2HomBasis(C);
 
-    return IB_RecCob(c_table, modulus, elts, n, idx, A_F2_T, hom_basis);
+    return IB_RecCob(c_table, modulus, elts, n, idx, A_F2_T, hom_basis,
+                     mult_rec.mult);
 end;;

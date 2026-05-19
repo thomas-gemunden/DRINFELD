@@ -130,10 +130,15 @@ presentation of $H^*(E_+(m); \mathbb F_2)$. The pipeline is required
 at $m = 7$, where HAP fails at the resolution step, and is also a
 correctness cross-check at $m \le 3$.
 
-**Math entry points.** Quillen [Qui71]; Adem–Milgram [AM04, IV.7];
-Bockstein operations in [AM04, III.3]; universal-coefficient
-sequence relating $\mathbb F_2$ and $\mathbb Z$ coefficients
-[Br82, Ch. II].
+**Math entry points.** Quillen [Qui71]; Adem–Milgram
+[AM04, §IV.4-§IV.5 (Thm 4.3, Thm 5.6)]; Bockstein operations in
+[AM04, III.3]; universal-coefficient sequence relating $\mathbb F_2$
+and $\mathbb Z$ coefficients [Br82, Ch. II]. The citation chain in
+detail: Adem--Milgram framework (§IV.4--§IV.5) $\to$ Quillen 1971 Thm
+5.10 (explicit $H^*(E_+(m); \mathbb F_2)$) $\to$ Harada--Kono 1987
+Thm 1.1 (integer $A(k)$ summand) $\to$ UCT for $U(1)$ coefficients.
+See R-1 (`docs/superpowers/research/2026-05-17-detecting-family-literature.md`)
+for the full synthesis.
 
 ### Q-EPIC
 
@@ -467,8 +472,9 @@ outputs.
 An independent path to $H^3(E_+(m); U(1))$ uses a *detecting subgroup*
 $H \le E_+(m)$ for which $\mathrm{res}^G_H \colon H^3(G; U(1)) \to H^3(H; U(1))$
 is injective ([AM04, V.6]). For an extraspecial 2-group, candidates
-are recorded in [AM04, Ch. IV.7] and consist of a maximal elementary
-abelian subgroup combined with one extraspecial section.
+are recorded in [AM04, §IV.4-§IV.5 (Thm 4.3, Thm 5.6)] and consist of
+a maximal elementary abelian subgroup combined with one extraspecial
+section.
 
 **Goal.** An alternative implementation of `UnitCircleCohomology(G, 3)`
 that pulls $H^3(G; U(1))$ back from $H^3(H; U(1))$ via restriction,

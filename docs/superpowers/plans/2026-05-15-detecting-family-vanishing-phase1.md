@@ -808,8 +808,14 @@ Create `extraspecial_orbifolds/scripts/detecting_family_vanish.g`:
 # Core vanishing test: decides whether [omega] = 0 in H^3(E_+(m); U(1))
 # by checking omega|_E = 0 and omega|_{D_8} = 0 on the AM04 detecting
 # family F = {E, D_8}. Injectivity of res : H^3(G; U(1)) -> H^3(E) ⊕ H^3(D_8)
-# is given by AM04 IV.7 + Quillen 1971 (essential ideal starts in degree
-# 2m, clear of degree 3 for m >= 2).
+# is given by AM04 §IV.4-§IV.5 (specifically Thm 4.3 + Thm 5.6) +
+# Quillen 1971 (essential ideal starts in degree 2m, clear of degree 3
+# for m >= 2). The citation chain in detail: Adem-Milgram framework
+# (§IV.4-§IV.5) -> Quillen 1971 Thm 5.10 (explicit H*(E_+(m); F_2)) ->
+# Harada-Kono 1987 Thm 1.1 (integer A(k) summand) -> UCT for U(1)
+# coefficients. See R-1
+# (docs/superpowers/research/2026-05-17-detecting-family-literature.md)
+# for the full synthesis.
 #
 # Spec: docs/superpowers/specs/2026-05-15-detecting-family-vanishing-test-design.md
 

@@ -17,8 +17,10 @@
   "test_fsi_wrapper":                  {"wall_s_median": 0, "wall_s_runs": []},
   "test_fusion_coefficient":           {"wall_s_median": 0, "wall_s_runs": []},
   "test_gauge_invariants":             {"wall_s_median": 0, "wall_s_runs": []},
+  "test_hap_lhs_resolution":           {"wall_s_median": 0, "wall_s_runs": []},
   "test_integral_bockstein":           {"wall_s_median": 0, "wall_s_runs": []},
   "test_integral_cohomology":          {"wall_s_median": 0, "wall_s_runs": []},
+  "test_krr_full_s_t":                 {"wall_s_median": 0, "wall_s_runs": []},
   "test_krr_projector":                {"wall_s_median": 0, "wall_s_runs": []},
   "test_krr_vs_central_closed_form":   {"wall_s_median": 0, "wall_s_runs": []},
   "test_q8_regression":                {"wall_s_median": 0, "wall_s_runs": []},
@@ -31,5 +33,6 @@
   "test_quillen_presentation":         {"wall_s_median": 0, "wall_s_runs": []},
   "test_s_entry":                      {"wall_s_median": 0, "wall_s_runs": []},
   "test_skeller_adapter":              {"wall_s_median": 0, "wall_s_runs": []},
-  "test_standard_bar_cocycle":         {"wall_s_median": 0, "wall_s_runs": []}
+  "test_standard_bar_cocycle":         {"wall_s_median": 0, "wall_s_runs": []},
+  "test_uc_sequence":                  {"wall_s_median": 0, "wall_s_runs": []}
 }
