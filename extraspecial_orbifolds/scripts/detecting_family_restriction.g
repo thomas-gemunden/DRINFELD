@@ -333,12 +333,26 @@ end;;
 #         are picked independently. This adds 2^{m-2} * binomial(m, 2)
 #         further EAs, e.g., 80 at m=5.
 #     Total: 2^m + 2^{m-2} * binomial(m, 2) Lagrangians. At m=5: 32 + 80
-#     = 112. Empirically determined to be sufficient for per-class
-#     restriction-injectivity at m=5 (verified during issue #287).
-#     CAVEAT: This enumeration is not theoretically complete (e.g.,
-#     "triple-diagonal" Lagrangians involving three pairs at once are
-#     omitted). If per-class detection still fails on some unit
-#     generator, extend by adding higher-order diagonals.
+#     = 112 out of N_+(5, 2) = 4590 type-+ Lagrangians. Empirically
+#     determined to be sufficient for per-class restriction-injectivity
+#     at m=5 (verified during issue #287; 0/165 false trivials).
+#     SOUNDNESS CAVEAT (per #289 audit, corrected #291): this is
+#     112/4590 of the full Quillen-theorem detecting family at m=5,
+#     so the enumeration is sound (restriction to a subset can only
+#     introduce false NON-trivials, never false trivials) but
+#     theoretically incomplete. The full Quillen 5.10 detecting
+#     family at m has N_+(m, 2) = prod_{i=0..m-1}(2^i + 1) maximal
+#     elementary abelians (= 6, 30, 270, 4590, 75582, 9845550 at
+#     m = 1..7). One-per-Aut-orbit is NOT sufficient (refuted at
+#     m=2). The 112 chosen here are 32 axis-aligned + 80 diagonal
+#     pair-swap; "triple-diagonal" Lagrangians involving three pairs
+#     at once are omitted. If per-class detection ever fails on
+#     some unit generator at m >= 4, extend by adding higher-order
+#     diagonals; for m=7 the partial-enumeration gap widens further
+#     (axis+pair-swap pattern would give ~296 of 9.8M) and warrants
+#     Witt-decomposition systematic enumeration (writeup §7,
+#     issue #290). See `docs/superpowers/research/2026-05-19-d-van-
+#     detecting-family-correctness.md` for the full reconciliation.
 _DETF_AllMaxEAsIn := function(G, m)
     local expected_order, reps, candidates, H, Z_G, z, gens_G, n_pairs,
           sel_bits, sel, basis, i, ea, ea_list,
