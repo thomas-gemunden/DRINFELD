@@ -16,9 +16,14 @@ A holomorphic vertex operator algebra (VOA) \(V\) of central charge \(c\) and a 
 \]
 between the orbifold MTC and the representation category of the *twisted Drinfeld double* of \(G\) at a 3-cocycle \(\omega \in H^3(G;\, U(1))\) — the 't Hooft anomaly of the orbifold [DPR91, DVVV89, EvG18, MN05]. The class \([\omega]\) is in general non-trivial and is the principal obstruction to the orbifold being holomorphic (untwisted).
 
-Keller, Roberts and Roberts [KRR24] construct an orbifold of the Barnes–Wall lattice VOA \(V_{\mathrm{BW}(m)}\) by the extraspecial 2-group \(E_+(m) \cong 2_+^{2m+1}\) acting through (the lift of) its embedding into the Bolt–Room–Wall group \(\mathrm{BRW}(m) \le O(2^m, \mathbb R)\). The case \(m = 7\) would, granting their conjecture, produce a holomorphic VOA of central charge \(c = 128\) and gap \(4\) — the first such example with gap larger than \(2\) [Höh96, Höh19, Wit07]. The cases \(m = 3\) (underlying lattice \(E_8\), ambient lattice VOA \(V_{E_8}\) at \(c = 8\), orbifold understood) and \(m = 5\) (at \(c = 32\)) are intermediate anchors.
+Keller, Roberts and Roberts [KRR24] (arXiv:2411.13646) study orbifolds of the Barnes–Wall lattice VOA \(V_{\mathrm{BW}(m)}\) by the extraspecial 2-group \(E_+(m) \cong 2_+^{2m+1}\) acting through (the lift of) its embedding into the Bolt–Room–Wall group \(\mathrm{BRW}(m) \le O(2^m, \mathbb R)\). Their main contribution is **Conjecture 5.2 (§5.3)** at \(m = 7\): granting that a certain anomaly 3-cocycle \(\omega \in H^3(E_+(7); U(1))\) vanishes, the holomorphic \(E(7)\)-orbifold of \(V_{\mathrm{BW}(7)}\) gives a holomorphic CFT of central charge \(c = 128\) with gap \(4\) — the first example with gap larger than \(2\) [Höh96, Höh19, Wit07]. The cases \(m = 3\) (underlying lattice \(E_8\), ambient lattice VOA \(V_{E_8}\) at \(c = 8\), orbifold work in [GK19, GK21]) and \(m = 5\) (at \(c = 32\), orbifold work in [MR24]) are intermediate anchors — KRR cite these prior works rather than redoing the construction.
 
-**Keller's open question** ([KRR24] §1.4; also [Keller24]) asks whether the obstruction class \([\alpha] \in H^3(E_+(m); U(1))\) controlling \(\mathrm{Mod}(V_{\mathrm{BW}(m)}^{E_+(m)})\) vanishes for \(m = 5\) and \(m = 7\). At \(m = 3\), KRR verify \([\alpha] = 0\) directly by producing the untwisted holomorphic VOA. At \(m = 5, 7\) they verify *necessary* conditions — triviality of the local 2-cocycles \(c_g\) on every conjugacy class and the level-matching (type-0) condition of [vEMS17] — and conjecture that those conditions are sufficient.
+**The Keller question** (our research framing, informed by KRR's necessary-condition checks) asks whether the obstruction class \([\alpha] \in H^3(E_+(m); U(1))\) controlling \(\mathrm{Mod}(V_{\mathrm{BW}(m)}^{E_+(m)})\) vanishes for \(m = 5\) and \(m = 7\). What KRR themselves verify:
+
+- *Cochain-level intertwiner-2-cocycle triviality* (§4.4, eqs 4.4.3–4.4.10), at \(m \in \{3, 5, 7\}\). This is one necessary condition for \([\alpha] = 0\).
+- *Level-matching / type-0 condition* of [vEMS17], at **\(m = 7\) only** (§5.3).
+
+KRR's formal conjecture (Conjecture 5.2) applies only at \(m = 7\); they make no positive claim about \([\alpha] = 0\) at \(m = 3\) or \(m = 5\). The "Keller question" at \(m \in \{5, 7\}\) is our own framing, motivated by KRR's necessary-condition checks.
 
 ### 1.2 Notation and the local-cocycle obstruction
 
@@ -354,7 +359,7 @@ For \(D_8\) and \(Q_8\) the comparison is via the joint \((S, T)\)-permutation m
 
 The triviality verdict at \(E_+(m)\) is the conjunction over \(H\): \([\alpha] = 0 \iff [\alpha|_E] = 0 \wedge [\alpha|_{D_8}] = 0 \wedge [\alpha|_{Q_8}] = 0\), bidirectional by §3's detection theorem.
 
-The aggregator `K4aClassify(m)` (T6, `extraspecial_orbifolds/scripts/k4a_classify.g`) orchestrates the three classifications and returns the joint verdict. The \(m = 3\) anchor (T7, `extraspecial_orbifolds/scripts/tests/test_k4a_classify.g`) runs the full pipeline on KRR's known-trivial \(m = 3\) data and confirms `verdict = "trivial"`; this is the gating test before applying to \(m = 5, 7\). It now passes 39/39 assertions in 3.4 s wall (well under the 300 s budget) per PR #224; the same test file additionally verifies the \(m = 2\) case (also `verdict = "trivial"`) as a bonus.
+The aggregator `K4aClassify(m)` (T6, `extraspecial_orbifolds/scripts/k4a_classify.g`) orchestrates the three classifications and returns the joint verdict. The \(m = 3\) anchor (T7, `extraspecial_orbifolds/scripts/tests/test_k4a_classify.g`) runs the full pipeline on the \(m = 3\) case where the orbifold is independently understood to be untwisted (BW(3) = E_8; see [GK19, GK21] for the orbifold theory) and confirms `verdict = "trivial"`; this is the gating test before applying to \(m = 5, 7\). It now passes 39/39 assertions in 3.4 s wall (well under the 300 s budget) per PR #224; the same test file additionally verifies the \(m = 2\) case (also `verdict = "trivial"`) as a bonus.
 
 ### 5.5 Strengths and weaknesses
 
@@ -572,7 +577,7 @@ Whatever the verdict, record:
 
 ### 9.3 Limitations
 
-- *KRR's conjecture is empirical evidence, not proof.* KRR verify two necessary conditions (\(c_g\) trivial cochain-level; level matching). These are not sufficient in general. The whole point of D-VAN + K-4a is to upgrade KRR's necessary conditions to a sufficient verdict at \(m = 5, 7\).
+- *KRR's conjecture is empirical evidence, not proof.* KRR's formal conjecture (Conjecture 5.2) is **m = 7 only**. They verify cochain-level \(c_g\) triviality at \(m \in \{3, 5, 7\}\) (one necessary condition) and the [vEMS17] level-matching at \(m = 7\) only. These are necessary but not sufficient in general; D-VAN + K-4a upgrade KRR's necessary conditions to a sufficient verdict at \(m = 5, 7\).
 
 - *D-VAN does not see the lattice.* If two different VOA orbifolds at \(E_+(m)\) happened to share the same \(\omega\) (which is the case if and only if their modular data agrees up to MTC iso), D-VAN cannot distinguish them; only the K-4a path through the lattice intertwiners is sensitive to the lattice itself.
 
@@ -743,18 +748,11 @@ Whatever the verdict, record:
   note   = {Cited as [Höh19] in the body.},
 }
 
-@misc{Keller24,
-  author = {Keller, Christoph A.},
-  title  = {Talks and notes on the {Barnes--Wall} orbifold construction},
-  year   = {2024},
-  note   = {arXiv:2410.18638 and references therein.},
-}
-
 @article{KellerRobertsRoberts2024,
-  author  = {Keller, Christoph A. and Roberts, Alec W. and Roberts, James},
+  author  = {Keller, Christoph A. and Roberts, Ashley Winter and Roberts, Jeremy},
   title   = {{CFTs} with large gap from {B}arnes--{W}all lattice orbifolds},
   year    = {2024},
-  note    = {arXiv:2411.13646. Cited as [KRR24] in the body.},
+  note    = {arXiv:2411.13646. Cited as [KRR24] in the body. v2 dated 17 Mar 2026.},
 }
 
 @article{Kirillov2002,

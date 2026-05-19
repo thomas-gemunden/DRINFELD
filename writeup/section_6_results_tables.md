@@ -96,8 +96,9 @@ Notes on Table 2:
   variant (\#220 / merged \#235).
 - The K-4a anchor at \(m = 3\) (PR \#224 with float-vs-int test fix
   \#228) is the headline gate of the K-4a-T7 acceptance: the
-  orchestrator runs the three-subgroup pipeline on KRR's known-trivial
-  \(m = 3\) data and returns `verdict = "trivial"` end-to-end. The
+  orchestrator runs the three-subgroup pipeline on the independently-
+  understood \(m = 3\) untwisted case (BW(3) = E_8 orbifold; [GK19,
+  GK21] per [KRR24] §5.1) and returns `verdict = "trivial"` end-to-end. The
   bonus \(m = 2\) row uses the same orchestrator and is in the same
   test file (T4 of `tests/test_k4a_classify.g`).
 - The D-VAN row covers the m=3 portion of `test_detecting_family_vanish.g`;
