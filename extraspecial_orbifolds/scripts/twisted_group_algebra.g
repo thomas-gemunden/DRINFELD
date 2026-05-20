@@ -12,9 +12,16 @@
 #
 # We verify the main lifting theorems (3.3-3.5 of the paper) by
 # checking u_{Σ_{ar}}(...) relations explicitly.
-
-Read("bw_lattice.g");          # supplies BWGram, HalfGram, BitsOf, etc.
-Read("em_construction.g");     # supplies Sigma_ar, ZGen, EmGroup
+#
+# Dependency contract (issue #319): this file does NOT Read its
+# dependencies. Callers are required to load `bw_lattice.g` (supplies
+# BWGram, HalfGram, BitsOf, Parity) and `em_construction.g` (supplies
+# Sigma_ar, ZGen, EmGroup, TensorList) BEFORE Reading this file.
+# Historically this file did unconditional relative-path Reads of those
+# two siblings, but those Reads were silently broken when the caller
+# Read this file by absolute path from a different CWD (see #315 / #319).
+# All existing callers already pre-load the two siblings, so the Reads
+# were a no-op-in-practice foot-gun; they have been removed.
 
 # --- Lattice-basis matrices for E(m) generators ---
 # The action on w_i (a row vector) follows from (A.2.4)-(A.2.6) of the
