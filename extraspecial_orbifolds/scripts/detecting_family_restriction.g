@@ -227,22 +227,40 @@ _DETF_SetupG_FromResolution := function(G, R)
                num_h3_classes := Product(UCT.torsion));
 end;;
 
-# Build a setup_G via LHSResolutionEPlus(m, 5). Returns the same rec
-# shape as SetupCohomology3 but uses the LHS-perturbed resolution as
-# R, making the m=7 case feasible. Caches by m so the (expensive at
-# m=7) LHS build runs at most once per session.
+# Build a setup_G via LHSResolutionEPlus(m, max_n). Returns the same
+# rec shape as SetupCohomology3 but uses the LHS-perturbed resolution
+# as R, making the m=7 case feasible. Caches by m so the (expensive
+# at m=7) LHS build runs at most once per session.
 #
 # Reuses LHSResolutionEPlus's own per-(m, max_n) cache for R_E, so
 # repeated calls within a session are O(1) for the resolution; the
 # only first-call cost is K := TensorWithIntegers(R) + UCT.
+#
+# **max_n choice (issue #322)**: H^3 cohomology via UCT only needs
+# boundary up to degree n+1 = 4, so max_n = 4 suffices. At m=7,
+# LHSResolutionEPlus(7, 4) takes ~60 s vs LHSResolutionEPlus(7, 5)'s
+# ~14 min — a 14× saving with no semantic difference for the
+# slack-trim use case. For backward compatibility at m ≤ 5 we keep
+# max_n = 5 (matches the existing test_hap_lhs_resolution.g
+# anchors); at m = 7 we use max_n = 4 to fit inside the 8-hour
+# budget for the streaming-greedy driver.
 _DETF_LHS_SETUP_G_CACHE := rec();;
 _DETF_BuildSetupG_LHS := function(m)
-    local key, det, setup;
+    local key, det, setup, max_n;
     key := Concatenation("m", String(m));
     if IsBound(_DETF_LHS_SETUP_G_CACHE.(key)) then
         return _DETF_LHS_SETUP_G_CACHE.(key);
     fi;
-    det := LHSResolutionEPlusDetailed(m, 5);
+    # max_n = 4 is the minimum needed for UCT at H^3 (which uses
+    # BoundaryMatrix at degrees 3 and 4). At m=7 this is the
+    # cost-critical choice; at smaller m we keep max_n = 5 for
+    # bit-for-bit consistency with the existing PR #252 anchors.
+    if m >= 6 then
+        max_n := 4;
+    else
+        max_n := 5;
+    fi;
+    det := LHSResolutionEPlusDetailed(m, max_n);
     setup := _DETF_SetupG_FromResolution(det.G, det.R_E);
     _DETF_LHS_SETUP_G_CACHE.(key) := setup;
     return setup;
