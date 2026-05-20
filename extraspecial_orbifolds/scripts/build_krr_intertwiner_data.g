@@ -117,6 +117,24 @@
 
 
 # ============================================================
+# Capture this file's directory at load time. INPUT_FILENAME() returns
+# whatever GAP is currently reading at *call* time (not at function-
+# definition time), so for any auto-Read fallback used inside a
+# closure-returning helper (e.g. `_KRRI_BuildEpsilon` -> V-1 wiring),
+# we need to snapshot the directory now, while the file is being
+# Read'd, and reference the snapshot from inside the helper.
+# ============================================================
+
+_BUILDKRR_LOAD_DIR := fail;;
+_BUILDKRR_LOAD_SELF := INPUT_FILENAME();;
+if _BUILDKRR_LOAD_SELF <> fail and _BUILDKRR_LOAD_SELF <> "stream" then
+    _BUILDKRR_LOAD_DIR := _BUILDKRR_LOAD_SELF{
+        [1..Length(_BUILDKRR_LOAD_SELF)
+            - Length("/build_krr_intertwiner_data.g")]};
+fi;;
+
+
+# ============================================================
 # Helper: is a vector all-zero (treating GF(2) or Z elements uniformly)?
 # ============================================================
 
@@ -191,11 +209,18 @@ _KRRI_ResolveAutoSource := function(m)
             return "sparse_spectral";
         fi;
         return "lite";
+    elif m = 7 then
+        # Dense is infeasible (2^64-dim); sparse uses TraceOnOmega0Gauss
+        # internally (issue #236, integrated 2026-05-20 via #316). At m=7
+        # the per-class trace path is poly-time per class; the dominant
+        # cost is BuildSimpleIndexLazy + per-class CT loads (~hours total),
+        # so by default we still fall back to lite. Set spectral_source
+        # := "sparse_spectral" explicitly to opt in.
+        return "lite";
     else
-        # m = 7: even sparse spectral is a future workstream (Gauss-sum
-        # path). Fall through to the standard character functional, which
+        # Larger m: never use spectral; lite mode (ε = 1, trace = EvalIrr)
         # is the mathematically correct ω = 0 choice per the T4a research
-        # note (Section 3.2: ε ≡ 1, trace = EvalIrr).
+        # note (Section 3.2).
         return "lite";
     fi;
 end;;
@@ -368,20 +393,20 @@ end;;
 # "Sparse spectral" mode: at m = 5 the dense matrix is 65536x65536 per
 # h; use `BuildKRRSpectralCharactersSparse(m)` which has the same record
 # shape as the dense version but computes traces via the closed-form
-# Schur sum (krr_spectral_characters_sparse.g). At m = 7 the sparse
-# path needs the Gauss-sum branch (also stubbed); for now we fall back
-# to lite at m = 7.
+# Schur sum (krr_spectral_characters_sparse.g). At m = 7 the entry-
+# enumeration path is infeasible (2^64 entries per trace); the sparse
+# builder dispatches to `TraceOnOmega0Gauss` (issue #236, verified at
+# m=3 and m=5 cross-validation in `tests/test_krr_gauss_sum.g`).
+#
+# #316 follow-up: previously this function short-circuited m = 7 to
+# lite mode with a "future work" notice. The Gauss-sum branch has
+# landed (TraceOnOmega0Gauss is fully implemented and tested at
+# m={3,5}); we now route m = 7 through the sparse path normally. The
+# wall-time at m = 7 is dominated by the per-class CT load (~1-2 min
+# per centraliser × 16K classes in the lazy-idx fallback, though only
+# the central class actually exercises the sparse trace).
 _KRRI_BuildSparseSpectralCallables := function(m, G, idx, verbose)
     local sd;
-    if m = 7 then
-        if verbose then
-            Print("[BuildKRRIntertwinerData] m = 7: sparse_spectral not yet ",
-                  "available (Gauss-sum path is future work); falling back ",
-                  "to lite mode. Per the T4a research note (Section 3.2), ",
-                  "this is the mathematically correct choice for ω = 0.\n");
-        fi;
-        return _KRRI_BuildLiteCallables(idx);
-    fi;
     if not IsBoundGlobal("BuildKRRSpectralCharactersSparse") then
         Error("BuildKRRIntertwinerData: spectral_source = \"sparse_spectral\" ",
               "requires `BuildKRRSpectralCharactersSparse` to be in scope. ",
@@ -425,6 +450,7 @@ end;;
 # ============================================================
 
 _KRRI_BuildEpsilon := function(omega_vec, G, m, verbose)
+    local cand;
     if omega_vec = fail or _KRRI_IsZeroVec(omega_vec) then
         if verbose then
             Print("[BuildKRRIntertwinerData] omega = 0: epsilon ≡ 1 ",
@@ -432,14 +458,45 @@ _KRRI_BuildEpsilon := function(omega_vec, G, m, verbose)
         fi;
         return function(g1, g2, a, b) return 1; end;
     fi;
+    # V-1 (#14, shipped 2026-05-20 via #316): try to auto-load the
+    # production wiring file `epsilon_omega_phase.g` if `EpsilonOmegaPhase`
+    # is not yet bound. This mirrors the loader pattern used by the
+    # k4a_classify.g sibling chain. We use the FILE-LOAD-TIME directory
+    # snapshot `_BUILDKRR_LOAD_DIR` (captured at the top of this file)
+    # rather than INPUT_FILENAME() at call time, since the latter
+    # returns the caller's input file, not ours.
+    if not IsBoundGlobal("EpsilonOmegaPhase") then
+        if _BUILDKRR_LOAD_DIR <> fail then
+            cand := Concatenation(_BUILDKRR_LOAD_DIR, "/epsilon_omega_phase.g");
+            if IsExistingFile(cand) then
+                Read(cand);
+            fi;
+        fi;
+        if not IsBoundGlobal("EpsilonOmegaPhase") then
+            for cand in [ "epsilon_omega_phase.g",
+                          "./epsilon_omega_phase.g",
+                          "extraspecial_orbifolds/scripts/epsilon_omega_phase.g" ] do
+                if IsExistingFile(cand) then
+                    Read(cand);
+                    break;
+                fi;
+            od;
+        fi;
+    fi;
     if not IsBoundGlobal("EpsilonOmegaPhase") then
         Error("BuildKRRIntertwinerData: omega_vec is non-zero but ",
-              "`EpsilonOmegaPhase` (V-1, #14) is not in scope. ",
+              "`EpsilonOmegaPhase` (V-1, #14) is not in scope and ",
+              "`epsilon_omega_phase.g` could not be auto-located. ",
               "Read(\"epsilon_omega_phase.g\") first, or omit omega_vec ",
               "for the omega = 0 baseline.");
     fi;
-    # Delegate to V-1. V-1's exact signature may evolve; we pass the
-    # raw arguments and let it interpret `omega_vec` against G.
+    if verbose then
+        Print("[BuildKRRIntertwinerData] omega ≠ 0: routing through ",
+              "EpsilonOmegaPhase (V-1, CGR §4 convention).\n");
+    fi;
+    # Delegate to V-1. EpsilonOmegaPhase caches (R, UCT, omega_cb) per
+    # (G, omega_vec) on first invocation, so the per-call cost is just
+    # the integer-slant sum + a cyclotomic exponentiation.
     return function(g1, g2, a, b)
         return EpsilonOmegaPhase(omega_vec, G, m, g1, g2, a, b);
     end;

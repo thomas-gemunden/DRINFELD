@@ -287,16 +287,130 @@ _K4A_ClassifyNonAbelianBranch := function(restricted, H, classifier)
 end;;
 
 
-# ---- Public: K4aClassify(m) -------------------------------------------
+# `_K4A_BuildBranchData(opts, m, H_parent)`:
+# Build the per-branch `intertwiner_data` record. Routes to either
+# `BuildIntertwinerDataUntwisted(H_parent)` (the legacy K-4a default)
+# or `BuildKRRIntertwinerData(m, H_parent, opts_for_krr)` (the
+# lattice-source path added in #316). At opts.omega_vec = fail the
+# two routes are numerically identical for the consumers
+# (ComputeCTModularData / RestrictTraceOnWToSubgroup).
+_K4A_BuildBranchData := function(opts, m, H_parent)
+    local krr_opts;
+    if not opts.lattice_source then
+        return BuildIntertwinerDataUntwisted(H_parent);
+    fi;
+    # Lattice-source path. Lazy-load build_krr_intertwiner_data.g if
+    # not yet bound.
+    if not IsBoundGlobal("BuildKRRIntertwinerData") then
+        if not _K4A_LoadSibling("BuildKRRIntertwinerData",
+                                 "build_krr_intertwiner_data.g") then
+            Error("K4aClassify: lattice_source = true but ",
+                  "build_krr_intertwiner_data.g could not be located.");
+        fi;
+    fi;
+    # Note: the loader above may bind a stale scaffold version of
+    # BuildKRRIntertwinerData from kr_intertwiner_bridge.g. Force the
+    # production version by re-Reading build_krr_intertwiner_data.g if
+    # the loaded function takes only 2 args (the scaffold) rather than
+    # variable args (the production version). We detect that via a
+    # probe call's error signature. For now we just trust the load
+    # order — build_krr_intertwiner_data.g is the LAST sibling to bind
+    # the name, so it wins.
+    krr_opts := rec(
+        spectral_source := opts.spectral_source,
+        verbose         := opts.verbose
+    );
+    if opts.omega_vec <> fail then
+        krr_opts.omega_vec := opts.omega_vec;
+    fi;
+    return BuildKRRIntertwinerData(m, H_parent, krr_opts);
+end;;
 
-K4aClassify := function(m)
-    local n_max_supported, t_total_0, G_em, ea_rec, d8_rec, q8_rec,
+
+# ---- Public: K4aClassify(m [, opts]) -----------------------------------
+#
+# OPTIONAL `opts` RECORD
+# ----------------------
+# `opts` (optional, second arg) is a record. Recognised fields:
+#   .lattice_source : if true, the per-branch `data_X` records are
+#                     built via `BuildKRRIntertwinerData(m, X.parent)`
+#                     (K-4a-T4b / PR #309) instead of the legacy
+#                     `BuildIntertwinerDataUntwisted(X.parent)`. At
+#                     omega = 0 the two are numerically identical (the
+#                     KR-bridge research note §3.2 / Test 1 of
+#                     `test_build_krr_intertwiner_data.g`), so the
+#                     K-4a verdicts are unchanged. The lattice path
+#                     becomes meaningful once V-1 (#14) is exercised
+#                     by passing a non-zero `opts.omega_vec` (which is
+#                     then threaded into `BuildKRRIntertwinerData`).
+#                     Default: false (legacy untwisted-baseline path).
+#   .omega_vec      : non-trivial 3-cocycle on E_+(m). Only consumed
+#                     when `lattice_source = true`; threaded through
+#                     to `BuildKRRIntertwinerData`'s `opts.omega_vec`,
+#                     which routes through V-1's `EpsilonOmegaPhase`.
+#                     CAVEAT: at omega ≠ 0, the K-4a CT-gauge research
+#                     note's §3.2 invariant (epsilon ≡ 1 ↔ trace =
+#                     EvalIrr) breaks: trace_on_W also needs the
+#                     projective character table. That is K-4a-T4c
+#                     work, not V-1. Until T4c lands, omega ≠ 0
+#                     produces structurally-correct epsilon values but
+#                     unchanged trace_on_W, so the per-branch CT
+#                     modular data is NOT the omega-twisted Drinfeld
+#                     center — it is the omega = 0 baseline with a
+#                     non-trivial epsilon decoration. Use with care.
+#                     Default: fail (omega = 0).
+#   .spectral_source: forwarded to `BuildKRRIntertwinerData`. Default
+#                     "lite" (numerically equivalent to untwisted
+#                     baseline at omega = 0, per the research note).
+#   .verbose        : forwarded to `BuildKRRIntertwinerData`.
+#                     Default false.
+#
+# At default opts (no `lattice_source`), behaviour is unchanged from
+# pre-#316.
+
+K4aClassify := function(arg)
+    local m, user_opts, opts, n_max_supported, t_total_0, G_em,
+          ea_rec, d8_rec, q8_rec,
           data_E, data_D8, data_Q8, restricted_E, restricted_D8,
           restricted_Q8, E_class, D8_class, Q8_class, trivial, verdict,
           spectral_data, sparse_data, t_branch_0, t_E_branch,
-          t_D8_branch, t_Q8_branch, t_total, t_spectral;
+          t_D8_branch, t_Q8_branch, t_total, t_spectral, fld;
 
     # ---- Argument validation -----------------------------------------
+    if Length(arg) < 1 then
+        Error("K4aClassify: usage K4aClassify(m [, opts]).");
+    fi;
+    m := arg[1];
+    user_opts := fail;
+    if Length(arg) >= 2 then
+        user_opts := arg[2];
+    fi;
+    # Normalise opts. Default = legacy (lattice_source = false).
+    opts := rec(
+        lattice_source  := false,
+        omega_vec       := fail,
+        spectral_source := "lite",
+        verbose         := false
+    );
+    if user_opts <> fail then
+        if not IsRecord(user_opts) then
+            Error("K4aClassify: opts must be a record or fail; got ",
+                  user_opts);
+        fi;
+        for fld in ["lattice_source", "omega_vec",
+                    "spectral_source", "verbose"] do
+            if IsBound(user_opts.(fld)) then
+                opts.(fld) := user_opts.(fld);
+            fi;
+        od;
+    fi;
+    # Sanity: omega_vec only meaningful with lattice_source.
+    if opts.omega_vec <> fail and not opts.lattice_source then
+        Error("K4aClassify: opts.omega_vec is set but ",
+              "opts.lattice_source = false. The untwisted-baseline path ",
+              "does not consume omega_vec. Set lattice_source := true ",
+              "to route through BuildKRRIntertwinerData (V-1 / KR-bridge).");
+    fi;
     if not (IsInt(m) and m >= 1) then
         Error("K4aClassify: m must be a positive integer; got ", m);
     fi;
@@ -495,7 +609,7 @@ K4aClassify := function(m)
         restricted_E := RestrictTraceOnWToSubgroupHonourParent(
             data_E, ea_rec.subgroup);
     else
-        data_E := BuildIntertwinerDataUntwisted(ea_rec.parent);
+        data_E := _K4A_BuildBranchData(opts, m, ea_rec.parent);
         restricted_E := RestrictTraceOnWToSubgroup(data_E, ea_rec.subgroup);
     fi;
     E_class := _K4A_ClassifyAbelianBranch(restricted_E, ea_rec.subgroup);
@@ -513,7 +627,7 @@ K4aClassify := function(m)
         restricted_D8 := RestrictTraceOnWToSubgroupHonourParent(
             data_D8, d8_rec.subgroup);
     else
-        data_D8 := BuildIntertwinerDataUntwisted(d8_rec.parent);
+        data_D8 := _K4A_BuildBranchData(opts, m, d8_rec.parent);
         restricted_D8 := RestrictTraceOnWToSubgroup(data_D8, d8_rec.subgroup);
     fi;
     D8_class := _K4A_ClassifyNonAbelianBranch(
@@ -532,7 +646,7 @@ K4aClassify := function(m)
         restricted_Q8 := RestrictTraceOnWToSubgroupHonourParent(
             data_Q8, q8_rec.subgroup);
     else
-        data_Q8 := BuildIntertwinerDataUntwisted(q8_rec.parent);
+        data_Q8 := _K4A_BuildBranchData(opts, m, q8_rec.parent);
         restricted_Q8 := RestrictTraceOnWToSubgroup(data_Q8, q8_rec.subgroup);
     fi;
     Q8_class := _K4A_ClassifyNonAbelianBranch(
@@ -569,6 +683,7 @@ K4aClassify := function(m)
     return rec(
         m              := m,
         group          := G_em,
+        opts           := opts,
         spectral_data  := spectral_data,
         E_class        := E_class,
         D8_class       := D8_class,
