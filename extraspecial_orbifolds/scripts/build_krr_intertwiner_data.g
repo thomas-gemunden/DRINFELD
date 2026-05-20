@@ -41,36 +41,56 @@
 # WHEN THIS FUNCTION BECOMES NON-TRIVIAL
 # ======================================
 # For non-trivial omega (V-1, issue #14) the CT-gauge choice breaks
-# down: `epsilon` becomes the actual omega-derived CGR phase, and
-# `trace_on_W` is augmented by lattice multiplicities. Both hooks
-# are exposed via the `omega_vec` / `spectral_source` options below.
-# At the time of writing (issue #188), KRR conjecture ω = 0 (KRR §5.3);
-# the omega ≠ 0 codepaths are stubs to be filled by V-1 / the alpha-only
-# branch of the K-4 epic.
+# down: `epsilon` becomes the actual omega-derived CGR phase (PR #321,
+# wiring shipped 2026-05-20 via #316), and `trace_on_W` returns
+# PROJECTIVE character values for the slant 2-cocycle α_g (issue
+# #323, shipped 2026-05-20). Both hooks are exposed via the
+# `omega_vec` option below; on a non-zero `omega_vec` the
+# `spectral_source = "auto"` mode routes to "projective" regardless
+# of m.
+#
+# Original (issue #188) comment retained for context: at the time of
+# writing #188, KRR conjecture ω = 0 (KRR §5.3); only the lite /
+# spectral paths were filled in. The ω ≠ 0 paths were stubs.
 #
 # OPTIONS RECORD
 # ==============
 # `opts` (optional, third argument) is a record. Recognised fields:
 #   .omega_vec       : H^3 cocycle for non-trivial twist (default: ω = 0).
 #                      If provided as an integer vector, epsilon switches
-#                      to V-1's `EpsilonOmegaPhase` (#14). For ω = 0 (or
-#                      omega_vec absent / a zero vector) epsilon ≡ 1.
+#                      to V-1's `EpsilonOmegaPhase` (#14) AND trace_on_W
+#                      switches to the projective-character path (#323).
+#                      For ω = 0 (or omega_vec absent / a zero vector)
+#                      epsilon ≡ 1 and trace_on_W uses the centraliser-
+#                      character functional (EvalIrr).
 #   .spectral_source : one of:
-#       "auto"     : use lattice eigenspace data at m = 3 (where dense
-#                    T_h is feasible) and the standard character functional
-#                    at m ≥ 5 (where dense T_h is infeasible without the
-#                    sparse-trace path). DEFAULT.
+#       "auto"     : at ω = 0, use lattice eigenspace data at m = 3
+#                    (where dense T_h is feasible) and the standard
+#                    character functional at m ≥ 5. At ω ≠ 0, route to
+#                    the projective-character path (issue #323) regardless
+#                    of m. DEFAULT.
 #       "lite"     : always use the standard character functional
 #                    (`EvalIrr`). Identical to `BuildIntertwinerDataUntwisted`
-#                    numerically. Useful when speed matters and the
-#                    lattice spectral data is not needed for diagnostics.
+#                    numerically when ω = 0. At ω ≠ 0 this is
+#                    mathematically WRONG (returns regular characters
+#                    instead of projective ones); the option is retained
+#                    for diagnostic comparison only.
 #       "dense_spectral" : run `BuildKRRSpectralCharacters(m)` and use
 #                    its `trace_on_W` directly. Only feasible at m = 3
-#                    (dense Omega_0 = 16-dim).
+#                    (dense Omega_0 = 16-dim). Ignored at ω ≠ 0 (the
+#                    projective path takes over).
 #       "sparse_spectral" : run `BuildKRRSpectralCharactersSparse(m)`.
 #                    For m = 5 use the lattice-multiplicities path;
 #                    for m = 7 falls back to "lite" with a diagnostic
 #                    warning (the Gauss-sum path is a future workstream).
+#                    Ignored at ω ≠ 0 (the projective path takes over).
+#       "projective": always use the projective-character path (issue
+#                    #323). At ω = 0 this is mathematically equivalent
+#                    to "lite" (the projective table for the trivial
+#                    cocycle is the ordinary character table, byte-for-
+#                    byte after re-indexing); useful as a sanity check
+#                    of the projective machinery. At ω ≠ 0 this is the
+#                    only mathematically correct mode.
 #   .verbose         : print build progress / decisions. Default false.
 #   .lazy            : if true, use BuildSimpleIndexLazy +
 #                      BuildTransportsLazy from K-2c (#129) to defer
@@ -180,10 +200,11 @@ _KRRI_NormaliseOpts := function(m, user_opts)
         fi;
     od;
     if not opts.spectral_source in
-            ["auto", "lite", "dense_spectral", "sparse_spectral"] then
+            ["auto", "lite", "dense_spectral", "sparse_spectral",
+             "projective"] then
         Error("BuildKRRIntertwinerData: opts.spectral_source must be one of ",
-              "\"auto\", \"lite\", \"dense_spectral\", \"sparse_spectral\"; got ",
-              opts.spectral_source);
+              "\"auto\", \"lite\", \"dense_spectral\", \"sparse_spectral\", ",
+              "\"projective\"; got ", opts.spectral_source);
     fi;
     return opts;
 end;;
@@ -191,6 +212,11 @@ end;;
 
 # ============================================================
 # Helper: pick the spectral_source under "auto" given m.
+#
+# At ω ≠ 0 the auto-resolver is overridden upstream (in
+# `BuildKRRIntertwinerData`) to route to the projective path
+# regardless of m. This helper is only consulted in the ω = 0
+# branch, where lattice mode selection by m is meaningful.
 # ============================================================
 
 _KRRI_ResolveAutoSource := function(m)
@@ -444,6 +470,325 @@ end;;
 
 
 # ============================================================
+# Projective-character path (K-4a-T4c projective, issue #323).
+#
+# At ω ≠ 0 the centraliser representation that K-1's `ProjectorFormula`
+# sees on each W_g is a GENUINE projective representation (not a linear
+# one), with 2-cocycle α_g obtained from ω by the standard CGR slant:
+#
+#   α_g(x, y) := ω(x, y, g)
+#              − ω(x, y g y^{-1}, y)
+#              + ω(x y g y^{-1} x^{-1}, x, y).                  (*)
+#
+# This matches `alphag(g)(f)(x, y)` in `src/universal_coefficients.g`
+# (which is the Mignard-Schauenburg / CGR convention). The trace
+# `trace_on_W(class_idx, irrep_idx, h)` must therefore return the
+# projective-character value
+#
+#   χ_{irrep_idx}^{α_g}(h)
+#
+# of C_G(g) for the α_g-projective character of index `irrep_idx`.
+#
+# Implementation. We avoid loading `fsi_wrapper.g` here (which would
+# clobber `UniversalCoefficientsTheorem` from `src/modular_data.g`)
+# and write self-contained `_KRRI_BuildCentralExtension` /
+# `_KRRI_ProjectiveCharsForG` helpers patterned after that file's
+# `BuildCentralExtension` / `ProjectiveCharactersDirect`.
+#
+# Cocycle source. We compute α_g on the fly using the cached omega
+# callable from `epsilon_omega_phase.g` (`_EOP_GetContext`). One
+# `_EOP_GetContext(omega_vec, G)` call per `BuildKRRIntertwinerData`
+# invocation gives us the bar 3-cocycle callable `ctx.omega_cb`; α_g
+# is then a 2-arg closure over (g, ctx.omega_cb, ctx.m_omega).
+#
+# Caching. Per class index we build the central extension and pick
+# the projective character table lazily (on first `trace_on_W` query
+# for that class). The cache lives in a closure variable
+# `proj_table_cache` keyed by class_idx.
+#
+# Cost. The dominant cost is `BuildCentralExtension(C, α_g, m_omega)`,
+# which is O(|C|² · m_omega) permutation arithmetic to enumerate the
+# group, plus `Irr(Gaa)` for `Gaa` of order |C| · m_omega (so the CT
+# build is the bottleneck at large centralisers). The pi-style cache
+# is keyed at class-idx granularity; calling `trace_on_W` repeatedly
+# for the same class is O(1) after the first.
+# ============================================================
+
+# Helper: integer α_g(x, y) for the centraliser cocycle slant of ω by g.
+# Returns an integer in [0, m_omega) (mod m_omega). `omega_cb` is the bar
+# 3-cocycle callable returned by HAP's `StandardCocycle`, i.e. a function
+# (a, b, c) -> integer in Z/m_omega.
+_KRRI_AlphaG := function(omega_cb, m_omega, g, x, y)
+    local v;
+    v := omega_cb(x, y, g)
+       - omega_cb(x, y*g*y^-1, y)
+       + omega_cb(x*y*g*y^-1*x^-1, x, y);
+    return v mod m_omega;
+end;;
+
+# Helper: build the central extension of C by Z/o along α as a concrete
+# permutation group, plus the section lift. `alpha(x, y) -> int` returns
+# an additive Z/o exponent (i.e. in [0, o)). This is a direct port of
+# `BuildCentralExtension` from `fsi_wrapper.g` lines 220-283, isolated
+# under a private name to avoid clobbering that wrapper's definition.
+_KRRI_BuildCentralExtension := function(C, alpha, o)
+    local elemsC, baseSize, n, embed, t_perm, b_perms, b, b_img, lift,
+          Caa, fibreGen;
+    elemsC := Elements(C);
+    baseSize := Size(C);
+    n := baseSize * o;
+    embed := function(gIdx, a)
+        return (gIdx - 1) * o + (a mod o) + 1;
+    end;
+    t_perm := PermList(List([1..n], function(k)
+        local gIdx, a;
+        a := ((k - 1) mod o);
+        gIdx := QuoInt(k - 1, o) + 1;
+        return embed(gIdx, a + 1);
+    end));
+    b_perms := [];
+    for b in GeneratorsOfGroup(C) do
+        b_img := List([1..n], function(k)
+            local gIdx, a, g, gb, gbIdx, exp;
+            a := (k - 1) mod o;
+            gIdx := QuoInt(k - 1, o) + 1;
+            g := elemsC[gIdx];
+            gb := g * b;
+            gbIdx := Position(elemsC, gb);
+            exp := alpha(g, b);
+            return embed(gbIdx, a + exp);
+        end);
+        Add(b_perms, PermList(b_img));
+    od;
+    Caa := Group(Concatenation([t_perm], b_perms));
+    lift := function(g)
+        local img;
+        img := List([1..n], function(k)
+            local gIdx, a, g0, gg, ggIdx, exp;
+            a := (k - 1) mod o;
+            gIdx := QuoInt(k - 1, o) + 1;
+            g0 := elemsC[gIdx];
+            gg := g0 * g;
+            ggIdx := Position(elemsC, gg);
+            exp := alpha(g0, g);
+            return embed(ggIdx, a + exp);
+        end);
+        return PermList(img);
+    end;
+    fibreGen := t_perm;
+    return rec(
+        Caa := Caa,
+        lift := lift,
+        fibreGen := fibreGen,
+        Base := C,
+        FibreOrder := o,
+        ExtensionSize := n
+    );
+end;;
+
+# Helper: project the irreducible characters of Caa down to projective
+# characters of C with cocycle α. A character chi of Caa is a projective
+# character of C iff chi(t)/chi(1) = E(o) where t is the central
+# generator (of order o).
+_KRRI_ProjectiveCharsForG := function(C, alpha, o)
+    local ext, ire, proj_table, chi, dim, fibre_val, target;
+    ext := _KRRI_BuildCentralExtension(C, alpha, o);
+    ire := Irr(ext.Caa);
+    proj_table := [];
+    for chi in ire do
+        dim := One(ext.Caa) ^ chi;
+        fibre_val := (ext.fibreGen) ^ chi;
+        target := E(o) * dim;
+        if fibre_val = target then
+            Add(proj_table, chi);
+        fi;
+    od;
+    return rec(
+        Caa := ext.Caa,
+        lift := ext.lift,
+        table := proj_table,
+        fibreGen := ext.fibreGen,
+        FibreOrder := o,
+        Base := C
+    );
+end;;
+
+# Helper: when α is a coboundary (in particular when ω = 0 so α ≡ 0
+# pointwise), the projective characters of C ARE the ordinary characters
+# of C (up to the central extension's gauge). We attempt to MATCH each
+# entry of `proj.table` against `irreps_of_C` (= GAP's Irr(C)) so that
+# the resulting `chi_lookup[k] = proj.table[k']` evaluated at lift(h)
+# equals `irreps_of_C[k](h)`. If matching fails for any k, returns fail
+# (caller can then use the intrinsic order).
+#
+# Matching algorithm: for each ordinary character k of C, find the j ∈
+# [1..|proj.table|] such that  chi(lift(rep)) = irreps_of_C[k](rep)  for
+# every conjugacy-class representative of C. Returns the permutation
+# pi: k -> j, or fail if no consistent assignment exists.
+#
+# This is used ONLY for the byte-for-byte sanity test at ω = 0 (or more
+# generally when α is a coboundary). At genuinely non-trivial cohomology
+# class the projective characters cannot be matched to ordinary ones
+# (their dimensions divide |C| but their values at non-class-1 elements
+# differ), and we return fail.
+_KRRI_TryMatchProjToIrr := function(proj, C, irreps_of_C, cc_of_C)
+    local cls_reps, perm, k, j, chi_proj, chi_ord, matched, all_match,
+          rep, val_proj, val_ord;
+    cls_reps := List(cc_of_C, Representative);
+    if Length(proj.table) <> Length(irreps_of_C) then
+        return fail;
+    fi;
+    perm := [];
+    for k in [1..Length(irreps_of_C)] do
+        chi_ord := irreps_of_C[k];
+        matched := fail;
+        for j in [1..Length(proj.table)] do
+            if j in perm then continue; fi;
+            chi_proj := proj.table[j];
+            all_match := true;
+            for rep in cls_reps do
+                val_proj := proj.lift(rep) ^ chi_proj;
+                val_ord := rep ^ chi_ord;
+                if val_proj <> val_ord then
+                    all_match := false;
+                    break;
+                fi;
+            od;
+            if all_match then
+                matched := j;
+                break;
+            fi;
+        od;
+        if matched = fail then
+            return fail;
+        fi;
+        perm[k] := matched;
+    od;
+    return perm;
+end;;
+
+# Build the projective trace_on_W callable for a given (omega_vec, G).
+# Returns a record:
+#   .trace_on_W(class_idx, irrep_idx, h) -> cyclotomic
+#   .epsilon                              (the V-1 callable already
+#                                          wired by the main builder
+#                                          path -- not duplicated here)
+#   .spectral_data := fail
+#   .projective_data := rec(
+#       ctx                 := _EOP_GetContext(omega_vec, G),
+#       per_class           := list of fail (lazy) | proj record (built),
+#       per_class_perm      := list of fail | permutation | "intrinsic",
+#       proj_for_class      := callable class_idx -> proj record (lazy
+#                              materialisation; deterministic per
+#                              instance)
+#   )
+_KRRI_BuildProjectiveCallables := function(omega_vec, G, m, idx, verbose)
+    local ctx, omega_cb, m_omega, per_class, per_class_perm,
+          proj_for_class, trace_fn, _cand;
+    if not IsBoundGlobal("_EOP_GetContext") then
+        # Auto-load epsilon_omega_phase.g if not already in scope.
+        if _BUILDKRR_LOAD_DIR <> fail then
+            _cand := Concatenation(_BUILDKRR_LOAD_DIR,
+                                    "/epsilon_omega_phase.g");
+            if IsExistingFile(_cand) then
+                Read(_cand);
+            fi;
+        fi;
+    fi;
+    if not IsBoundGlobal("_EOP_GetContext") then
+        Error("BuildKRRIntertwinerData: spectral_source = \"projective\" ",
+              "(or omega != 0 auto-routing) requires `_EOP_GetContext` from ",
+              "`epsilon_omega_phase.g`. Read that file first.");
+    fi;
+    if verbose then
+        Print("[BuildKRRIntertwinerData] omega != 0: building projective ",
+              "character path (CGR slant alpha_g, issue #323).\n");
+    fi;
+    ctx := _EOP_GetContext(omega_vec, G);
+    omega_cb := ctx.omega_cb;
+    m_omega := ctx.m_omega;
+    per_class := List([1..Length(idx.classes)], _ -> fail);
+    per_class_perm := List([1..Length(idx.classes)], _ -> fail);
+
+    # Build the projective char table at class i. Memoised in
+    # per_class[i] and per_class_perm[i]. per_class_perm[i] is:
+    #   * a permutation list  perm : Irr(C_G(g_i)) -> proj.table
+    #     when alpha_g is a coboundary (e.g. for the trivial class or
+    #     when omega_vec is all-zero); then
+    #         trace = proj.table[perm[irrep_idx]](lift(h))
+    #     gives Irr-aligned values byte-for-byte.
+    #   * the symbol "intrinsic" when alpha_g is non-trivial; then
+    #         trace = proj.table[irrep_idx](lift(h))
+    #     and the irrep_idx convention is intrinsic to proj.table.
+    proj_for_class := function(class_idx)
+        local g, C, alpha, proj, perm;
+        if per_class[class_idx] <> fail then
+            return per_class[class_idx];
+        fi;
+        g := idx.reps[class_idx];
+        C := idx.centralisers[class_idx];
+        alpha := function(x, y)
+            return _KRRI_AlphaG(omega_cb, m_omega, g, x, y);
+        end;
+        if verbose then
+            Print("[BuildKRRIntertwinerData]   class ", class_idx,
+                  ": building projective char table for |C_G(g)| = ",
+                  Order(C), " (ext order ", Order(C) * m_omega, ") ...\n");
+        fi;
+        proj := _KRRI_ProjectiveCharsForG(C, alpha, m_omega);
+        per_class[class_idx] := proj;
+        # Try to align with the linear Irr(C) ordering (succeeds when
+        # alpha is a coboundary; otherwise yields intrinsic order).
+        _EnsureClassData(idx, class_idx);
+        perm := _KRRI_TryMatchProjToIrr(
+            proj, C, idx.irreps[class_idx], idx.cc_centraliser[class_idx]);
+        if perm = fail then
+            per_class_perm[class_idx] := "intrinsic";
+        else
+            per_class_perm[class_idx] := perm;
+        fi;
+        if verbose then
+            Print("[BuildKRRIntertwinerData]     -> ", Length(proj.table),
+                  " projective chars",
+                  ", alignment = ", per_class_perm[class_idx], "\n");
+        fi;
+        return proj;
+    end;
+
+    trace_fn := function(class_idx, irrep_idx, h)
+        local proj, j, perm;
+        proj := proj_for_class(class_idx);
+        perm := per_class_perm[class_idx];
+        if perm = "intrinsic" then
+            j := irrep_idx;
+        else
+            j := perm[irrep_idx];
+        fi;
+        if j < 1 or j > Length(proj.table) then
+            Error("BuildKRRIntertwinerData: projective trace_on_W: ",
+                  "irrep_idx ", irrep_idx, " (mapped to ", j, ") is out ",
+                  "of bounds for class ", class_idx, " (|proj.table| = ",
+                  Length(proj.table), ").");
+        fi;
+        return proj.lift(h) ^ proj.table[j];
+    end;
+
+    return rec(
+        trace_on_W := trace_fn,
+        epsilon    := fail,    # set by the main builder via _KRRI_BuildEpsilon
+        spectral_data := fail,
+        projective_data := rec(
+            ctx              := ctx,
+            per_class        := per_class,
+            per_class_perm   := per_class_perm,
+            proj_for_class   := proj_for_class,
+            omega_vec        := omega_vec
+        )
+    );
+end;;
+
+
+# ============================================================
 # Build the epsilon callable. For ω = 0 (the K-4a CT case) this is
 # constant 1. For ω ≠ 0 we wire in V-1's `EpsilonOmegaPhase` (#14)
 # if it is in scope; otherwise raise.
@@ -559,7 +904,16 @@ BuildKRRIntertwinerData := function(arg)
     # Resolve the spectral_source if "auto".
     spectral_source_resolved := opts.spectral_source;
     if spectral_source_resolved = "auto" then
-        spectral_source_resolved := _KRRI_ResolveAutoSource(m);
+        if omega_is_zero then
+            # ω = 0: standard lattice mode by m (research-note §3.2).
+            spectral_source_resolved := _KRRI_ResolveAutoSource(m);
+        else
+            # ω ≠ 0 (K-4a-T4c projective, issue #323): the regular-
+            # character path is mathematically WRONG; the lattice
+            # spectral paths give the trivial cocycle's spectrum too.
+            # Route to the projective-character path regardless of m.
+            spectral_source_resolved := "projective";
+        fi;
     fi;
 
     # Dispatch to the requested mode for trace_on_W.
@@ -571,6 +925,30 @@ BuildKRRIntertwinerData := function(arg)
     elif spectral_source_resolved = "sparse_spectral" then
         callables := _KRRI_BuildSparseSpectralCallables(
             m, G, idx, opts.verbose);
+    elif spectral_source_resolved = "projective" then
+        # K-4a-T4c projective (issue #323). At ω = 0 this is
+        # mathematically equivalent to "lite" (the projective table
+        # for the trivial cocycle is the ordinary character table,
+        # byte-for-byte after re-indexing — see _KRRI_TryMatchProjToIrr).
+        # At ω ≠ 0 this is the mathematically correct mode.
+        if opts.omega_vec = fail then
+            # No omega_vec provided. Treat as omega = 0 R-cocycle vec
+            # (so the projective code path can still run for diagnostic
+            # / cross-validation use). We pass a length-0 sentinel down
+            # via _EOP_BuildContext which will Error since neither
+            # hombasis nor R!.dimension(3) is 0. Resolve by routing
+            # through _KRRI_BuildLiteCallables (numerically equivalent
+            # at omega = 0; no projective harness needed).
+            if opts.verbose then
+                Print("[BuildKRRIntertwinerData] spectral_source = ",
+                      "\"projective\" with omega_vec = fail: routing to ",
+                      "lite (numerically equivalent at omega = 0).\n");
+            fi;
+            callables := _KRRI_BuildLiteCallables(idx);
+        else
+            callables := _KRRI_BuildProjectiveCallables(
+                opts.omega_vec, G, m, idx, opts.verbose);
+        fi;
     else
         Error("BuildKRRIntertwinerData: internal: unrecognised ",
               "resolved spectral_source = ", spectral_source_resolved);
@@ -605,6 +983,10 @@ BuildKRRIntertwinerData := function(arg)
     if callables.spectral_data <> fail then
         out.spectral_data := callables.spectral_data;
     fi;
+    if IsBound(callables.projective_data) and
+       callables.projective_data <> fail then
+        out.projective_data := callables.projective_data;
+    fi;
     if IsBound(callables.translate) then
         out.translate := callables.translate;
     fi;
@@ -620,4 +1002,5 @@ BuildKRRIntertwinerData := function(arg)
 end;;
 
 
-Print("Loaded build_krr_intertwiner_data.g (K-4a-T4b, #188).\n");
+Print("Loaded build_krr_intertwiner_data.g ",
+      "(K-4a-T4b #188 + projective trace #323).\n");
