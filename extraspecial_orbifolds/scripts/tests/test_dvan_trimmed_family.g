@@ -15,11 +15,14 @@
 #     EA_22} sorted, family_size = 8 = 6 EAs + D_8 + Q_8. Brute-forced
 #     k_*(3) = 8 by ruling out all 174,437 size-0..5 EA subsets.
 #
-#   * m=5 (gated by FAST=1): smoke test that
+#   * m=5 (gated by TRIMMED_RUN_M5 := true): smoke test that
 #     _DETF_TrimmedFamily(5) terminates with final_ker = 1 and
-#     locally_tight = true. Wall is ~10-15 min cold (dominated by the
-#     BuildRestrictionMatrices(5, "hap") build, which builds the HAP
-#     resolution for E_+(5)).
+#     locally_tight = true. THIS PR's reference run with the
+#     112-EA production family converged to 9 EAs + D_8 + Q_8 = 11
+#     subgroups in ~19 min wall (cold). Wall is dominated by the
+#     BuildRestrictionMatrices(5, "hap") build (~18 min for the HAP
+#     resolution of E_+(5) + 114 EquivariantChainMap calls); the
+#     greedy + SNF itself adds <1 min.
 #
 # The m=2 / m=3 anchors are bit-for-bit witness checks against PR #310's
 # greedy algorithm. If the greedy tie-breaking changes (e.g., a
@@ -199,22 +202,45 @@ run_m5 := IsBoundGlobal("TRIMMED_RUN_M5")
           and ValueGlobal("TRIMMED_RUN_M5") = true;;
 
 if run_m5 then
-    Print("\n--- T6: m=5 smoke (TRIMMED_RUN_M5 set; ~10-15 min cold) ---\n");
+    Print("\n--- T6: m=5 smoke (TRIMMED_RUN_M5 set; ~15-20 min cold) ---\n");
     t5_start := Runtime();;
     r5 := _DETF_TrimmedFamily(5);;
     t5_wall := Runtime() - t5_start;;
     Print("  m=5 wall: ", t5_wall, " ms\n");
     Print("  m=5 chosen (greedy order) = ", r5.ea_indices_chosen, "\n");
-    Print("  m=5 ea_count   = ", r5.ea_count, "\n");
-    Print("  m=5 family_size = ", r5.family_size, "\n");
-    Print("  m=5 final_ker   = ", r5.final_ker, "\n");
-    Print("  m=5 locally_tight = ", r5.locally_tight, "\n");
+    Print("  m=5 chosen sorted         = ", r5.ea_indices_chosen_sorted, "\n");
+    Print("  m=5 ea_count              = ", r5.ea_count, "\n");
+    Print("  m=5 family_size           = ", r5.family_size, "\n");
+    Print("  m=5 final_ker             = ", r5.final_ker, "\n");
+    Print("  m=5 locally_tight         = ", r5.locally_tight, "\n");
+    Print("  m=5 drop_one_kers         = ", r5.drop_one_kers, "\n");
     AssertOrLog("m=5 final_ker = 1 (injective)", r5.final_ker = 1);
     AssertOrLog("m=5 locally_tight = true", r5.locally_tight = true);
-    AssertOrLog("m=5 ea_count in expected range [3, 30]",
+    AssertOrLog("m=5 ea_count in plausible range [3, 30]",
                 r5.ea_count >= 3 and r5.ea_count <= 30);
-    AssertOrLog("m=5 ea_count < 112 (full _DETF_AllMaxEAsIn family)",
+    AssertOrLog("m=5 ea_count < 112 (production family size)",
                 r5.ea_count < 112);
+    AssertOrLog("m=5 every drop_one_kers entry > 1 (no redundant EA)",
+                ForAll(r5.drop_one_kers, k -> k > 1));
+    # Greedy-determinism anchor for THIS PR's reference run. With the
+    # current _DETF_AllMaxEAsIn ordering for m=5 (32 axis-aligned +
+    # 80 pair-swap = 112 EAs) and the deterministic first-index
+    # tie-break, the greedy converges to:
+    #   chosen (greedy order) = [33, 48, 76, 89, 88, 54, 109, 57, 70]
+    #   chosen sorted = [33, 48, 54, 57, 70, 76, 88, 89, 109]
+    #   ker reduction: 1.74e41 -> 5.19e33 -> 6.19e26 -> 7.38e19 ->
+    #                  3.52e13 -> 6.71e7 -> 1024 -> 8 -> 1
+    #   drop_one_kers = [128, 1024, 64, 4096, 256, 32, 128, 32, 8]
+    # If `_DETF_AllMaxEAsIn`'s ordering ever changes (e.g. a switch
+    # to full Witt enumeration at m=5, or a PC-generator convention
+    # swap), update these anchors. The MATHEMATICAL invariant is the
+    # existence of a small locally-tight family; the SPECIFIC indices
+    # are implementation-dependent.
+    AssertOrLog("m=5 ea_count = 9 (THIS PR's reference witness)",
+                r5.ea_count = 9);
+    AssertOrLog("m=5 sorted chosen = [33, 48, 54, 57, 70, 76, 88, 89, 109]",
+                r5.ea_indices_chosen_sorted
+                    = [33, 48, 54, 57, 70, 76, 88, 89, 109]);
 else
     Print("\n--- T6: m=5 smoke SKIPPED (set TRIMMED_RUN_M5 := true to run) ---\n");
 fi;

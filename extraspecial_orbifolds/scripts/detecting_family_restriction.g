@@ -1116,25 +1116,31 @@ end;;
 #
 # At m=2 this reproduces PR #310's witness `{EA_2, EA_3, EA_5}`
 # (matching one of the two minimum size-3 EA witnesses); at m=3 it
-# reproduces `{EA_4, EA_6, EA_7, EA_11, EA_16, EA_22}`. At m=5 it
-# produces a fresh (size ~10-20) witness, verified injective by SNF.
+# reproduces `{EA_4, EA_6, EA_7, EA_11, EA_16, EA_22}`. At m=5 the
+# greedy over the 112-EA production family (axis-aligned + pair-swap
+# Lagrangians) converges to 9 EAs (sorted: [33, 48, 54, 57, 70, 76,
+# 88, 89, 109]) in ~19 min wall (cold), well below the issue #313
+# conjecture of 12-22 EAs.
 #
-# Cost model:
+# Cost model (reference walls, measured on a 2026 laptop with a cold
+# BuildRestrictionMatrices cache; warm-cache walls drop ~5-10x):
 #
-#   * m=2: 6 EAs * ~6 greedy steps = ~36 SNFs, each on a tiny matrix.
-#     <1 s wall after `BuildRestrictionMatrices(2, "hap")` cache hit.
-#   * m=3: 30 EAs * ~6 greedy steps = ~180 SNFs. <10 s wall after
-#     cache hit (~30 s cold).
-#   * m=5: 112 EAs * ~15 greedy steps = ~1680 SNFs on ~250×250 mats.
-#     ~5-10 min wall after cache hit (~10-15 min cold for the
-#     `BuildRestrictionMatrices(5, "hap")` build itself).
-#   * m=7: NOT YET SUPPORTED. `BuildRestrictionMatrices(7, "hap")`
-#     errors (would invoke `ResolutionFiniteGroup(E_+(7), 4)` which
-#     OOMs at ~60 GB). The m=7 trimmed family requires a separate
-#     path through `LHSResolutionEPlus(7, 5)` + per-EA restriction
-#     matrices via the LHS resolution; that infrastructure is gated
-#     on Q-int A2/A3 (issue #136) and not delivered here. See the
-#     trailing `Error(...)` below for the gate.
+#   * m=2: 6 EAs * 3 greedy steps = ~18 SNFs, each on a tiny matrix.
+#     ~120 ms cold (most of which is BuildRestrictionMatrices).
+#   * m=3: 30 EAs * 6 greedy steps = ~180 SNFs. ~5 s cold.
+#   * m=5: 112 EAs * 9 greedy steps = ~1000 SNFs on growing matrices
+#     (up to ~280x270 at the last greedy step). ~19 min wall cold,
+#     almost all of which is the BuildRestrictionMatrices(5, "hap")
+#     HAP resolution build + 114 EquivariantChainMaps; the greedy +
+#     SNF + drop-one verification adds <1 min on top.
+#   * m=7: NOT YET SUPPORTED. BuildRestrictionMatrices(7, "hap")
+#     errors because ResolutionFiniteGroup(E_+(7), 4) OOMs at ~60 GB
+#     (#137). The m=7 trimmed family requires a separate path
+#     through LHSResolutionEPlus(7, 5) (PR #252) + per-EA restriction
+#     matrices via the LHS resolution. That infrastructure is gated
+#     on Q-int A2/A3 (issue #136) and not delivered here; this PR
+#     errors at m=7 with an explanatory message and defers the m=7
+#     path to a follow-up issue so the m <= 5 deliverable can ship.
 #
 # Returns rec(
 #   m                       : m
