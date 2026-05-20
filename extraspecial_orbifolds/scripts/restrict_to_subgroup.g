@@ -277,93 +277,245 @@ end;;
 
 
 # ============================================================
-# Public: RestrictTraceOnWToSubgroupHonourParent  (#256)
+# Public: RestrictedIrrepDecomposition (#275)
 # ============================================================
 #
-# Variant of RestrictTraceOnWToSubgroup that PROPAGATES the parent's
-# spectral multiplicities into the H-side restricted record. The
-# H-character functional itself stays H's untwisted (which is the
-# mathematically correct chi_H(h) value); the multiplicity factor
-# mult from the parent's KRR spectral data is applied as a scalar
-# weighting per H-class / H-irrep.
+# Compute the multiplicities a_l of the H-irreps in the restriction
+# of a G-irrep to the subgroup H, where here "G" is the parent
+# centraliser C_G(a_G) and "H" is the subgroup centraliser C_H(a_H),
+# with a_G = conj * a_H * conj^-1.
 #
-# WHY THIS EXISTS
-# ---------------
-# The original RestrictTraceOnWToSubgroup (per K-4a-T5a downscope)
-# discards the parent's trace_on_W in favour of H's untwisted
-# baseline. This was correct under the omega = 0 / epsilon = 1
-# downscope for K-4a-T5b (#198), but it has the side-effect that any
-# downstream `ComputeCTModularData(restricted, H)` produces
-# H-untwisted modular data regardless of the parent's spectral
-# characters. At m = 5 (K-4b production target) this is precisely
-# the structural-trivial caveat documented in
-# docs/superpowers/research/2026-05-17-k4b-m5-verdict.md Section 4.4.
+# MATH
+# ----
+# For each parent G-class k_G with rep a_G and H-class k_H with rep
+# a_H = conj^-1 * a_G * conj (equivalently a_G = conj * a_H * conj^-1
+# given the convention in `_RTS_FindGClassOf`), the parent character
+# chi_{j_G} in Irr(C_G(a_G)) restricts to C_H(a_H) via the embedding
 #
-# DESIGN: multiplicity-weighted baseline
+#   phi : C_H(a_H) -> C_G(a_G),  h -> conj * h * conj^-1.
+#
+# C_H(a_H) is a subgroup of C_G(a_H), and conjugation by `conj` maps
+# C_G(a_H) onto C_G(a_G) (since x*a_H = a_H*x  iff
+# conj*x*a_H*conj^-1 = conj*a_H*x*conj^-1, i.e.
+# (conj*x*conj^-1) * a_G = a_G * (conj*x*conj^-1)).  So
+# phi(C_H(a_H)) is indeed a subgroup of C_G(a_G).
+#
+# The character chi_{j_G} restricted via phi decomposes in
+# Irr(C_H(a_H)):
+#
+#   (Res_{C_H} chi_{j_G})(h) := chi_{j_G}(phi(h))
+#                             = sum_{l=1}^{|Irr(C_H(a_H))|}
+#                                   a_l * chi_{l_H}(h)
+#
+# where the multiplicity a_l is given by the inner product on
+# C_H(a_H):
+#
+#   a_l = <Res chi_{j_G}, chi_{l_H}>_{C_H}
+#       = (1 / |C_H(a_H)|)
+#         * sum_{h in C_H(a_H)}
+#               chi_{j_G}(phi(h)) * conj_complex(chi_{l_H}(h))
+#       = (1 / |C_H(a_H)|)
+#         * sum_{H-classes [h] in C_H(a_H)}
+#               |[h]| * chi_{j_G}(phi(rep_h)) * \bar{chi_{l_H}(rep_h)}
+#
+# Each a_l is a NON-NEGATIVE INTEGER (the multiplicity of chi_{l_H}
+# in Res chi_{j_G}).
+#
+# CONVENTIONS
+# -----------
+# * `idx_G` / `idx_H`: BuildSimpleIndex(Lazy) records.
+# * `k_G`, `k_H`: class indices into idx_G / idx_H.
+# * `conj`: conjugator with conj * a_H * conj^-1 = a_G, drawn from
+#   class_to_G[k_H].conj (which is what _RTS_FindGClassOf returns).
+# * `j_G`: parent-irrep index into idx_G.irreps[k_G].
+#
+# RETURNS: a list of length |Irr(C_H(a_H))| = idx_H.num_irreps[k_H]
+#          giving a_l for each l_H = 1..num_irreps[k_H].
+#
+# Each a_l is computed as an INTEGER (cyclotomic-arithmetic exact;
+# no floats). If a_l is non-integral up to rounding, an Error is
+# raised: that means either phi is not actually into C_G(a_G), or
+# the character/class indexing is inconsistent.
+RestrictedIrrepDecomposition := function(idx_G, idx_H, k_G, k_H, conj)
+    local C_H, ct_H, cc_H, irr_H, num_irreps_H, n_classes_H,
+          chi_G_phi_values, j, rep_h, phi_rep, class_size_h,
+          cls_H, normaliser, cls_idx_G, decomposition_fn;
+    _EnsureClassData(idx_G, k_G);
+    _EnsureClassData(idx_H, k_H);
+    C_H := idx_H.centralisers[k_H];
+    ct_H := idx_H.ct_centraliser[k_H];
+    cc_H := idx_H.cc_centraliser[k_H];
+    irr_H := idx_H.irreps[k_H];
+    num_irreps_H := idx_H.num_irreps[k_H];
+    n_classes_H := Length(cc_H);
+    normaliser := Order(C_H);
+
+    # Pre-compute the class index in C_G(a_G) of phi(rep_h) for each
+    # conjugacy class [h] of C_H(a_H), and also |[h]|. The
+    # phi-images are used by every j_G in the per-irrep decomposition
+    # so we amortise the conjugation + class-lookup work.
+    chi_G_phi_values := [];
+    class_size_h := [];
+    for j in [1..n_classes_H] do
+        cls_H := cc_H[j];
+        rep_h := Representative(cls_H);
+        phi_rep := conj * rep_h * conj^-1;
+        # ClassIndexInCentraliser auto-materialises idx_G data for k_G.
+        cls_idx_G := ClassIndexInCentraliser(idx_G, k_G, phi_rep);
+        Add(chi_G_phi_values, cls_idx_G);
+        Add(class_size_h, Size(cls_H));
+    od;
+
+    # Helper closure: given j_G, return the length-num_irreps_H
+    # vector of multiplicities a_l.
+    decomposition_fn := function(j_G_arg)
+        local chi_G_vals, t, val_chi_g, val_chi_l, acc, l_H, chi_l_H,
+              result;
+        # chi_{j_G}(phi(rep_h)) per H-class, precomputed.
+        chi_G_vals := List([1..n_classes_H],
+            t -> idx_G.irreps[k_G][j_G_arg][chi_G_phi_values[t]]);
+        result := [];
+        for l_H in [1..num_irreps_H] do
+            acc := 0;
+            chi_l_H := irr_H[l_H];
+            for t in [1..n_classes_H] do
+                val_chi_g := chi_G_vals[t];
+                val_chi_l := chi_l_H[t];
+                acc := acc + class_size_h[t] * val_chi_g
+                            * ComplexConjugate(val_chi_l);
+            od;
+            acc := acc / normaliser;
+            # Sanity check: must be a non-negative integer.
+            if not IsInt(acc) then
+                Error("RestrictedIrrepDecomposition: ",
+                      "non-integer multiplicity ", acc,
+                      " for (k_G=", k_G, ", k_H=", k_H,
+                      ", j_G=", j_G_arg, ", l_H=", l_H,
+                      "). Likely cause: conj does not actually ",
+                      "embed C_H(a_H) into C_G(a_G), or the ",
+                      "characters disagree.");
+            fi;
+            if acc < 0 then
+                Error("RestrictedIrrepDecomposition: ",
+                      "negative multiplicity ", acc,
+                      " for (k_G=", k_G, ", k_H=", k_H,
+                      ", j_G=", j_G_arg, ", l_H=", l_H,
+                      "). This should never happen for true ",
+                      "characters.");
+            fi;
+            Add(result, acc);
+        od;
+        return result;
+    end;
+
+    return rec(
+        # Per-H-class phi-image class index in C_G(a_G).
+        phi_class_index_G := chi_G_phi_values,
+        # Per-H-class size (for the inner-product weighting).
+        h_class_sizes := class_size_h,
+        # Helper closure: see above.
+        decomposition := decomposition_fn
+    );
+end;;
+
+# ============================================================
+# Public: RestrictTraceOnWToSubgroupHonourParent  (#256, #275)
+# ============================================================
+#
+# Variant of RestrictTraceOnWToSubgroup that exposes the parent's
+# spectral multiplicities as a DIAGNOSTIC field on the restricted
+# record. The trace_on_W functional returned by this variant is the
+# H-untwisted baseline character (chi_{l_H}(h_H)) -- it is *not*
+# scaled by the parent's spectral multiplicities.
+#
+# NORMALISATION RECONCILIATION (#275)
+# -----------------------------------
+# An earlier iteration of this function (the K-4 mult>0 predecessor)
+# multiplied the H-side trace by an "effective mult" computed from
+# the parent's spectral data via the restriction-decomposition
+# formula
+#   mult_eff(k_H, l_H) = sum_{j_G} a_{l_H, j_G} * mult_parent[k_G, j_G].
+# That scaling pushed the CGR/Bantay S-formula at
+# `_CTComputeSBlock` into a NORMALISATION different from the one
+# used by the Gruen/Morrison stored (S, T) tables in
+# `modular_data/{8/3, 8/4, ...}`: each S entry picked up a
+# mult_i * mult_j factor that the stored tables do not have. The
+# `JointPermutationMatcher` (which compares per-entry up to a
+# permutation) therefore failed to detect equivalence even on cases
+# where alpha was a coboundary, producing spurious "non-trivial"
+# or "fail" verdicts.
+#
+# The CORRECT semantics per CGR/Bantay (and the K-4a-T4a research
+# note `2026-05-17-epsilon-extraction-from-krr.md` §5.5) is that
+# `mult_chi` is a CATEGORICAL LABELING -- it counts how many copies
+# of chi-isotypic component appear in Omega_0 -- and does NOT enter
+# the S/T formulae as a scalar weight. Each distinct (a, chi)
+# simple has CGR S/T entries built from chi alone:
+#   T_{(a, chi)} = chi(a) / chi(e),
+#   S_{(a_i, chi_k), (a_j, chi_l)}
+#     = (1/|H|) sum_{ab=ba, a in cl_i, b in cl_j}
+#                eps * chi_k(b_tilde)^* * chi_l(a_tilde)^*.
+# The multiplicities are useful diagnostically (e.g. to detect that
+# omega|_H is genuinely non-trivial by mult_chi = 0 cases) but are
+# not part of the S/T arithmetic.
+#
+# At m = 3 (the K-4a-T7 anchor) the parent path uses
+# `RestrictTraceOnWToSubgroup` (the non-honour variant), so this
+# change is invisible there. At m = 5 (K-4a production target) the
+# orchestrator uses this variant; with the scaling stripped, the
+# CT modular data on each detecting subgroup is in the same
+# normalisation as the stored Gruen/Morrison tables and the matcher
+# can correctly classify alpha|_H against them.
+#
+# CALLERS WHO NEED THE MULTIPLICITY INFORMATION
+# ---------------------------------------------
+# Consumers that want to INSPECT the spectral structure (for
+# diagnostics, debugging, or to detect mult=0 simples) can read
+# `multiplicity_lookup(k_H, j_H)` on the returned record. The
+# trace_on_W functional itself ignores this.
+#
+# IRREP-INDEX TRANSLATION (legacy field)
 # ---------------------------------------
-# KRR's spectral trace_on_W (BuildKRRSpectralCharactersSparse) returns
-#   spectral.trace_on_W(k, j, h) = mult_{k,j} * chi_{k,j}(h)
-# where chi_{k,j} is the j-th irrep of C_G(a_k) and mult_{k,j} is the
-# multiplicity in the central twist's defect rep Omega_0. For the
-# trivial cocycle / untwisted baseline, mult_{k,j} = 1 (Omega_0
-# decomposes as the regular C_G(-I) rep, so each chi appears once).
-#
-# Under the K-4a T4a downscope (epsilon = 1), the H-level CT modular
-# data is determined by H's own character functional WEIGHTED by
-# the inherited multiplicities. The H-side trace_on_W therefore is
-#   trace_on_W_H(k_H, j_H, h_H) = mult_{k_G, j_G} * chi_H[j_H](h_H)
-# where k_G = class_to_G[k_H].k_G is the G-class containing a_H, and
-# j_G is the irrep_idx_G "associated" to j_H by the
-# irrep_index_translation table (dimension matching, see below).
-#
-# This is the right object because:
-#   * For omega = 0 (mult = 1 everywhere), it reduces to H's untwisted
-#     character, recovering the K-4a-T5a baseline.
-#   * For a non-trivial mult inherited from KRR's central-twist
-#     Omega_0 decomposition, the per-irrep multiplicities propagate
-#     to the H-side T-matrix entries (T = chi(a)/chi(e), so a
-#     mult factor cancels in the ratio — but it survives in any
-#     spectral weighting that the downstream pipeline applies).
-#
-# IRREP-INDEX TRANSLATION
-# -----------------------
-# We pre-compute irrep_idx_H -> irrep_idx_G by dimension matching.
-# For abelian C_H(a_H) (which holds for the rank-(m+1) elementary
-# abelian E-branch and the abelian centralisers of non-central
-# classes in D_8 / Q_8) all irreps are linear (dim 1), so the
-# match is unambiguous up to the GAP enumeration order.
-#
-# For non-abelian centralisers and non-linear irreps the matching
-# is heuristic. The mult-weighted design above means that whenever
-# mult = 1 (the baseline) the irrep index choice does not affect
-# the trace value, so the choice is mathematically inert in the
-# omega = 0 case. For non-trivial mult, the choice picks WHICH
-# G-irrep's multiplicity to inherit — a follow-up may need a
-# more careful per-irrep restriction-decomposition.
+# We retain the .irrep_index_translation field (dim-matching, one
+# j_G per j_H) for backward compatibility with downstream code that
+# may inspect the mapping. It is no longer used by trace_on_W
+# itself.
 #
 # PARENT'S MULTIPLICITY FIELD
 # ---------------------------
 # We look for parent_data.multiplicities (a list indexed by
 # class_idx_G, each entry a list aligned with idx.irreps[k_G]'s
 # Irr ordering). If absent or `fail` at the relevant class, we
-# fall back to mult = 1.
+# treat per-irrep mult as 1 within the decomposition sum (only used
+# by the diagnostic multiplicity_lookup).
 #
 # Output: A record with the same shape as RestrictTraceOnWToSubgroup
 #         output, plus:
-#   .trace_on_W            : multiplicity-weighted H character
-#                             functional, NOT raw H untwisted.
-#   .irrep_index_translation
-#                          : list of length |classes(H)|, each entry
-#                             is a list of length num_irreps_H[k_H]
-#                             mapping irrep_idx_H to irrep_idx_G.
-#   .multiplicity_lookup   : function(k_H, j_H) -> cyclotomic, the
-#                             mult factor used for that (k_H, j_H).
+#   .trace_on_W              : H-untwisted character functional
+#                              (chi_{l_H}(h_H); UNCHANGED from
+#                              base_data.trace_on_W). See the
+#                              normalisation reconciliation note
+#                              above for why this dropped the mult
+#                              scaling.
+#   .irrep_index_translation : legacy dim-matching map (kept for
+#                              backward compat / inspection).
+#   .irrep_decomposition     : list of length |classes(H)|, each
+#                              entry is a matrix of size
+#                              num_irreps_H[k_H] x num_irreps_G[k_G]
+#                              giving a_{l_H, j_G} multiplicities
+#                              (diagnostic; not used by trace_on_W).
+#   .multiplicity_lookup     : function(k_H, j_H) -> cyclotomic, the
+#                              EFFECTIVE mult factor for inspection:
+#                                sum_{j_G} a_{j_H, j_G}
+#                                          * mult_parent[k_G, j_G].
+#                              Diagnostic only.
 RestrictTraceOnWToSubgroupHonourParent := function(intertwiner_data_G, H)
     local G, idx_H, transport_H, idx_G, class_to_G, k_H, a_H, mapping,
           base_data, gens_H, bad_gen, parent_data, irrep_index_translation,
           k_G_idx, irr_H, irr_G, j_H,
           new_trace_on_W, new_epsilon, multiplicity_lookup,
-          has_mults;
+          has_mults, irrep_decomposition, decomp_rec, num_irreps_G,
+          dec_matrix, j_G_loop, row, conj_k;
     G := intertwiner_data_G.group;
     gens_H := GeneratorsOfGroup(H);
     bad_gen := First(gens_H, g -> not (g in G));
@@ -385,9 +537,17 @@ RestrictTraceOnWToSubgroupHonourParent := function(intertwiner_data_G, H)
         Add(class_to_G, mapping);
     od;
 
+    # Does the parent carry .multiplicities (the KRR spectral builder
+    # marker)? If so we use it; otherwise we treat mult = 1 (the
+    # untwisted baseline). When NOT present, we bypass the
+    # decomposition entirely to recover the original mult = 1 (no-op)
+    # behaviour at the K-4a m in {2, 3} anchor.
+    has_mults := IsBound(parent_data.multiplicities);
+
     # Per-H-class irrep_idx_H -> irrep_idx_G translation table
-    # via dimension matching.
+    # via dimension matching (LEGACY, kept for backward compat).
     irrep_index_translation := [];
+    irrep_decomposition := [];
     for k_H in [1..Length(idx_H.reps)] do
         k_G_idx := class_to_G[k_H].k_G;
         _EnsureClassData(idx_H, k_H);
@@ -406,30 +566,130 @@ RestrictTraceOnWToSubgroupHonourParent := function(intertwiner_data_G, H)
                     fi;
                     return found;
                 end)()));
+        # Build the proper restriction decomposition matrix only when
+        # has_mults is true AND parent_data.multiplicities[k_G] is a
+        # real (non-`fail`, non-empty) list. At mult = 1 / no-mults
+        # or when the parent's mults entry at this k_G is `fail` we
+        # short-circuit the multiplicity_lookup to 1 and avoid the
+        # ~O(num_irreps_G * num_classes_C_H) decomposition cost. At
+        # m=5 the parent has 1025 classes and only one (the central)
+        # carries a real mults list, so this short-circuit is the
+        # difference between O(1) class touches and O(num_classes) for
+        # the restriction-decomposition build.
+        if has_mults
+           and k_G_idx <= Length(parent_data.multiplicities)
+           and parent_data.multiplicities[k_G_idx] <> fail
+           and parent_data.multiplicities[k_G_idx] <> [] then
+            conj_k := class_to_G[k_H].conj;
+            decomp_rec := RestrictedIrrepDecomposition(
+                idx_G, idx_H, k_G_idx, k_H, conj_k);
+            num_irreps_G := idx_G.num_irreps[k_G_idx];
+            dec_matrix := [];
+            for j_G_loop in [1..num_irreps_G] do
+                # decomp_rec.decomposition(j_G) returns length
+                # num_irreps_H. We store as a matrix indexed
+                # [l_H][j_G] so that dec_matrix[l_H] is the per-G-irrep
+                # multiplicity vector for the l_H-th H-irrep.
+                row := decomp_rec.decomposition(j_G_loop);
+                # row is length num_irreps_H; we want to add this
+                # as a column at index j_G_loop.
+                for j_H in [1..Length(row)] do
+                    if not IsBound(dec_matrix[j_H]) then
+                        dec_matrix[j_H] := [];
+                    fi;
+                    dec_matrix[j_H][j_G_loop] := row[j_H];
+                od;
+            od;
+            Add(irrep_decomposition, dec_matrix);
+        else
+            Add(irrep_decomposition, fail);
+        fi;
     od;
 
-    # Does the parent carry .multiplicities (the KRR spectral builder
-    # marker)? If so we use it; otherwise we treat mult = 1 (the
-    # untwisted baseline).
-    has_mults := IsBound(parent_data.multiplicities);
+    # multiplicity_lookup(k_H, j_H):
+    #   If has_mults = false: return 1 (matches old behaviour and the
+    #                         baseline mult=1 case at the K-4a m in
+    #                         {2, 3} anchor).
+    #   If has_mults = true and parent_data.multiplicities[k_G] = fail
+    #     (or absent): return 1. Rationale: the sparse builder marks
+    #     non-central classes with `fail`, meaning "no spectral
+    #     character is computed here; the trivial baseline applies".
+    #     The trivial baseline at H is `chi_{l_H}(h_H)` (mult = 1).
+    #     This matches the OLD dim-matching heuristic's behaviour at
+    #     non-central classes and preserves the m=3 anchor in the
+    #     event that some downstream caller sets `.multiplicities`
+    #     with only the central entry populated.
+    #   If has_mults = true and parent_data.multiplicities[k_G] is a
+    #     real list of cyclotomics: return
+    #       sum_{j_G} mult[k_G, j_G] * a_{j_H, j_G}
+    #     where a is the restriction-decomposition matrix. Per-irrep
+    #     `fail` entries inside the list are treated as 0 (no
+    #     contribution from that j_G), since `fail` here means
+    #     "this irrep was not computed" which is operationally the
+    #     same as zero multiplicity in the central twist's defect
+    #     representation Omega_0 at that j_G.
     multiplicity_lookup := function(k_H_arg, j_H_arg)
-        local k_G, j_G, mults;
+        local k_G, mults, mat, total, j_G;
         if not has_mults then return 1; fi;
         k_G := class_to_G[k_H_arg].k_G;
+        mat := irrep_decomposition[k_H_arg];
+        if mat = fail then return 1; fi;
+        # Parent-side mults entry can be:
+        #   * fail / absent / []  -> baseline (mult = 1, skip decomp).
+        #   * a list of cyclotomics -> use the decomposition formula.
+        if k_G > Length(parent_data.multiplicities) then return 1; fi;
         mults := parent_data.multiplicities[k_G];
         if mults = fail or mults = [] then return 1; fi;
-        j_G := irrep_index_translation[k_H_arg][j_H_arg];
-        if j_G < 1 or j_G > Length(mults) then return 1; fi;
-        if mults[j_G] = fail then return 1; fi;
-        return mults[j_G];
+        total := 0;
+        for j_G in [1..Length(mat[j_H_arg])] do
+            if j_G > Length(mults) then
+                # mults shorter than expected; treat tail as 0 (no
+                # contribution).
+                continue;
+            elif mults[j_G] = fail then
+                # Per-irrep `fail` inside a real list: treat as 0.
+                continue;
+            else
+                total := total + mat[j_H_arg][j_G] * mults[j_G];
+            fi;
+        od;
+        return total;
     end;
 
-    # Multiplicity-weighted H character functional.
+    # H character functional WITHOUT spectral multiplicity scaling
+    # (#275 normalisation reconciliation).
+    #
+    # PREVIOUS BEHAVIOUR (incorrect): the predecessor implementation
+    # returned `mult * chi_val`, where `mult` was the effective
+    # multiplicity sum_{j_G} a_{j_H, j_G} * mult_parent[k_G, j_G].
+    # This scaling broke the matcher comparison against the stored
+    # (S, T) tables in modular_data/{8/3, 8/4, ...}, because those
+    # tables were generated by Gruen/Morrison using the unscaled
+    # Bantay/CGR S-formula with chi (not mult * chi). Concretely,
+    # the S-block sweep at _CTComputeSBlock computes
+    #   M[k][l] += eps * conj(trace_on_W(i,k,b_tilde))
+    #                  * conj(trace_on_W(j,l,a_tilde))
+    # which under mult-scaling picks up a mult_i * mult_j factor per
+    # (k_H, l_H) pair, so S entries differ from the stored data by
+    # this product. The T-matrix is invariant (T = chi_a / chi_e,
+    # and mult cancels in the ratio).
+    #
+    # CORRECT INTERPRETATION (per CGR/Bantay and the K-4a-T4a research
+    # note 2026-05-17-epsilon-extraction-from-krr.md §5.5): the
+    # CGR S-formula uses the irreducible character chi_{i,k} on
+    # C_H(a) directly, not the spectral trace functional. The KRR
+    # spectral data records mult_chi as a CATEGORICAL LABELING that
+    # counts how many isotypic copies of chi appear in Omega_0; it
+    # does NOT enter the modular-data S/T formulae as a scalar weight.
+    # Per the K-4a-T6 design (k4a_classify.g) the matcher compares
+    # against Gruen/Morrison's unscaled tables, so the H trace must
+    # be unscaled.
+    #
+    # The `multiplicity_lookup` callable is retained as a diagnostic
+    # so consumers can inspect the parent's spectral structure if
+    # needed; trace_on_W ignores it.
     new_trace_on_W := function(k_H_arg, irrep_idx_H, h_H)
-        local mult, chi_val;
-        mult := multiplicity_lookup(k_H_arg, irrep_idx_H);
-        chi_val := base_data.trace_on_W(k_H_arg, irrep_idx_H, h_H);
-        return mult * chi_val;
+        return base_data.trace_on_W(k_H_arg, irrep_idx_H, h_H);
     end;
 
     new_epsilon := function(g1, g2, a, b)
@@ -444,6 +704,7 @@ RestrictTraceOnWToSubgroupHonourParent := function(intertwiner_data_G, H)
         epsilon      := new_epsilon,
         class_to_G   := class_to_G,
         irrep_index_translation := irrep_index_translation,
+        irrep_decomposition := irrep_decomposition,
         multiplicity_lookup := multiplicity_lookup,
         parent_G     := G,
         parent_data  := parent_data,

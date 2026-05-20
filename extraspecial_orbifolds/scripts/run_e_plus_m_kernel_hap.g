@@ -56,6 +56,25 @@ else
     probe_gen := fail;
 fi;
 
+# perf-4' (issue #271): optional flag to switch to the reduced-
+# transgression-matrix one-shot path (KernelOfTransgressionViaMBar
+# in solver/transgression_matrix_reduced.g) instead of the per-generator
+# sweep. The reduced-matrix path builds M_bar per BRW-orbit-rep
+# centraliser (GF(2)-projected via _GetLiftSemForC's Bockstein+B² basis)
+# and computes ker(Tr) as a single F_2-nullspace + per-axis fallback
+# for the order-exp generator.
+#
+# Acceptance: matches m=2 (2048) and m=3 (262144 = 2^18) kernel sizes
+# verbatim; m=3 wall < 5 minutes (vs current driver's ~35 min).
+#
+# Default: false (preserves the existing per-generator sweep behaviour).
+if IsBoundGlobal("USE_REDUCED_TR_MATRIX") then
+    use_reduced_tr_matrix := USE_REDUCED_TR_MATRIX;
+else
+    use_reduced_tr_matrix := false;
+fi;
+Print("USE_REDUCED_TR_MATRIX: ", use_reduced_tr_matrix, "\n");
+
 # ----------------------------------------------------------------------
 # Setup: load common per-generator BRW path + resumable wrapper. The
 # m=7 driver additionally needs hap_lhs_resolution.g.
@@ -397,26 +416,15 @@ od;
 
 # Build per-orbit cocycle-basis caches.
 #
-# A-7-perf-1 (#271): we use BuildPerClassCocycleBasisForOrbit, which
-# (a) builds the rep cache via brute force (one Syzygy chain per (a, b)
-#     pair in C(rep)),
-# (b) for each sibling target_idx in the orbit, transports the rep table
-#     via the BRW path's cumulative H^3 matrix + phi_path-induced
-#     permutation, and stores the result in _basis_cache_by_class.
-#
-# At m=2 / m=3 the rep-cache cost is small; the transport population
-# is mostly a convenience for downstream code that calls
-# BuildPerClassCocycleBasis per class (e.g. TransgressionKernelExact).
-#
-# The inner per-vec loop below (PerVecTransgressionShared) still uses
-# orbit_caches[oi] (the rep cache) + H3VecAtTarget to transport the
-# vec; not the per-class siblings. This keeps the BRW-symmetry path
-# unchanged at the cocycle-level boolean answer. The two paths
-# disagree on the COCYCLE-level table (transport differs by a
-# 2-coboundary on C(sib), invisible to IsCoboundary2Split), but the
-# driver's inner loop and the transport-built sibling caches both
-# give the SAME boolean coboundary answer for any vec.
-Print("Building per-orbit cocycle-basis caches (with sibling transport)...\n");
+# Driver consumes only the orbit-rep cache (via H3VecAtTarget to transport
+# the H^3 vec to sibling classes on-the-fly in PerVecTransgressionShared).
+# We therefore use the rep-only `BuildPerClassCocycleBasis(setup, rep, C)`
+# call here; the sibling-transport machinery
+# `BuildPerClassCocycleBasisForOrbit` from PR #276 stays available in
+# solver/snf_wrapper.g for downstream consumers that need per-class
+# sibling caches (e.g. the proposed perf-4' transgression-matrix
+# re-architecture). See #277 for rationale.
+Print("Building per-orbit cocycle-basis caches (rep-only)...\n");
 t_caches := Runtime();;
 orbit_caches := [];;
 for orb_info in orbits_data do
@@ -452,12 +460,11 @@ for orb_info in orbits_data do
                                idx_map := cache_idx_map));
         Print((Runtime() - t_one) / 1000., " s (degenerate, identity class)\n");
     else
-        # Non-identity orbit: build rep cache + sibling transport caches.
-        Add(orbit_caches,
-            BuildPerClassCocycleBasisForOrbit(setup, conj_action, orb_info,
-                                               h3_matrices_consistent));
-        Print((Runtime() - t_one) / 1000., " s (",
-              Length(orb_info.orbit), " classes via transport)\n");
+        # Non-identity orbit: build the rep cache only. Sibling transport
+        # is not consumed by PerVecTransgressionShared (see header comment
+        # above this block).
+        Add(orbit_caches, BuildPerClassCocycleBasis(setup, rep, C));
+        Print((Runtime() - t_one) / 1000., " s (rep-only)\n");
     fi;
 od;
 Print("Per-orbit caches wall: ", (Runtime() - t_caches) / 1000., " s total\n");
@@ -538,27 +545,93 @@ end;;
 
 # Sweep loop.
 t_sweep := Runtime();;
-if probe_gen <> fail then
-    # Probe mode: compute only one generator.
-    sweep_indices := [probe_gen];
-else
-    sweep_indices := [1..k];
-fi;
-for i in sweep_indices do
-    if i in completed_idx then
-        Print("Skipping generator ", i, " (already done)\n");
-        continue;
+
+if use_reduced_tr_matrix then
+    # ----------------------------------------------------------------------
+    # perf-4' path (issue #271): one-shot ker(Tr) via reduced transgression
+    # matrix. Loads solver/transgression_matrix_reduced.g and calls
+    # KernelOfTransgressionViaMBar directly. Bypasses the per-generator
+    # sweep entirely; the result populates in_kernel_gens / half_in_kernel
+    # in a format compatible with the subsequent assembly steps.
+    # ----------------------------------------------------------------------
+    Print("\n--- USE_REDUCED_TR_MATRIX path (perf-4'): one-shot ker(Tr) ---\n");
+    perf4_orig_cwd := DirectoryCurrent();;
+    ChangeDirectoryCurrent("solver");
+    Read("transgression_matrix_reduced.g");
+    ChangeDirectoryCurrent(Filename(perf4_orig_cwd, ""));;
+
+    # ORBIT_CHECKPOINT_PATH (issue #302): if not already set by the caller,
+    # default to `<OutDir>/orbit_partial.g`. The
+    # KernelOfTransgressionViaMBar function picks this up via IsBoundGlobal
+    # and writes a per-orbit checkpoint after each merge. On rerun after a
+    # crash, the function skips orbits whose contribution has already been
+    # accumulated into col_has_constraint. Set to fail to disable.
+    if not IsBoundGlobal("ORBIT_CHECKPOINT_PATH") then
+        # Use absolute path: OutDir is relative to scripts/ but the
+        # KernelOfTransgressionViaMBar function may execute under a
+        # different CWD. Resolve to absolute via Filename().
+        ORBIT_CHECKPOINT_PATH := Concatenation(
+            Filename(DirectoryCurrent(), ""),
+            OutDir, "/orbit_partial.g");
+        Print("ORBIT_CHECKPOINT_PATH (default): ", ORBIT_CHECKPOINT_PATH, "\n");
+    else
+        Print("ORBIT_CHECKPOINT_PATH (caller-supplied): ",
+              ORBIT_CHECKPOINT_PATH, "\n");
     fi;
-    t_gen := Runtime();
-    e_i := List([1..k], j -> 0);
-    e_i[i] := 1;
-    per_class := PerVecTransgressionShared(e_i);
-    all_in_kernel := ForAll(per_class, x -> x = true);
-    PersistGenerator(StateFile, i, all_in_kernel, per_class);
-    Print("Computing generator ", i, "... ",
-          If_(all_in_kernel, "IN", "NOT"), " kernel  (",
-          (Runtime() - t_gen) / 1000., " s)\n");
-od;
+
+    t_reduced := Runtime();;
+    reduced_result := KernelOfTransgressionViaMBar(setup, orbits_data, classes,
+                                                    G, h3_matrices);;
+    reduced_wall := (Runtime() - t_reduced) / 1000.;;
+    Print("KernelOfTransgressionViaMBar wall: ", reduced_wall, " s\n");
+    Print("ker Tr size (reduced path): ", reduced_result.kernel_size, "\n");
+    Print("in_kernel_gens (reduced path): ", reduced_result.in_kernel_gens, "\n");
+
+    # Persist a synthetic per-generator state so the rest of the driver
+    # (Step 2 half-vec check, Step 3 assembly, Step 5 persist) runs as
+    # usual. We mark generators in in_kernel_gens as in-kernel; everything
+    # else as not.
+    for i in [1..k] do
+        if i in completed_idx then continue; fi;
+        e_i := List([1..k], j -> 0);
+        e_i[i] := 1;
+        if i in reduced_result.in_kernel_gens then
+            per_class := List([1..n_classes], j -> true);
+        else
+            # We don't have the per-class breakdown from the reduced path
+            # (it's not computed for non-kernel generators); record `false`
+            # for one witness class to mark "not in kernel".
+            per_class := List([1..n_classes], j -> true);
+            per_class[1] := false;  # witness-class placeholder
+        fi;
+        all_in_kernel := i in reduced_result.in_kernel_gens;
+        PersistGenerator(StateFile, i, all_in_kernel, per_class);
+    od;
+    Print("perf-4' path complete. Wall: ", reduced_wall, " s\n");
+else
+    # Existing per-generator BRW sweep (default).
+    if probe_gen <> fail then
+        # Probe mode: compute only one generator.
+        sweep_indices := [probe_gen];
+    else
+        sweep_indices := [1..k];
+    fi;
+    for i in sweep_indices do
+        if i in completed_idx then
+            Print("Skipping generator ", i, " (already done)\n");
+            continue;
+        fi;
+        t_gen := Runtime();
+        e_i := List([1..k], j -> 0);
+        e_i[i] := 1;
+        per_class := PerVecTransgressionShared(e_i);
+        all_in_kernel := ForAll(per_class, x -> x = true);
+        PersistGenerator(StateFile, i, all_in_kernel, per_class);
+        Print("Computing generator ", i, "... ",
+              If_(all_in_kernel, "IN", "NOT"), " kernel  (",
+              (Runtime() - t_gen) / 1000., " s)\n");
+    od;
+fi;
 sweep_wall := (Runtime() - t_sweep) / 1000.;;
 Print("Per-generator sweep wall (this invocation): ", sweep_wall, " s\n");
 

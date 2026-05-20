@@ -20,8 +20,19 @@
 #       image of EmUnimodGroup(3) under psi equals EPlusGroup(3) as a
 #       set (Order(Image(psi)) = Order(EP)).
 
-_TEST_DIR := "/Users/thomasgemunden/Projects/group_cohomology/DRINFELD-wt-k4-fam/extraspecial_orbifolds/scripts/tests";;
-_SCRIPT_DIR := "/Users/thomasgemunden/Projects/group_cohomology/DRINFELD-wt-k4-fam/extraspecial_orbifolds/scripts";;
+# Derive _TEST_DIR / _SCRIPT_DIR from the test file's own absolute path
+# so the test runs unchanged across worktrees (#275 fix: was hardcoded
+# to a stale predecessor worktree path).
+_SCRIPT_SELF := INPUT_FILENAME();;
+if _SCRIPT_SELF = fail or _SCRIPT_SELF = "stream" then
+    Error("test_em_eplus_translate.g: INPUT_FILENAME() unavailable; ",
+          "Read by absolute path.");
+fi;
+_TEST_DIR := _SCRIPT_SELF{
+    [1..Length(_SCRIPT_SELF)
+       - Length("/test_em_eplus_translate.g")]};;
+_SCRIPT_DIR := _TEST_DIR{
+    [1..Length(_TEST_DIR) - Length("/tests")]};;
 ChangeDirectoryCurrent(_SCRIPT_DIR);
 
 # Bookkeeping.

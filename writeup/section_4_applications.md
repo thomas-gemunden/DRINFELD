@@ -331,11 +331,11 @@ exhaustively enumerated all 280 conjugacy classes of \(D_8\)-subgroups of
 - K-4a (modular-data verdict via CGR §5.2 closed-form, anchor 4),
 - D-VAN Phase 1 (algebraic restriction verdict, anchor 5).
 
-The K-4a verdict aligns with the independent verification by Keller in
-[Keller24 arXiv:2410.18638 §6] that the BW-lattice orbifold at \(m = 3\)
-is untwisted; this is the *known* anchor case for the Keller question, and
-it tests the K-4a/D-VAN pipelines in the regime where the answer is
-expected.
+The K-4a verdict aligns with the prior understanding that the
+BW-lattice orbifold at \(m = 3\) is untwisted (BW(3) = E_8; orbifold
+work in [GK19, GK21] per [KRR24] §5.1); this is the *known* anchor
+case for the Keller question, and it tests the K-4a/D-VAN pipelines in
+the regime where the answer is expected.
 
 The strongest claim made by anchors 4 and 5 (which together are the K-4a
 Phase 2 m=3 GREEN and D-VAN Phase 1 m=3 GREEN gates of the methodology
@@ -537,11 +537,11 @@ non-trivial possible outcome patterns merit separate discussion.
 This is Keller's predicted outcome. Granting the joint verdict:
 
 1. **Confirms Keller's open question** for the BW-lattice orbifold at
-   \(m \in \{3, 5, 7\}\). The m=3 case is already independently verified
-   ([Keller24 §6]); the m=5 and m=7 cases would be this work's
-   contribution, with the verdict derived from two epistemically
-   independent pipelines (D-VAN: algebraic restriction; K-4a: modular-data
-   matching). The \(c = 32\) lattice orbifold at \(m = 5\) and the
+   \(m \in \{3, 5, 7\}\). The m=3 case is already independently understood
+   (BW(3) = E_8 orbifold theory; see [GK19, GK21] per [KRR24] §5.1); the
+   m=5 and m=7 cases would be this work's contribution, with the verdict
+   derived from two epistemically independent pipelines (D-VAN: algebraic
+   restriction; K-4a: modular-data matching). The \(c = 32\) lattice orbifold at \(m = 5\) and the
    \(c = 128\) gap-4 lattice orbifold at \(m = 7\) (the latter the
    motivating case for the Höhn/Witten gap-large-than-2 question, per the
    methodology paper §1.1) would then both be holomorphic.
