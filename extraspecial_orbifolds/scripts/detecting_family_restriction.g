@@ -34,6 +34,12 @@ fi;
 if not IsBoundGlobal("SetupCohomology3") then
     Read("transgression_kernel.g");
 fi;
+# LHSResolutionEPlus (PR #252, issue #238) is the m=7-feasible
+# replacement for ResolutionFiniteGroup(E_+(m), 4); needed by the
+# `"lhs"` source path (issue #322).
+if not IsBoundGlobal("LHSResolutionEPlus") then
+    Read("hap_lhs_resolution.g");
+fi;
 
 # Local ternary, matching repo convention.
 If_ := function(c, a, b) if c then return a; else return b; fi; end;;
@@ -187,6 +193,59 @@ RestrictionMatrixViaHAP := function(setup_G, ctx_H, phi_HG)
     od;
 
     return res_mat;
+end;;
+
+# --- LHS-resolution-based G-side setup (issue #322) -----------------
+#
+# Builds a setup_G-shaped record on top of an externally-provided HAP
+# resolution `R`. Identical to SetupCohomology3(G) but bypasses the
+# `ResolutionFiniteGroup(G, 4)` call that OOMs at m=7. The downstream
+# RestrictionMatrixViaHAP only reads setup_G.R / .K / .UCT / .exponent
+# / .num_generators / .torsion, so a hand-built record with those
+# fields is a drop-in replacement.
+#
+# WHY THIS MATTERS FOR m=7: ResolutionFiniteGroup(E_+(7), 4) requires
+# ~60 GB heap (issue #137). LHSResolutionEPlus(7, 5) (PR #252) builds
+# the same resolution to degree 5 in ~14 min wall, ~500 MB heap — a
+# >100x reduction. With the resolution in hand, TensorWithIntegers +
+# UniversalCoefficientsTheorem cost a few seconds at m=7 (small linear
+# algebra at degree 3) and yield the same setup_G shape.
+#
+# CRITICAL: `R!.group` must be the same GAP group instance used to
+# construct subgroups H downstream — `EquivariantChainMap(R_H, R, phi)`
+# fails when phi's range doesn't match R!.group elementwise. Callers
+# must thread `LHSResolutionEPlusDetailed(m, 5).G` through to the
+# subgroup enumerators.
+_DETF_SetupG_FromResolution := function(G, R)
+    local K, UCT;
+    K := TensorWithIntegers(R);
+    UCT := UniversalCoefficientsTheorem(K, 3);
+    return rec(group := G, R := R, K := K, UCT := UCT,
+               exponent := UCT.exponent,
+               num_generators := Length(UCT.hombasis),
+               torsion := UCT.torsion,
+               num_h3_classes := Product(UCT.torsion));
+end;;
+
+# Build a setup_G via LHSResolutionEPlus(m, 5). Returns the same rec
+# shape as SetupCohomology3 but uses the LHS-perturbed resolution as
+# R, making the m=7 case feasible. Caches by m so the (expensive at
+# m=7) LHS build runs at most once per session.
+#
+# Reuses LHSResolutionEPlus's own per-(m, max_n) cache for R_E, so
+# repeated calls within a session are O(1) for the resolution; the
+# only first-call cost is K := TensorWithIntegers(R) + UCT.
+_DETF_LHS_SETUP_G_CACHE := rec();;
+_DETF_BuildSetupG_LHS := function(m)
+    local key, det, setup;
+    key := Concatenation("m", String(m));
+    if IsBound(_DETF_LHS_SETUP_G_CACHE.(key)) then
+        return _DETF_LHS_SETUP_G_CACHE.(key);
+    fi;
+    det := LHSResolutionEPlusDetailed(m, 5);
+    setup := _DETF_SetupG_FromResolution(det.G, det.R_E);
+    _DETF_LHS_SETUP_G_CACHE.(key) := setup;
+    return setup;
 end;;
 
 # Find a D_8 section inside a GIVEN G (matching the quillen_detecting_subgroup
@@ -888,7 +947,7 @@ end;;
 #         answerable by the D_8 = G itself check anyway.
 #
 # Returns rec(
-#   m, source ("hap" | "quillen"),
+#   m, source ("hap" | "lhs" | "quillen"),
 #   H_EA_list       : list of GAP subgroups, one per conj class of max EA
 #   ctx_EA_list     : parallel list of SubgroupCohomologyContext recs
 #   res_EA_list     : parallel list of k_G x k_{E_i} restriction matrices
@@ -910,9 +969,9 @@ BuildRestrictionMatrices := function(m, source)
         Error("BuildRestrictionMatrices: m must be a positive integer; got ",
               m);
     fi;
-    if not (source in ["hap", "quillen"]) then
-        Error("BuildRestrictionMatrices: source must be \"hap\" or ",
-              "\"quillen\"; got ", source);
+    if not (source in ["hap", "lhs", "quillen"]) then
+        Error("BuildRestrictionMatrices: source must be \"hap\", \"lhs\", ",
+              "or \"quillen\"; got ", source);
     fi;
 
     # Phase 1 supports source = hap for m <= 5; m = 7 + hap is the trap we
@@ -920,8 +979,19 @@ BuildRestrictionMatrices := function(m, source)
     if source = "hap" and m > 5 then
         Error("BuildRestrictionMatrices: source=\"hap\" is not supported ",
               "for m > 5 because ResolutionFiniteGroup(E_+(", m, "), 4) ",
-              "OOMs. Use source=\"quillen\" (Phase 2, gated on Q-int ",
-              "A2/A3, issue #136). At m = ", m, ".");
+              "OOMs. Use source=\"lhs\" (issue #322), which builds the ",
+              "same setup via LHSResolutionEPlus(m, 5) (PR #252). ",
+              "At m = ", m, ".");
+    fi;
+    if source = "lhs" and m = 7 then
+        # m=7 eager enumeration of all 9.8M max EAs would consume
+        # ~17 GB. Defer to the streaming-greedy path in
+        # _DETF_TrimmedFamily(7) instead of materialising via this
+        # function. Users should call _DETF_TrimmedFamily(7) directly.
+        Error("BuildRestrictionMatrices: source=\"lhs\" at m = 7 would ",
+              "materialise 9 845 550 max-EA restriction matrices (out of ",
+              "memory). Use _DETF_TrimmedFamily(7) which streams + samples ",
+              "candidates instead. At m = ", m, ".");
     fi;
     if source = "quillen" then
         Error("BuildRestrictionMatrices: source=\"quillen\" is Phase 2 ",
@@ -934,11 +1004,26 @@ BuildRestrictionMatrices := function(m, source)
         return _DETF_CACHE.(key);
     fi;
 
-    # Pin a single G instance via the first MaximalElementaryAbelian_E_plus
-    # call. The returned ea_rec.parent is the EPlusGroup(m) we'll use for
-    # ALL subsequent subgroup constructions and chain maps.
-    ea_rec := MaximalElementaryAbelian_E_plus(m);
-    G := ea_rec.parent;
+    # G-side resolution: source-dependent.
+    #
+    #   "hap": ResolutionFiniteGroup(G, 4) — direct (m <= 5).
+    #   "lhs": LHSResolutionEPlus(m, 5)    — LHS-perturbed (m <= 5 for
+    #          cross-validation; m=7 path goes through
+    #          _DETF_TrimmedFamily(7) instead since eager EA enumeration
+    #          is infeasible).
+    if source = "lhs" then
+        # Pin G to the resolution's group instance — required for
+        # EquivariantChainMap to find H's elements in R!.elts.
+        setup_G := _DETF_BuildSetupG_LHS(m);
+        G := setup_G.group;
+    else
+        # Pin a single G instance via the first MaximalElementaryAbelian_E_plus
+        # call. The returned ea_rec.parent is the EPlusGroup(m) we'll use for
+        # ALL subsequent subgroup constructions and chain maps.
+        ea_rec := MaximalElementaryAbelian_E_plus(m);
+        G := ea_rec.parent;
+        setup_G := SetupCohomology3(G);
+    fi;
 
     # Enumerate max-EA / D_8 / Q_8 sections inside G. Strategy is
     # m-dependent (D-VAN m=5 OOM fix, issue #287):
@@ -949,8 +1034,6 @@ BuildRestrictionMatrices := function(m, source)
     #     E_+(5) (|G|=2048) OOMs at 32 GB.
     H_EA_list := _DETF_AllMaxEAsIn(G, m);
     H_D8 := _DETF_FindD8In(G, m);
-
-    setup_G := SetupCohomology3(G);
 
     # Per-EA: build cohomology context and restriction matrix.
     ctx_EA_list := [];
@@ -1092,6 +1175,346 @@ _DETF_KernelOrderSNF := function(data, ea_indices, include_D8, include_Q8)
 end;;
 
 
+# =====================================================================
+# Public alias for the LHS-resolution-aware restriction-matrix builder
+# (issue #322). Thin wrapper around BuildRestrictionMatrices(m, "lhs")
+# that documents intent: build the same record as the HAP path but
+# using LHSResolutionEPlus instead of ResolutionFiniteGroup, making
+# the m=7 case feasible (within streaming + sampling at m=7; see
+# _DETF_TrimmedFamily(7) for the m=7 driver).
+#
+# At m in {2, 3, 5}: returns the same shape as
+# BuildRestrictionMatrices(m, "hap"), enabling cross-validation
+# (kernel orders, image orders, trimmed-family invariants).
+# At m=7: errors with a redirect to _DETF_TrimmedFamily(7), since
+# eager enumeration of 9.8M EAs is infeasible.
+_DETF_RestrictionMatricesViaLHS := function(m)
+    return BuildRestrictionMatrices(m, "lhs");
+end;;
+
+
+# =====================================================================
+# m=7 streaming + sampling driver for _DETF_TrimmedFamily (issue #322).
+#
+# Why this needs a custom driver: the m=7 Lagrangian count is
+# 9 845 550, far too many to materialise eagerly. The strategy is:
+#
+#   1. Build the LHS G-side setup (LHSResolutionEPlus(7, 5) — ~14 min
+#      wall, ~500 MB heap per PR #252's benchmarks).
+#   2. Build the D_8 and Q_8 contexts + their restriction matrices.
+#   3. Sample K candidates uniformly from the 9.8M Lagrangians using
+#      reservoir sampling during the Witt-streaming pass (~10 min wall
+#      per PR #307's m=6 → m=7 scaling). For each sampled candidate,
+#      build the restriction matrix immediately (each takes ~seconds
+#      against R_E_lhs at degree 3-4).
+#   4. Greedy over the K sampled candidates + D_8 + Q_8.
+#   5. Drop-one verification on the chosen family.
+#
+# The wall is dominated by step 1 (LHS resolution build) + step 3 (K
+# restriction-matrix builds; at K=1000 with ~5 s per build, ~80 min).
+#
+# Memory bound: K restriction matrices × ~100 KB each (k_G × k_H,
+# with k_G ~ 91 + few Z/4 generators at m=7 and k_H ~ a few hundred
+# for a rank-8 elementary abelian) ≈ 100 MB. Plus 500 MB LHS
+# resolution = ~600 MB peak, comfortably under the 4 GB target.
+#
+# Options:
+#   opts.m           : m (default 7; can be overridden for unit-testing
+#                       the streaming-greedy path at smaller m)
+#   opts.sample_size : K = number of sampled candidates (default 1000)
+#   opts.seed        : RNG seed for reservoir sampling (default `time-based`)
+#   opts.verbose     : print progress (default true at m=7)
+_DETF_TrimmedFamily_m7_streaming := function(opts)
+    local m, sample_size, verbose, t0, t_end,
+          setup_G, G, gens_G, Z_G, z, gens_G_non_central,
+          H_D8, ctx_D8, phi_D8, res_D8,
+          H_Q8, ctx_Q8, phi_Q8, res_Q8,
+          include_Q8, n, powers, elem_cache,
+          sample_basis_tuples, sample_consumer, count_so_far,
+          n_target, K, candidates, ea_subs, ea_ctxs, ea_ress,
+          i, H_i, ctx_i, phi_i, res_i, ea_list,
+          data, n_EA, ea_chosen, greedy_log, curr_ker,
+          best_j, best_ker, j, k_try, ea_sorted, drop_kers,
+          sub_indices, ker_drop, locally_tight, result,
+          seed, rs;
+
+    # Allow opts.m override for testing the streaming path at smaller m.
+    # Default = 7 (the production case).
+    if IsBound(opts.m) then
+        m := opts.m;
+    else
+        m := 7;
+    fi;
+    t0 := Runtime();
+
+    # Resolve options.
+    if IsBound(opts.sample_size) then
+        sample_size := opts.sample_size;
+    else
+        sample_size := 1000;
+    fi;
+    if not (IsInt(sample_size) and sample_size >= 1) then
+        Error("_DETF_TrimmedFamily_m7_streaming: opts.sample_size must ",
+              "be a positive integer; got ", sample_size);
+    fi;
+    if IsBound(opts.verbose) then
+        verbose := opts.verbose;
+    else
+        verbose := true;
+    fi;
+    if IsBound(opts.seed) then
+        seed := opts.seed;
+        rs := RandomSource(IsMersenneTwister, seed);
+    else
+        # Use the default GAP random source (state-shared with Random()).
+        rs := GlobalMersenneTwister;
+    fi;
+
+    if verbose then
+        Print("[_DETF_TrimmedFamily_m7] sample_size = ", sample_size, "\n");
+    fi;
+
+    # --- Step 1: LHS G-side setup. Slow at m=7 (~14 min cold).
+    if verbose then
+        Print("[_DETF_TrimmedFamily_m7] building LHS resolution + UCT ",
+              "(~14 min cold) ...\n");
+    fi;
+    setup_G := _DETF_BuildSetupG_LHS(m);
+    G := setup_G.group;
+
+    # Sanity check on G: must be the LHS resolution's group instance.
+    if verbose then
+        Print("[_DETF_TrimmedFamily_m7] |G| = ", Order(G), ", ",
+              "k_G (G-side H^3 generators) = ", setup_G.num_generators,
+              ", torsion_G = ", setup_G.torsion, "\n");
+    fi;
+
+    # --- Step 2: D_8 + Q_8 sections.
+    if verbose then
+        Print("[_DETF_TrimmedFamily_m7] building D_8 + Q_8 contexts + ",
+              "restriction matrices ...\n");
+    fi;
+    H_D8 := _DETF_FindD8In(G, m);
+    ctx_D8 := SubgroupCohomologyContext(H_D8);
+    phi_D8 := SubgroupInclusion(H_D8, G);
+    res_D8 := RestrictionMatrixViaHAP(setup_G, ctx_D8, phi_D8);
+
+    H_Q8 := _DETF_FindQ8In(G, m);
+    if H_Q8 = fail then
+        ctx_Q8 := fail;
+        phi_Q8 := fail;
+        res_Q8 := fail;
+    else
+        ctx_Q8 := SubgroupCohomologyContext(H_Q8);
+        phi_Q8 := SubgroupInclusion(H_Q8, G);
+        res_Q8 := RestrictionMatrixViaHAP(setup_G, ctx_Q8, phi_Q8);
+    fi;
+    include_Q8 := (res_Q8 <> fail);
+
+    # --- Step 3: streaming reservoir sample of size K candidates.
+    if verbose then
+        Print("[_DETF_TrimmedFamily_m7] streaming Witt enumeration + ",
+              "reservoir sampling K = ", sample_size, " out of 9 845 550 ",
+              "Lagrangians ...\n");
+    fi;
+    n := 2 * m;
+    powers := List([1..n], i -> 2^(i - 1));
+    elem_cache := rec();
+    Z_G := Centre(G);
+    z := First(AsList(Z_G), x -> not IsOne(x));
+    gens_G := GeneratorsOfGroup(G);
+    gens_G_non_central := Filtered(gens_G, g -> not (g in Z_G));
+    if Length(gens_G_non_central) < n then
+        Error("_DETF_TrimmedFamily_m7_streaming: |GeneratorsOfGroup(G) \\ Z| < 2m");
+    fi;
+    gens_G_non_central := gens_G_non_central{[1..n]};
+
+    sample_basis_tuples := [];
+    count_so_far := rec(n := 0);
+    K := sample_size;
+    sample_consumer := function(L)
+        local tuple, slot;
+        count_so_far.n := count_so_far.n + 1;
+        tuple := _DETF_LagrangianToBasisTuple(L, gens_G_non_central, z,
+                                              G, elem_cache, powers);
+        if Length(sample_basis_tuples) < K then
+            # Reservoir not yet full: add unconditionally.
+            Add(sample_basis_tuples, tuple);
+        else
+            # Reservoir full: replace position Random(rs, 1, count_so_far.n)
+            # iff that index <= K.
+            slot := Random(rs, 1, count_so_far.n);
+            if slot <= K then
+                sample_basis_tuples[slot] := tuple;
+            fi;
+        fi;
+        if verbose and count_so_far.n mod 500000 = 0 then
+            Print("[_DETF_TrimmedFamily_m7]   ", count_so_far.n,
+                  " / 9845550 Lagrangians visited\n");
+        fi;
+    end;
+    _DETF_LagrangiansViaWitt_streaming(m, sample_consumer);
+    if verbose then
+        Print("[_DETF_TrimmedFamily_m7]   sampling done: ",
+              count_so_far.n, " visited, ",
+              Length(sample_basis_tuples), " sampled.\n");
+    fi;
+
+    # --- Step 4: per-sample restriction matrices.
+    if verbose then
+        Print("[_DETF_TrimmedFamily_m7] building ",
+              Length(sample_basis_tuples), " per-sample restriction matrices ",
+              "(slow: ~seconds per build) ...\n");
+    fi;
+    ea_subs := [];
+    ea_ctxs := [];
+    ea_ress := [];
+    for i in [1..Length(sample_basis_tuples)] do
+        H_i := Subgroup(G, sample_basis_tuples[i]);
+        ctx_i := SubgroupCohomologyContext(H_i);
+        phi_i := SubgroupInclusion(H_i, G);
+        res_i := RestrictionMatrixViaHAP(setup_G, ctx_i, phi_i);
+        Add(ea_subs, H_i);
+        Add(ea_ctxs, ctx_i);
+        Add(ea_ress, res_i);
+        if verbose and i mod 100 = 0 then
+            Print("[_DETF_TrimmedFamily_m7]   built ", i, " / ",
+                  Length(sample_basis_tuples),
+                  " restriction matrices (wall = ",
+                  Runtime() - t0, " ms)\n");
+        fi;
+    od;
+
+    # Wrap into a data rec compatible with _DETF_KernelOrderSNF.
+    data := rec(
+        m               := m,
+        source          := "lhs",
+        H_EA_list       := ea_subs,
+        ctx_EA_list     := ea_ctxs,
+        res_EA_list     := ea_ress,
+        torsion_EA_list := List(ea_ctxs, c -> c.torsion),
+        exp_EA_list     := List(ea_ctxs, c -> c.exponent),
+        H_D8            := H_D8,
+        ctx_D8          := ctx_D8,
+        res_D8          := res_D8,
+        torsion_D8      := ctx_D8.torsion,
+        exp_D8          := ctx_D8.exponent,
+        H_Q8            := H_Q8,
+        ctx_Q8          := ctx_Q8,
+        res_Q8          := res_Q8,
+        torsion_Q8      := If_(ctx_Q8 = fail, fail, ctx_Q8.torsion),
+        exp_Q8          := If_(ctx_Q8 = fail, fail, ctx_Q8.exponent),
+        torsion_G       := setup_G.torsion,
+        exp_G           := setup_G.exponent,
+        setup_G         := setup_G,
+        G               := G,
+        sampled         := true,
+        sample_size     := sample_size,
+        total_lagrangians := count_so_far.n
+    );
+    if Length(ea_subs) > 0 then
+        # Backward-compat aliases (same convention as
+        # BuildRestrictionMatrices).
+        data.res_E := ea_ress[1];
+        data.ctx_E := ea_ctxs[1];
+        data.torsion_E := ea_ctxs[1].torsion;
+        data.exp_E := ea_ctxs[1].exponent;
+        data.H_E := ea_subs[1];
+    fi;
+
+    # --- Step 5: greedy growth over the sampled K candidates.
+    n_EA := Length(ea_subs);
+    if verbose then
+        Print("[_DETF_TrimmedFamily_m7] greedy growth over ", n_EA,
+              " sampled candidates ...\n");
+    fi;
+    ea_chosen := [];
+    greedy_log := [];
+    curr_ker := _DETF_KernelOrderSNF(data, [], true, include_Q8);
+    if verbose then
+        Print("[_DETF_TrimmedFamily_m7]   initial ker (just {D_8, Q_8}) = ",
+              curr_ker, "\n");
+    fi;
+    while curr_ker > 1 do
+        best_j := fail;
+        best_ker := curr_ker;
+        for j in [1..n_EA] do
+            if j in ea_chosen then continue; fi;
+            k_try := _DETF_KernelOrderSNF(data,
+                                          Concatenation(ea_chosen, [j]),
+                                          true, include_Q8);
+            if k_try < best_ker then
+                best_j := j;
+                best_ker := k_try;
+            fi;
+        od;
+        if best_j = fail then
+            # Greedy stuck: no single sampled-EA addition reduces |ker|.
+            # The sample is insufficient. Caller should rerun with a
+            # larger sample_size.
+            if verbose then
+                Print("[_DETF_TrimmedFamily_m7]   greedy stuck at ker = ",
+                      curr_ker, " (sample insufficient; ",
+                      "try larger sample_size).\n");
+            fi;
+            break;
+        fi;
+        Add(ea_chosen, best_j);
+        Add(greedy_log, rec(ea := best_j, ker := best_ker));
+        curr_ker := best_ker;
+        if verbose then
+            Print("[_DETF_TrimmedFamily_m7]   step ", Length(ea_chosen),
+                  ": added candidate ", best_j, ", ker = ", best_ker,
+                  "\n");
+        fi;
+    od;
+
+    ea_sorted := SortedList(ea_chosen);
+
+    # --- Step 6: drop-one verification.
+    drop_kers := [];
+    locally_tight := true;
+    if curr_ker = 1 then
+        if verbose then
+            Print("[_DETF_TrimmedFamily_m7] drop-one verification ...\n");
+        fi;
+        for i in [1..Length(ea_chosen)] do
+            sub_indices := Concatenation(ea_chosen{[1..i - 1]},
+                                          ea_chosen{[i + 1..Length(ea_chosen)]});
+            ker_drop := _DETF_KernelOrderSNF(data, sub_indices,
+                                              true, include_Q8);
+            Add(drop_kers, ker_drop);
+            if ker_drop = 1 then
+                locally_tight := false;
+            fi;
+        od;
+    fi;
+
+    t_end := Runtime();
+
+    result := rec(
+        m                        := m,
+        source                   := "lhs",
+        ea_indices_chosen        := ea_chosen,
+        ea_indices_chosen_sorted := ea_sorted,
+        include_D8               := true,
+        include_Q8               := include_Q8,
+        final_ker                := curr_ker,
+        ea_count                 := Length(ea_chosen),
+        family_size              := Length(ea_chosen) + 1
+                                    + If_(include_Q8, 1, 0),
+        greedy_log               := greedy_log,
+        locally_tight            := locally_tight,
+        drop_one_kers            := drop_kers,
+        walltime_ms              := t_end - t0,
+        data                     := data,
+        sample_size              := sample_size,
+        total_lagrangians        := count_so_far.n
+    );
+    return result;
+end;;
+
+
 # Main public entry point.
 #
 # `_DETF_TrimmedFamily(m, [opts])` returns a verified-minimal detecting
@@ -1133,14 +1556,15 @@ end;;
 #     almost all of which is the BuildRestrictionMatrices(5, "hap")
 #     HAP resolution build + 114 EquivariantChainMaps; the greedy +
 #     SNF + drop-one verification adds <1 min on top.
-#   * m=7: NOT YET SUPPORTED. BuildRestrictionMatrices(7, "hap")
-#     errors because ResolutionFiniteGroup(E_+(7), 4) OOMs at ~60 GB
-#     (#137). The m=7 trimmed family requires a separate path
-#     through LHSResolutionEPlus(7, 5) (PR #252) + per-EA restriction
-#     matrices via the LHS resolution. That infrastructure is gated
-#     on Q-int A2/A3 (issue #136) and not delivered here; this PR
-#     errors at m=7 with an explanatory message and defers the m=7
-#     path to a follow-up issue so the m <= 5 deliverable can ship.
+#   * m=7: SUPPORTED via source="lhs" (issue #322). Default at m=7.
+#     Uses LHSResolutionEPlus(7, 5) (PR #252; ~14 min wall, ~500 MB
+#     heap) instead of ResolutionFiniteGroup(E_+(7), 4) (OOMs at
+#     ~60 GB, #137). The 9 845 550 Lagrangians are too many to
+#     enumerate eagerly, so the greedy iterates over a UNIFORM
+#     RANDOM SAMPLE of size opts.sample_size (default 1000) drawn
+#     once via reservoir sampling during the Witt streaming pass.
+#     Expected wall ~2-6 h; the wall is dominated by the per-EA
+#     restriction-matrix builds against R_E_lhs.
 #
 # Returns rec(
 #   m                       : m
@@ -1186,22 +1610,37 @@ _DETF_TrimmedFamily := function(arg)
     if IsBound(opts.source) then
         source := opts.source;
     else
-        source := "hap";
+        # Default source selection by m:
+        #   m <= 5: "hap" (preserves PR #320 anchors).
+        #   m = 7:  "lhs" (#322; HAP path OOMs at m=7).
+        if m = 7 then
+            source := "lhs";
+        else
+            source := "hap";
+        fi;
     fi;
-    if not (source in ["hap", "quillen"]) then
-        Error("_DETF_TrimmedFamily: opts.source must be \"hap\" or ",
-              "\"quillen\"; got ", source);
+    if not (source in ["hap", "lhs", "quillen"]) then
+        Error("_DETF_TrimmedFamily: opts.source must be \"hap\", \"lhs\", ",
+              "or \"quillen\"; got ", source);
     fi;
     if source = "hap" and m > 5 then
         Error("_DETF_TrimmedFamily: source=\"hap\" is not supported for ",
               "m = ", m, " (BuildRestrictionMatrices errors at m > 5). ",
-              "The m=7 trimmed family requires a separate path via ",
-              "LHSResolutionEPlus(", m, ", 5) (issue #313 §m=7), which is ",
-              "gated on Q-int A2/A3 (issue #136). At m = ", m, ".");
+              "Use source=\"lhs\" (issue #322; LHSResolutionEPlus(", m,
+              ", 5) per PR #252). At m = ", m, ".");
     fi;
     if source = "quillen" then
         Error("_DETF_TrimmedFamily: source=\"quillen\" is gated on Q-int ",
               "A2/A3 (issue #136); not yet implemented. At m = ", m, ".");
+    fi;
+
+    # m=7 + LHS: dispatch to streaming-greedy path. Issue #322. The
+    # eager BuildRestrictionMatrices(7, "lhs") would materialise 9.8M
+    # max-EA restriction matrices (~17 GB), so m=7 needs a custom
+    # streaming + sampling driver. m ∈ {2, 3, 5} with source="lhs" go
+    # through the eager path (cross-validation against the HAP path).
+    if source = "lhs" and m = 7 then
+        return _DETF_TrimmedFamily_m7_streaming(opts);
     fi;
 
     t0 := Runtime();

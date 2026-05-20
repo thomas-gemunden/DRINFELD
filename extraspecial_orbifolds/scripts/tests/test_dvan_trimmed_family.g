@@ -65,8 +65,10 @@ AssertOrLog("missing m errors", not err[1]);
 err := CALL_WITH_CATCH(_DETF_TrimmedFamily, [0]);;
 AssertOrLog("m = 0 errors", not err[1]);
 
-err := CALL_WITH_CATCH(_DETF_TrimmedFamily, [7]);;
-AssertOrLog("m = 7 errors (LHS path not implemented in this PR)",
+# m=7 with source="hap" must still error (HAP path OOMs at m=7).
+err := CALL_WITH_CATCH(_DETF_TrimmedFamily,
+                       [7, rec(source := "hap")]);;
+AssertOrLog("m = 7 with source=\"hap\" errors (HAP OOMs)",
             not err[1]);
 
 err := CALL_WITH_CATCH(_DETF_TrimmedFamily,
@@ -243,6 +245,170 @@ if run_m5 then
                     = [33, 48, 54, 57, 70, 76, 88, 89, 109]);
 else
     Print("\n--- T6: m=5 smoke SKIPPED (set TRIMMED_RUN_M5 := true to run) ---\n");
+fi;
+
+# ---------------------------------------------------------------------
+# T7: LHS-path cross-validation (issue #322).
+# ---------------------------------------------------------------------
+#
+# The new `source="lhs"` path (PR for #322) routes G-side cohomology
+# through LHSResolutionEPlus(m, 5) instead of ResolutionFiniteGroup(G, 4).
+# At m ∈ {2, 3, 5} both paths are feasible, so we cross-validate.
+#
+# NOTE on bit-for-bit equality: UniversalCoefficientsTheorem's
+# `hombasis` depends on the underlying resolution's adapted basis
+# transform. Different resolutions (HAP-direct vs LHS-perturbed)
+# generically yield different hom-bases. So the *per-EA matrix*
+# entries are NOT expected to match byte-for-byte across the two
+# paths — they differ by an integer change-of-basis on the G-side.
+# What IS basis-independent (and therefore preserved):
+#
+#   * Kernel order |H^3(G) / image| for any fixed family of subgroups.
+#   * Trimmed-family size + locally_tight property.
+#   * Greedy convergence to final_ker = 1.
+#
+# We assert the BASIS-INDEPENDENT invariants at m ∈ {2, 3}; m=5
+# under TRIMMED_RUN_M5_LHS gate (~30-40 min cold, since LHS at m=5
+# is fast but the 112 per-EA chain maps still take ~15 min).
+
+Print("\n--- T7: LHS-path cross-validation (issue #322) ---\n");
+
+# m=2 LHS path: same family invariants as HAP path.
+t2_lhs_start := Runtime();;
+r2_lhs := _DETF_TrimmedFamily(2, rec(source := "lhs"));;
+t2_lhs_wall := Runtime() - t2_lhs_start;;
+Print("  m=2 LHS wall: ", t2_lhs_wall, " ms\n");
+AssertOrLog("m=2 LHS source = \"lhs\"", r2_lhs.source = "lhs");
+AssertOrLog("m=2 LHS final_ker = 1", r2_lhs.final_ker = 1);
+AssertOrLog("m=2 LHS family_size = HAP family_size (= 5)",
+            r2_lhs.family_size = r2.family_size);
+AssertOrLog("m=2 LHS ea_count = HAP ea_count (= 3)",
+            r2_lhs.ea_count = r2.ea_count);
+AssertOrLog("m=2 LHS locally_tight = true",
+            r2_lhs.locally_tight = true);
+
+# m=3 LHS path: same family invariants as HAP path.
+t3_lhs_start := Runtime();;
+r3_lhs := _DETF_TrimmedFamily(3, rec(source := "lhs"));;
+t3_lhs_wall := Runtime() - t3_lhs_start;;
+Print("  m=3 LHS wall: ", t3_lhs_wall, " ms\n");
+AssertOrLog("m=3 LHS source = \"lhs\"", r3_lhs.source = "lhs");
+AssertOrLog("m=3 LHS final_ker = 1", r3_lhs.final_ker = 1);
+AssertOrLog("m=3 LHS family_size = HAP family_size (= 8)",
+            r3_lhs.family_size = r3.family_size);
+AssertOrLog("m=3 LHS ea_count = HAP ea_count (= 6)",
+            r3_lhs.ea_count = r3.ea_count);
+AssertOrLog("m=3 LHS locally_tight = true",
+            r3_lhs.locally_tight = true);
+# Greedy ker reduction sequence: the LHS hombasis may permute the
+# m=3 H^3 generators so the SCALED ker values may differ from PR
+# #310's [4.3e9, 3.4e7, 2.6e5, 4096, 64, 4, 1]. What MUST match is
+# the FINAL ker = 1 and the family size.
+
+# Cross-validation at m=5 (gated; slow).
+run_m5_lhs := IsBoundGlobal("TRIMMED_RUN_M5_LHS")
+              and ValueGlobal("TRIMMED_RUN_M5_LHS") = true;;
+
+if run_m5_lhs then
+    Print("\n--- T7b: m=5 LHS cross-validation (~30-40 min cold) ---\n");
+    if not run_m5 then
+        Print("  (set TRIMMED_RUN_M5 := true alongside to compare LHS ",
+              "and HAP at m=5)\n");
+    fi;
+    t5_lhs_start := Runtime();;
+    r5_lhs := _DETF_TrimmedFamily(5, rec(source := "lhs"));;
+    t5_lhs_wall := Runtime() - t5_lhs_start;;
+    Print("  m=5 LHS wall: ", t5_lhs_wall, " ms\n");
+    Print("  m=5 LHS chosen sorted = ", r5_lhs.ea_indices_chosen_sorted, "\n");
+    Print("  m=5 LHS ea_count = ", r5_lhs.ea_count, "\n");
+    Print("  m=5 LHS final_ker = ", r5_lhs.final_ker, "\n");
+    Print("  m=5 LHS locally_tight = ", r5_lhs.locally_tight, "\n");
+    AssertOrLog("m=5 LHS final_ker = 1", r5_lhs.final_ker = 1);
+    AssertOrLog("m=5 LHS locally_tight = true",
+                r5_lhs.locally_tight = true);
+    AssertOrLog("m=5 LHS ea_count in plausible range [3, 30]",
+                r5_lhs.ea_count >= 3 and r5_lhs.ea_count <= 30);
+    if run_m5 then
+        AssertOrLog("m=5 LHS ea_count = HAP ea_count",
+                    r5_lhs.ea_count = r5.ea_count);
+    fi;
+else
+    Print("\n--- T7b: m=5 LHS cross-validation SKIPPED (set ",
+          "TRIMMED_RUN_M5_LHS := true to run) ---\n");
+fi;
+
+# ---------------------------------------------------------------------
+# T8: m=7 reachability via LHS + streaming + sampling (issue #322).
+# ---------------------------------------------------------------------
+#
+# Skipped by default — m=7 build is ~14 min wall for LHS resolution
+# alone, plus per-sample chain maps (~minutes to hours depending on
+# opts.sample_size). To exercise:
+#
+#   gap -o 16g -q -b -c 'TRIMMED_RUN_M7 := true; \
+#       Read("tests/test_dvan_trimmed_family.g"); QUIT;'
+#
+# The default opts.sample_size = 1000 picks 1000 random Lagrangians
+# out of 9 845 550; with seed-controlled RNG the result is
+# reproducible. Acceptance criterion: m=7 returns final_ker = 1 and
+# locally_tight = true; the ea_count is the minimum family size
+# detectable from the random sample (typically 8-15 EAs).
+
+run_m7 := IsBoundGlobal("TRIMMED_RUN_M7")
+          and ValueGlobal("TRIMMED_RUN_M7") = true;;
+
+if run_m7 then
+    Print("\n--- T8: m=7 reachability (TRIMMED_RUN_M7 set; hours wall) ---\n");
+    if IsBoundGlobal("TRIMMED_M7_SAMPLE_SIZE") then
+        m7_sample := ValueGlobal("TRIMMED_M7_SAMPLE_SIZE");
+    else
+        m7_sample := 1000;
+    fi;
+    if IsBoundGlobal("TRIMMED_M7_SEED") then
+        m7_seed := ValueGlobal("TRIMMED_M7_SEED");
+    else
+        m7_seed := 42;
+    fi;
+    t7_start := Runtime();;
+    r7 := _DETF_TrimmedFamily(7, rec(source := "lhs",
+                                      sample_size := m7_sample,
+                                      seed := m7_seed,
+                                      verbose := true));;
+    t7_wall := Runtime() - t7_start;;
+    Print("  m=7 wall: ", t7_wall, " ms\n");
+    Print("  m=7 chosen sorted = ", r7.ea_indices_chosen_sorted, "\n");
+    Print("  m=7 ea_count    = ", r7.ea_count, "\n");
+    Print("  m=7 family_size = ", r7.family_size, "\n");
+    Print("  m=7 final_ker   = ", r7.final_ker, "\n");
+    Print("  m=7 locally_tight = ", r7.locally_tight, "\n");
+    Print("  m=7 sample_size = ", r7.sample_size, "\n");
+    Print("  m=7 drop_one_kers = ", r7.drop_one_kers, "\n");
+    AssertOrLog("m=7 returns rec with .m = 7", r7.m = 7);
+    AssertOrLog("m=7 source = \"lhs\"", r7.source = "lhs");
+    AssertOrLog("m=7 sample_size = m7_sample",
+                r7.sample_size = m7_sample);
+    AssertOrLog("m=7 final_ker = 1 (joint restriction injective)",
+                r7.final_ker = 1);
+    AssertOrLog("m=7 locally_tight = true",
+                r7.locally_tight = true);
+    # PR #318 M-binom conjecture: 30 EAs at m=7. PR #310 conjecture:
+    # 22-50 EAs at m=7. We do NOT assert a specific count because the
+    # greedy is sample-restricted; report only.
+    AssertOrLog("m=7 ea_count > 0", r7.ea_count > 0);
+    AssertOrLog("m=7 ea_count <= sample_size", r7.ea_count <= m7_sample);
+    Print("\n  M-binom conjecture (PR #318): predicted 30 EAs at m=7.\n");
+    Print("  This run's ea_count: ", r7.ea_count, ".\n");
+    if r7.ea_count = 30 then
+        Print("  -> M-binom PREDICTION CONFIRMED at m=7.\n");
+    else
+        Print("  -> M-binom prediction MISMATCH at m=7 ",
+              "(predicted 30, got ", r7.ea_count, ").\n");
+        Print("     CAVEAT: greedy on a random sample is *upper-bounded*\n");
+        Print("     by the true minimum, so a sample run can only refute\n");
+        Print("     M-binom if ea_count < 30 with locally_tight true.\n");
+    fi;
+else
+    Print("\n--- T8: m=7 reachability SKIPPED (set TRIMMED_RUN_M7 := true) ---\n");
 fi;
 
 # ---------------------------------------------------------------------
