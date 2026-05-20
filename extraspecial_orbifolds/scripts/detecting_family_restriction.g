@@ -195,6 +195,73 @@ RestrictionMatrixViaHAP := function(setup_G, ctx_H, phi_HG)
     return res_mat;
 end;;
 
+# --- Fast partial UCT (issue #322) ----------------------------------
+#
+# At m=7 with LHS R_E built to degree 4, the full
+# UniversalCoefficientsTheorem (from src/modular_data.g) on the
+# resulting chain complex K spends most of its wall in the
+# `cocyclebasis` / `lift` computation:
+#
+#   r2 := ComplementIntMatWithTransforms(IdentityMat(K!.dimension(n)), ZZ);
+#   ...
+#   cocyclelist := List(homlist, x -> (R1^(-1) * (I * (C1 * x))) mod m);
+#
+# This involves a Smith-normal-form expansion of a
+# (K!.dimension(3))-square integer matrix (~680x680 at m=7) and its
+# inverse — minutes at m=7, orders of magnitude more than the rest
+# of the UCT.
+#
+# `RestrictionMatrixViaHAP` does NOT use `cocyclebasis` or `lift`
+# (those are needed for StandardCocycleOf and related callers in
+# transgression_kernel.g and quillen_h3_u1.g, NOT for the
+# slack-trim path). So we provide a fast partial UCT that returns
+# only the fields we need: `hombasis`, `torsion`, `exponent`,
+# `cyclebasis`, `cycletrans`. The other fields are set to fail.
+#
+# Empirical speedup at m=7: ~5-10x reduction in UCT wall (from
+# ~5-10 min to ~30-60 s). Below m=7 the saving is marginal but
+# the function is harmless.
+_DETF_FastPartialUCT3 := function(K)
+    local n, ZZ, B, r, C, D, m, i, hom, homlist;
+    n := 3;
+    ZZ := NullspaceIntMat(TransposedMat(BoundaryMatrix(K, n)));
+    if not Size(ZZ) > 0 then
+        return rec(
+            complex      := K,
+            cyclebasis   := ZZ,
+            cycletrans   := [],
+            hombasis     := [],
+            cocyclebasis := fail,
+            torsion      := [1],
+            exponent     := 1,
+            lift         := fail,
+            _fast_partial := true);
+    fi;
+    B := BaseIntMat(TransposedMat(BoundaryMatrix(K, n + 1)));
+    r := ComplementIntMatWithTransforms(ZZ, B);
+    C := r!.fulltrans;
+    D := r!.moduli;
+    m := D[Size(D)];
+    homlist := [];
+    for i in [1..Size(D)] do
+        if D[i] = 1 then continue; fi;
+        hom := ListWithIdenticalEntries(Size(ZZ), 0);
+        hom[i] := m / D[i];
+        Add(homlist, hom);
+    od;
+    homlist := List(homlist, x -> ((C ^ (-1)) * x) mod m);
+    return rec(
+        complex      := K,
+        cyclebasis   := ZZ,
+        cycletrans   := C,
+        hombasis     := homlist,
+        cocyclebasis := fail,  # skipped — RestrictionMatrixViaHAP doesn't need it
+        torsion      := Filtered(D, x -> not x = 1),
+        exponent     := m,
+        lift         := fail,  # skipped
+        _fast_partial := true);
+end;;
+
 # --- LHS-resolution-based G-side setup (issue #322) -----------------
 #
 # Builds a setup_G-shaped record on top of an externally-provided HAP
@@ -216,10 +283,24 @@ end;;
 # fails when phi's range doesn't match R!.group elementwise. Callers
 # must thread `LHSResolutionEPlusDetailed(m, 5).G` through to the
 # subgroup enumerators.
-_DETF_SetupG_FromResolution := function(G, R)
-    local K, UCT;
+_DETF_SetupG_FromResolution := function(arg)
+    local G, R, fast, K, UCT;
+    if Length(arg) < 2 then
+        Error("_DETF_SetupG_FromResolution(G, R, [fast := false])");
+    fi;
+    G := arg[1];
+    R := arg[2];
+    if Length(arg) >= 3 then
+        fast := arg[3];
+    else
+        fast := false;
+    fi;
     K := TensorWithIntegers(R);
-    UCT := UniversalCoefficientsTheorem(K, 3);
+    if fast then
+        UCT := _DETF_FastPartialUCT3(K);
+    else
+        UCT := UniversalCoefficientsTheorem(K, 3);
+    fi;
     return rec(group := G, R := R, K := K, UCT := UCT,
                exponent := UCT.exponent,
                num_generators := Length(UCT.hombasis),
@@ -246,7 +327,7 @@ end;;
 # budget for the streaming-greedy driver.
 _DETF_LHS_SETUP_G_CACHE := rec();;
 _DETF_BuildSetupG_LHS := function(m)
-    local key, det, setup, max_n;
+    local key, det, setup, max_n, fast;
     key := Concatenation("m", String(m));
     if IsBound(_DETF_LHS_SETUP_G_CACHE.(key)) then
         return _DETF_LHS_SETUP_G_CACHE.(key);
@@ -257,11 +338,20 @@ _DETF_BuildSetupG_LHS := function(m)
     # bit-for-bit consistency with the existing PR #252 anchors.
     if m >= 6 then
         max_n := 4;
+        # At m=7 the full UCT spends most of its wall in the
+        # cocyclebasis / lift fields (R1^(-1) on a 680x680 matrix).
+        # Use the fast partial UCT that omits these — they aren't
+        # needed by RestrictionMatrixViaHAP.
+        fast := true;
     else
         max_n := 5;
+        # At m <= 5 we keep the full UCT so consumers like
+        # transgression_kernel.g (which uses cocyclebasis) still
+        # work when sharing the setup.
+        fast := false;
     fi;
     det := LHSResolutionEPlusDetailed(m, max_n);
-    setup := _DETF_SetupG_FromResolution(det.G, det.R_E);
+    setup := _DETF_SetupG_FromResolution(det.G, det.R_E, fast);
     _DETF_LHS_SETUP_G_CACHE.(key) := setup;
     return setup;
 end;;

@@ -320,17 +320,33 @@ if run_m5_lhs then
     t5_lhs_wall := Runtime() - t5_lhs_start;;
     Print("  m=5 LHS wall: ", t5_lhs_wall, " ms\n");
     Print("  m=5 LHS chosen sorted = ", r5_lhs.ea_indices_chosen_sorted, "\n");
+    Print("  m=5 LHS chosen greedy = ", r5_lhs.ea_indices_chosen, "\n");
     Print("  m=5 LHS ea_count = ", r5_lhs.ea_count, "\n");
     Print("  m=5 LHS final_ker = ", r5_lhs.final_ker, "\n");
     Print("  m=5 LHS locally_tight = ", r5_lhs.locally_tight, "\n");
+    Print("  m=5 LHS drop_one_kers = ", r5_lhs.drop_one_kers, "\n");
     AssertOrLog("m=5 LHS final_ker = 1", r5_lhs.final_ker = 1);
     AssertOrLog("m=5 LHS locally_tight = true",
                 r5_lhs.locally_tight = true);
     AssertOrLog("m=5 LHS ea_count in plausible range [3, 30]",
                 r5_lhs.ea_count >= 3 and r5_lhs.ea_count <= 30);
+    # Bit-for-bit anchor: m=5 LHS should reproduce PR #320's 9-EA
+    # witness [33, 48, 54, 57, 70, 76, 88, 89, 109]. This holds in
+    # practice (verified at m=2 and m=3 in T7 above) because the
+    # `_DETF_AllMaxEAsIn` enumeration order is determined by the
+    # PC presentation of EPlusGroup(5), which is identical between
+    # HAP-direct and LHS paths.
+    AssertOrLog("m=5 LHS ea_count = 9 (PR #320 anchor)",
+                r5_lhs.ea_count = 9);
+    AssertOrLog("m=5 LHS sorted chosen = [33, 48, 54, 57, 70, 76, 88, 89, 109]",
+                r5_lhs.ea_indices_chosen_sorted
+                    = [33, 48, 54, 57, 70, 76, 88, 89, 109]);
     if run_m5 then
         AssertOrLog("m=5 LHS ea_count = HAP ea_count",
                     r5_lhs.ea_count = r5.ea_count);
+        AssertOrLog("m=5 LHS sorted chosen = HAP sorted chosen",
+                    r5_lhs.ea_indices_chosen_sorted
+                        = r5.ea_indices_chosen_sorted);
     fi;
 else
     Print("\n--- T7b: m=5 LHS cross-validation SKIPPED (set ",
