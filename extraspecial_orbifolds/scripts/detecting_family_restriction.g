@@ -307,6 +307,362 @@ _DETF_BinaryDigit := function(n, k)
     return QuoInt(n, 2^k) mod 2;
 end;;
 
+# --- Witt-decomposition Lagrangian enumerator (issue #299) ---
+#
+# Returns the FULL list of m-dim type-+ Lagrangians in (F_2^{2m}, Q)
+# where Q(v) = sum_i v_{2i-1} v_{2i} is the standard type-+ quadratic
+# form. Each Lagrangian is returned as a list of m row vectors in
+# F_2^{2m}, forming a basis of the subspace in REDUCED ROW ECHELON form
+# (RREF): pivot columns strictly increasing, leading-1 at the pivot,
+# zeros at other pivots (in the same row) and below the pivot (in the
+# pivot column).
+#
+# Math: at m, N_+(m, 2) = prod_{i=0..m-1}(2^i + 1) Lagrangians of type +.
+# Closed-form counts: 2, 6, 30, 270, 4590, 151470, 9845550 at m = 1..7.
+#
+# Algorithm: pivot-set-driven enumeration. Each RREF basis is uniquely
+# determined by a sorted m-subset of pivot columns P = (p_1 < ... < p_m)
+# of [1..2m] together with the free entries c[k][j] for j > p_k, j not
+# in P. The constraints that make the resulting span a type-+ Lagrangian
+# are:
+#   (i)  B-orthogonality B(w_k, w_l) = 0 for k != l -- LINEAR in c[k][.]
+#        given c[l][.] for l < k.
+#   (ii) Q-isotropy Q(w_k) = 0 for each row k -- QUADRATIC in c[k][.]
+#        (row-local).
+#
+# We enumerate by recursing row-by-row: at row k, solve the linear
+# B-orth constraints (giving an affine F_2-subspace of free-var
+# assignments), then loop over that subspace and check Q-isotropy. Each
+# successful row extends the recursion to row k+1; at row m+1 we yield
+# the completed (w_1, ..., w_m) basis.
+#
+# Helpers below operate on integer-entry vectors and matrices reduced
+# mod 2; the qforms_f2 helpers F2Mod / F2RREF / F2RightNullspace are
+# reused for the linear-algebra primitive operations.
+
+# Polarisation B(u, v) = sum_i (u_{2i-1} v_{2i} + u_{2i} v_{2i-1}) mod 2.
+_DETF_BForm := function(u, v)
+    local n, s, i;
+    n := Length(u) / 2;
+    s := 0;
+    for i in [1..n] do
+        s := s + u[2*i - 1] * v[2*i] + u[2*i] * v[2*i - 1];
+    od;
+    return s mod 2;
+end;;
+
+# Q(v) = sum_i v_{2i-1} v_{2i} mod 2.
+_DETF_QForm := function(v)
+    local n, s, i;
+    n := Length(v) / 2;
+    s := 0;
+    for i in [1..n] do
+        s := s + v[2*i - 1] * v[2*i];
+    od;
+    return s mod 2;
+end;;
+
+# Solve A * x = b over F_2 where A is a list of rows (each of length nVars).
+# Returns rec(particular := x0, nullspace := basis_of_null) or fail if
+# inconsistent. If A is empty, returns (zero vector, full standard basis).
+_DETF_F2LinSolve := function(A, b, nVars)
+    local m, augm, i, j, r, c, pivCols, freeCols, x0, basis, v, p, e;
+    m := Length(A);
+    if m = 0 then
+        # No constraints: any x works; particular = 0.
+        # Build standard basis of F_2^nVars manually (no dependency).
+        basis := [];
+        for i in [1..nVars] do
+            e := List([1..nVars], j -> 0);
+            e[i] := 1;
+            Add(basis, e);
+        od;
+        return rec(particular := List([1..nVars], i -> 0),
+                   nullspace := basis);
+    fi;
+    # Build augmented matrix [A | b] of size m x (nVars + 1), then RREF.
+    augm := List([1..m], i -> Concatenation(List(A[i], x -> x mod 2),
+                                            [b[i] mod 2]));
+    r := 1;
+    pivCols := [];
+    for c in [1..nVars] do
+        if r > m then break; fi;
+        j := r;
+        while j <= m and augm[j][c] = 0 do j := j + 1; od;
+        if j > m then continue; fi;
+        if j <> r then augm{[r, j]} := augm{[j, r]}; fi;
+        for i in [1..m] do
+            if i <> r and augm[i][c] = 1 then
+                augm[i] := List([1..nVars + 1],
+                                k -> (augm[i][k] + augm[r][k]) mod 2);
+            fi;
+        od;
+        Add(pivCols, c);
+        r := r + 1;
+    od;
+    # Inconsistent iff any row has all-zero left part but RHS = 1.
+    for i in [r..m] do
+        if augm[i][nVars + 1] <> 0 then
+            return fail;
+        fi;
+    od;
+    # Build particular solution: pivot var = augm[i][nVars+1], free = 0.
+    x0 := List([1..nVars], i -> 0);
+    for i in [1..Length(pivCols)] do
+        x0[pivCols[i]] := augm[i][nVars + 1];
+    od;
+    # Build nullspace basis.
+    freeCols := Filtered([1..nVars], c -> not (c in pivCols));
+    basis := [];
+    for c in freeCols do
+        v := List([1..nVars], i -> 0);
+        v[c] := 1;
+        for i in [1..Length(pivCols)] do
+            p := pivCols[i];
+            v[p] := augm[i][c];
+        od;
+        Add(basis, v);
+    od;
+    return rec(particular := x0, nullspace := basis);
+end;;
+
+# Build row w_k for a given pivot set P and free-var assignment c_vec.
+# c_vec is a list of length |F_k| giving the values c[k][F_k[j]] for j = 1..|F_k|.
+# P is sorted, k is the row index (1-based), n = 2m.
+_DETF_BuildRow := function(k, P, F_k, c_vec, n)
+    local w, j;
+    w := List([1..n], i -> 0);
+    w[P[k]] := 1;
+    for j in [1..Length(F_k)] do
+        w[F_k[j]] := c_vec[j];
+    od;
+    return w;
+end;;
+
+# Free-variable positions for row k under pivot set P: positions > P[k]
+# that are NOT in P. Returns a sorted list of column indices.
+_DETF_FreeCols := function(k, P, n)
+    return Filtered([(P[k] + 1)..n], j -> not (j in P));
+end;;
+
+# Build the B-orthogonality LINEAR constraints on c[k][.] given the
+# already-chosen earlier rows W_prev (each a 1xn vector).
+# Returns (A, b) where A is a list of rows of length |F_k| and b is
+# the RHS such that A * c[k][.]^T = b enforces B(w_k, w_l) = 0 for all l.
+#
+# OPTIMIZATION (issue #299): for the standard symplectic form
+# B(u, v) = sum_i (u_{2i-1} v_{2i} + u_{2i} v_{2i-1}),
+# the bilinear pairing of e_j against w_l is just w_l[partner(j)] where
+# partner(j) = j + 1 if j is odd, j - 1 if j is even. So we avoid
+# materializing e_j entirely.
+_DETF_BorthConstraints := function(k, P, F_k, W_prev, n)
+    local rows, rhs, l, w_l, a_row, const, j, jj, partner_jj,
+          pk, partner_pk;
+    rows := [];
+    rhs := [];
+    pk := P[k];
+    # partner_pk: column index "j" such that B(e_pk, e_j) = 1.
+    # For pk odd: partner = pk + 1; for pk even: partner = pk - 1.
+    if pk mod 2 = 1 then partner_pk := pk + 1;
+    else partner_pk := pk - 1; fi;
+    for l in [1..Length(W_prev)] do
+        w_l := W_prev[l];
+        a_row := [];
+        for j in [1..Length(F_k)] do
+            jj := F_k[j];
+            if jj mod 2 = 1 then partner_jj := jj + 1;
+            else partner_jj := jj - 1; fi;
+            # B(e_jj, w_l) = w_l[partner_jj].
+            Add(a_row, w_l[partner_jj]);
+        od;
+        # RHS = B(e_pk, w_l) = w_l[partner_pk].
+        const := w_l[partner_pk];
+        Add(rows, a_row);
+        Add(rhs, const);
+    od;
+    return rec(A := rows, b := rhs);
+end;;
+
+# Enumerate type-+ Lagrangians of F_2^{2m} via the pivot-set + RREF
+# algorithm. Returns a list of m-row matrices, each row a length-2m
+# 0/1 integer vector.
+#
+# Memory-friendly variant: writes into `acc` (a record with .list field).
+# Caller can swap to streaming if needed.
+_DETF_LagrangiansViaWitt_inner := function(P, m, n, k, W_prev, acc)
+    local F_k, borth, sol, null_dim, idx, c_part, c_free, c_vec, w_k,
+          q_check, W_new, t;
+    if k > m then
+        Add(acc.list, ShallowCopy(W_prev));
+        return;
+    fi;
+    F_k := _DETF_FreeCols(k, P, n);
+    borth := _DETF_BorthConstraints(k, P, F_k, W_prev, n);
+    sol := _DETF_F2LinSolve(borth.A, borth.b, Length(F_k));
+    if sol = fail then return; fi;
+    c_part := sol.particular;
+    null_dim := Length(sol.nullspace);
+    # Enumerate the 2^null_dim affine solutions.
+    for idx in [0..(2^null_dim - 1)] do
+        c_vec := ShallowCopy(c_part);
+        for t in [1..null_dim] do
+            if QuoInt(idx, 2^(t - 1)) mod 2 = 1 then
+                c_vec := List([1..Length(c_vec)],
+                              j -> (c_vec[j] + sol.nullspace[t][j]) mod 2);
+            fi;
+        od;
+        w_k := _DETF_BuildRow(k, P, F_k, c_vec, n);
+        q_check := _DETF_QForm(w_k);
+        if q_check = 0 then
+            W_new := Concatenation(W_prev, [w_k]);
+            _DETF_LagrangiansViaWitt_inner(P, m, n, k + 1, W_new, acc);
+        fi;
+    od;
+end;;
+
+# Public: enumerate type-+ Lagrangians of F_2^{2m} via Witt decomposition
+# (pivot-set RREF enumeration). Returns a list of m-row matrices.
+#
+# Cost: scales as N_+(m, 2) Lagrangians produced; per-Lagrangian work is
+# O(m^2 * |F_k|) for the per-row linear-algebra. At m=7, expected wall is
+# a few minutes (N_+(7, 2) = 9,845,550) on a 2026 laptop.
+#
+# Returns the full list; for m=7 the list occupies on the order of
+# 9.8M * m * 2m * 4 bytes ~= 5 GB if stored as plain GAP lists (each F_2
+# entry as a GAP integer). For more compact storage, callers can map to
+# group elements eagerly (see _DETF_AllMaxEAsIn for that path).
+_DETF_LagrangiansViaWitt := function(m)
+    local n, P_iter, acc, P_list;
+    n := 2 * m;
+    acc := rec(list := []);
+    # Enumerate all size-m subsets P of [1..n].
+    for P_list in Combinations([1..n], m) do
+        _DETF_LagrangiansViaWitt_inner(P_list, m, n, 1, [], acc);
+    od;
+    return acc.list;
+end;;
+
+# Streaming inner: recursion that calls consumer on each completed
+# Lagrangian. Closes over m, n, consumer via the outer call. Mutual
+# recursion through a closure-style global.
+_DETF_LagrangiansViaWitt_streaming_inner := function(P, m, n, k, W_prev,
+                                                     consumer, count_rec)
+    local F_k, borth, sol, null_dim, idx, c_part, c_vec, w_k,
+          q_check, t;
+    if k > m then
+        consumer(W_prev);
+        count_rec.n := count_rec.n + 1;
+        return;
+    fi;
+    F_k := _DETF_FreeCols(k, P, n);
+    borth := _DETF_BorthConstraints(k, P, F_k, W_prev, n);
+    sol := _DETF_F2LinSolve(borth.A, borth.b, Length(F_k));
+    if sol = fail then return; fi;
+    c_part := sol.particular;
+    null_dim := Length(sol.nullspace);
+    for idx in [0..(2^null_dim - 1)] do
+        c_vec := ShallowCopy(c_part);
+        for t in [1..null_dim] do
+            if QuoInt(idx, 2^(t - 1)) mod 2 = 1 then
+                c_vec := List([1..Length(c_vec)],
+                              j -> (c_vec[j] + sol.nullspace[t][j])
+                                    mod 2);
+            fi;
+        od;
+        w_k := _DETF_BuildRow(k, P, F_k, c_vec, n);
+        q_check := _DETF_QForm(w_k);
+        if q_check = 0 then
+            _DETF_LagrangiansViaWitt_streaming_inner(P, m, n, k + 1,
+                Concatenation(W_prev, [w_k]),
+                consumer, count_rec);
+        fi;
+    od;
+end;;
+
+# Streaming variant: applies `consumer(L)` to each Lagrangian L (an
+# m-row 0/1 matrix) as it is produced, without accumulating the full
+# list. Returns the count of Lagrangians produced.
+#
+# Use this when the caller can map each Lagrangian to a downstream
+# representation (e.g. a GAP subgroup) and discard the F_2 basis
+# immediately. Avoids the ~5 GB peak of _DETF_LagrangiansViaWitt at m=7.
+_DETF_LagrangiansViaWitt_streaming := function(m, consumer)
+    local n, P_list, count_rec;
+    n := 2 * m;
+    count_rec := rec(n := 0);
+    for P_list in Combinations([1..n], m) do
+        _DETF_LagrangiansViaWitt_streaming_inner(P_list, m, n, 1, [],
+                                                  consumer, count_rec);
+    od;
+    return count_rec.n;
+end;;
+
+# Map a Lagrangian basis L (m row vectors in F_2^{2m}) to a GAP subgroup
+# of G via the symplectic generator convention gens_G[1..2m]:
+# w_k = (w_k[1], ..., w_k[2m]) -> prod_i gens_G[i]^{w_k[i]}.
+# The subgroup is generated by z (centre) together with the m mapped
+# basis elements; rank m+1 elementary abelian.
+_DETF_LagrangianToSubgroup := function(L, gens_G, z, G)
+    local m, n, basis, k, prod, i;
+    m := Length(L);
+    n := 2 * m;
+    basis := [z];
+    for k in [1..m] do
+        prod := One(G);
+        for i in [1..n] do
+            if L[k][i] = 1 then
+                prod := prod * gens_G[i];
+            fi;
+        od;
+        Add(basis, prod);
+    od;
+    return Subgroup(G, basis);
+end;;
+
+# Map a Lagrangian basis L (m row vectors in F_2^{2m}) to a BASIS-TUPLE
+# of group elements: [z, g_1, ..., g_m] where g_k = prod_i gens_G[i]^{w_k[i]}.
+# Caller may wrap with `Subgroup(G, tuple)` if needed; storing tuples is
+# ~5x more memory-efficient than Subgroup objects at scale (issue #299,
+# m=7 budget).
+#
+# Optional `elem_cache` (a GAP record): if provided, used to memoize the
+# group-element value of each F_2^{2m} vector (key = integer encoding of
+# the bit vector). At m=7 with 9.8M Lagrangians, there are at most 2^14 -
+# 1 = 16383 distinct nonzero F_2^14 row vectors used as basis elements,
+# so caching dramatically reduces unique PC element churn.
+_DETF_LagrangianToBasisTuple := function(L, gens_G, z, G, elem_cache,
+                                          powers)
+    local m, n, basis, k, prod, i, w_k_int;
+    m := Length(L);
+    n := 2 * m;
+    basis := [z];
+    for k in [1..m] do
+        # Compute integer encoding of L[k] for cache key. Uses
+        # precomputed powers[i] = 2^(i-1) to avoid repeated 2^i evals.
+        w_k_int := 0;
+        for i in [1..n] do
+            if L[k][i] = 1 then
+                w_k_int := w_k_int + powers[i];
+            fi;
+        od;
+        if elem_cache <> fail and IsBound(elem_cache.(w_k_int)) then
+            Add(basis, elem_cache.(w_k_int));
+        else
+            prod := One(G);
+            for i in [1..n] do
+                if L[k][i] = 1 then
+                    prod := prod * gens_G[i];
+                fi;
+            od;
+            if elem_cache <> fail then
+                elem_cache.(w_k_int) := prod;
+            fi;
+            Add(basis, prod);
+        fi;
+    od;
+    return basis;
+end;;
+
 # Enumerate ALL conjugacy class representatives of maximal elementary
 # abelians (rank m+1) inside G. Per Quillen 1971, the family of these
 # conj-class reps is what detects H^*(G; F_2) mod nilpotents in low
@@ -342,7 +698,7 @@ end;;
 #     introduce false NON-trivials, never false trivials) but
 #     theoretically incomplete. The full Quillen 5.10 detecting
 #     family at m has N_+(m, 2) = prod_{i=0..m-1}(2^i + 1) maximal
-#     elementary abelians (= 6, 30, 270, 4590, 75582, 9845550 at
+#     elementary abelians (= 6, 30, 270, 4590, 151470, 9845550 at
 #     m = 1..7). One-per-Aut-orbit is NOT sufficient (refuted at
 #     m=2). The 112 chosen here are 32 axis-aligned + 80 diagonal
 #     pair-swap; "triple-diagonal" Lagrangians involving three pairs
@@ -353,11 +709,83 @@ end;;
 #     Witt-decomposition systematic enumeration (writeup §7,
 #     issue #290). See `docs/superpowers/research/2026-05-19-d-van-
 #     detecting-family-correctness.md` for the full reconciliation.
+#
+# Dispatch by m (issue #287 m=5 fix, issue #299 m=7 Witt extension):
+#
+#   * m <= 3: full ConjugacyClassesSubgroups enumeration (bit-for-bit
+#     compatibility with m=2/m=3 anchors). Returns GAP Subgroup objects.
+#   * m = 4, 5: axis-aligned + diagonal-pair-swap (112 at m=5).
+#     Empirically sufficient at m=5 (0/165 false trivials, issue #287);
+#     preserved for backward compatibility. Returns GAP Subgroup objects.
+#   * m >= 6: full Witt-decomposition systematic enumeration. Returns the
+#     complete N_+(m, 2) = prod_{i=0..m-1}(2^i + 1) type-+ Lagrangians.
+#     At m=6 this is 151470; at m=7 it is 9,845,550.
+#
+#     **API NOTE**: at m >= 6 we return a list of BASIS-TUPLES rather
+#     than GAP Subgroup objects. Each tuple has the form
+#     [z, g_1, ..., g_m] where the rank-(m+1) elementary abelian is
+#     Subgroup(G, tuple). Rationale: at m=7, storing 9.8M GAP Subgroup
+#     objects (~1.7 KB each incl. metadata) costs ~17 GB, vastly over
+#     the 4 GB issue #299 budget. Basis-tuples cost ~400 bytes each
+#     (m+1 PC element refs + list overhead), well within budget.
+#     Callers that need a GAP Subgroup should call Subgroup(G, tuple)
+#     per element. The m <= 5 path is unchanged (still returns
+#     Subgroup objects) to preserve the existing API surface.
 _DETF_AllMaxEAsIn := function(G, m)
     local expected_order, reps, candidates, H, Z_G, z, gens_G, n_pairs,
           sel_bits, sel, basis, i, ea, ea_list,
-          a, b, other_pairs, other_sel_bits, oj, idx;
+          a, b, other_pairs, other_sel_bits, oj, idx, consumer,
+          first_check_sub, elem_cache, powers;
     expected_order := 2 ^ (m + 1);
+    if m >= 6 then
+        # Full Witt-decomposition enumeration (issue #299).
+        # Returns BASIS-TUPLES (lists of m+1 group elements), not
+        # Subgroup objects: ~5x smaller memory, fits in the 4 GB
+        # budget at m=7. Callers wrap via Subgroup(G, tuple) on demand.
+        Z_G := Centre(G);
+        z := First(AsList(Z_G), x -> not IsOne(x));
+        gens_G := Filtered(GeneratorsOfGroup(G), g -> not (g in Z_G));
+        if Length(gens_G) < 2*m then
+            for H in AsList(G) do
+                if not (H in Z_G) and Length(gens_G) < 2*m then
+                    Add(gens_G, H);
+                fi;
+            od;
+        fi;
+        gens_G := gens_G{[1..2*m]};
+        ea_list := [];
+        # Group-element cache: keys are integer-encoded F_2^{2m} vectors,
+        # values are the corresponding PC elements. At m=7 there are at
+        # most 2^14 - 1 = 16383 distinct nonzero F_2^14 vectors that can
+        # appear as basis-tuple entries, so the cache caps at 16K elements.
+        # Memory saving: ~5-10x reduction in PC element churn vs creating
+        # a fresh PC element per basis position per Lagrangian.
+        elem_cache := rec();
+        # Precomputed [2^0, 2^1, ..., 2^(2m-1)] for the integer encoding
+        # in _DETF_LagrangianToBasisTuple — avoids re-evaluating 2^(i-1)
+        # per row inside the per-Lagrangian hot loop.
+        powers := List([1..2*m], i -> 2^(i - 1));
+        consumer := function(L)
+            Add(ea_list, _DETF_LagrangianToBasisTuple(L, gens_G, z, G,
+                                                       elem_cache, powers));
+        end;
+        _DETF_LagrangiansViaWitt_streaming(m, consumer);
+        if Length(ea_list) = 0 then
+            Error("_DETF_AllMaxEAsIn: Witt enumeration at m = ", m,
+                  " produced no Lagrangians. Witt enumerator bug?");
+        fi;
+        # Sanity-check the first basis-tuple (wrap, check Order +
+        # ElementaryAbelian). PC-generator convention guard.
+        first_check_sub := Subgroup(G, ea_list[1]);
+        if Order(first_check_sub) <> expected_order
+           or not IsElementaryAbelian(first_check_sub) then
+            Error("_DETF_AllMaxEAsIn: Witt enumeration at m = ", m,
+                  " produced a non-max-EA first basis-tuple ",
+                  "(order ", Order(first_check_sub), ", expected ",
+                  expected_order, "). PC-generator convention changed?");
+        fi;
+        return ea_list;
+    fi;
     if m >= 4 then
         Z_G := Centre(G);
         z := First(AsList(Z_G), x -> not IsOne(x));
