@@ -1,0 +1,8 @@
+m=5
+verdict=trivial
+trivial=true
+E_class.is_coboundary=true
+D8_class.class_idx=1
+Q8_class.class_idx=1
+spectral_data.source=krr-sparse
+wall_seconds=1909.846

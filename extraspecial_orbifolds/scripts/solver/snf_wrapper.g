@@ -150,14 +150,255 @@ _MultByElt := function(R_elts, x, w)
     return List(w, y -> [y[1], Position(R_elts, x * R_elts[y[2]])]);
 end;;
 
+# ------------------------------------------------------------------
+# A-7 perf-5c (#282): O(|w1| + |w2|) drop-in for HAP's AddFreeWords.
+#
+# HAP's AddFreeWords (wordOperations.gi:112-139) is:
+#
+#   if Length(arg[2]) < Length(arg[1]) then v := arg[1]; w := arg[2];
+#   else                                    w := arg[1]; v := arg[2]; fi;
+#   if Length(w) = 0 then return v; fi;
+#   if Length(v) = 0 then return w; fi;
+#   w2 := ShallowCopy(w);
+#   u  := ShallowCopy(w);
+#   for x in v do
+#       r := Position(w2, [-x[1], x[2]]);          # O(|w2|) linear scan over w2
+#       if r = fail then Add(u, x);
+#       else u[r] := 0; w2[r] := 0; fi;
+#   od;
+#   return Filtered(u, i -> not i = 0);
+#
+# Words are lists of [signed_cell_idx, group_elt_idx] pairs; a pair [c, g]
+# and [-c, g] cancel. The branch picks the *shorter* of the two arguments
+# as `w` (the lookup target) and the longer as `v` (iteration). Position
+# returns the *first* occurrence, so when several copies of the same
+# [c, g] exist, the pairing with [-c, g] entries from v is left-to-right
+# (smallest-index first).
+#
+# Cost: O(|v| * |w|). Since the smaller is `w`, this is O(max * min).
+#
+# perf-5b's profile on E_+(3) (perf/raw/eplus3_build_per_class_cocycle_basis
+# .txt) showed ~75 % of CPU in PosPlist, almost all of it inside this scan.
+# In _Homotopy2's accumulator pattern, AddFreeWords(ans, h_x) is called
+# repeatedly with `ans` growing; h_x is bounded but moderately sized
+# (~20-100 entries at m=3). The product |ans|*|h_x| stays sub-quadratic
+# in |ans| BUT for the dominant minus_one orbit (|C|=128, where the per-
+# class cache cost is ~45 s out of ~55 s total) the total per-class
+# (a, b)-loop work is 3 length-3 Syzygy computations, each calling
+# _Homotopy2 on a length-O(|ans_at_b|) word. Aggregated over n²=128²=16384
+# (a, b) pairs, the constant in `O(n^2 * |ans| * |h_x|)` matters.
+#
+# The fast replacement uses a queue dict keyed on (c, g) pairs to make
+# each AddFreeWords O(|v| + |w|). For inputs where one side is small the
+# improvement is small (HAP's scan is already O(big*small) — bounded by
+# the smaller side). For inputs where both sides are large (e.g. the
+# Mult(g1, S_g2g3) + S_g1_g2g3 accumulation in _Syzygy3FromParts), the
+# dict win is larger.
+#
+# Implementation notes:
+#   - Keys (c, g) are encoded as positive integers via
+#       key := (g - 1) * stride + (c + D + 1)
+#     where D bounds |c| and stride := 2*D + 1. Distinct (c, g) -> distinct
+#     keys. The "pool" is a module-level plain list indexed by these keys;
+#     IsBound/Add/Remove/Unbind on a plain list are compiled C-level
+#     operations.
+#   - The pool is reused across calls. After each call, only the keys
+#     touched in *this* call are unbound, via a `_touched` list. Reset
+#     cost is O(|w|), not O(|pool|).
+#   - Earlier attempts using NewDictionary (with a 2-list sample object)
+#     ended up dispatching to GAP's sorted-list dictionary
+#     (DictionaryBySort), which has O(log n) per op and substantial
+#     interpretive overhead. Measured: NewDictionary ~0.7x HAP (slower),
+#     positional pool ~1.6x HAP (faster), on the m=3 minus_one workload.
+#   - The pool capacity grows on demand: any AddFreeWords call that sees
+#     |c| > D or g > G_max triggers _AddFreeWordsFast_EnsureCapacity,
+#     which bumps D / G_max and resets the pool. After warm-up these
+#     bumps stop happening.
+#   - When the SMALLER side `w` has only a few entries, HAP's linear scan
+#     already costs `O(|v| * |w|)` with a tight constant, and beats the
+#     pool-build overhead. The pool path triggers only when |w| >=
+#     `_AddFreeWordsFast_MIN_SMALL` (default 24). Captured (ans, h) pairs
+#     from m=3 minus_one cache build show most calls have one side <= 5,
+#     while a long-tail minority have both sides in the hundreds; the
+#     pool targets the long-tail without paying overhead on the bulk.
+#
+# Output is bit-identical to HAP's AddFreeWords for any inputs:
+#   * Same v/w selection by length (smaller -> w).
+#   * Same cancellation rule (single [-c,g] cancels at the *earliest*
+#     [c,g] in w; then both go to 0).
+#   * Same final order: w's surviving entries in their original positions,
+#     followed by v's unmatched entries in v's order.
+#
+# (Verified by test_perf5c_addfreewords.g on 2300+ random + curated +
+#  Syzygy-derived inputs, 0 mismatches.)
+_AddFreeWordsFast_MIN_SMALL := 24;;
+
+# Positional pool: a flat plain list indexed by an encoded integer key
+# (c, g) -> ((g - 1) * stride + (c + D + 1)). `D` is the maximum cell
+# index magnitude we expect to see; `G_max` is the maximum group element
+# index. Both grow dynamically the first time we see a larger value.
+#
+# Per-call protocol: only entries for keys that appear in the call are
+# bound, and they are unbound at end-of-call. The `_touched` list tracks
+# the keys we set so reset is O(|w|) instead of O(|pool|).
+#
+# Why a positional pool beats `NewDictionary`/record approaches: it
+# dispatches to GAP's compiled IsBound/[]/Unbind on a plain integer-
+# indexed list, which is just C-level array access. `NewDictionary` for
+# 2-list keys uses a *sorted* dictionary internally (DictionaryBySort)
+# with O(log n) per op and substantial per-op dispatch overhead.
+# Empirical: positional ~1.6x faster than HAP's linear scan on the m=3
+# minus_one workload, while NewDictionary is ~0.7x (i.e. slower).
+_AddFreeWordsFast_pool := [];;
+_AddFreeWordsFast_touched := EmptyPlist(256);;
+_AddFreeWordsFast_D := 64;;       # initial guess; grows if needed
+_AddFreeWordsFast_G_max := 64;;   # initial guess; grows if needed
+
+# Recompute the stride from D. Capacity = (2*D + 1) * G_max.
+_AddFreeWordsFast_stride := 2 * _AddFreeWordsFast_D + 1;;
+
+# Ensure pool capacity covers (c, g) with |c| <= D, g <= G_max.
+_AddFreeWordsFast_EnsureCapacity := function(needed_D, needed_G)
+    if needed_D > _AddFreeWordsFast_D or needed_G > _AddFreeWordsFast_G_max then
+        if needed_D > _AddFreeWordsFast_D then
+            _AddFreeWordsFast_D := needed_D;
+        fi;
+        if needed_G > _AddFreeWordsFast_G_max then
+            _AddFreeWordsFast_G_max := needed_G;
+        fi;
+        _AddFreeWordsFast_stride := 2 * _AddFreeWordsFast_D + 1;
+        # On capacity grow, simply reset the pool: any positions stored
+        # for old keys are stale because the stride changed.
+        _AddFreeWordsFast_pool := [];
+        _AddFreeWordsFast_touched := EmptyPlist(256);
+    fi;
+end;;
+
+_AddFreeWordsFast := function(w1, w2_arg)
+    local v, w, w_len, v_len, u, pool, touched, stride, D, max_g, max_c,
+          i, x, c, g, key, entry, neg_c;
+
+    # Branch picks shorter as `w` (matches HAP exactly so output order
+    # is preserved).
+    if Length(w2_arg) < Length(w1) then
+        v := w1; w := w2_arg;
+    else
+        w := w1; v := w2_arg;
+    fi;
+
+    w_len := Length(w);
+    v_len := Length(v);
+    if w_len = 0 then return ShallowCopy(v); fi;
+    if v_len = 0 then return ShallowCopy(w); fi;
+
+    # Small-input shortcut: when the smaller side `w` has few entries,
+    # HAP's `O(|v| * |w|)` scan is already cheap with a tight constant
+    # (PosPlist is a tight C loop). The dict path's pool build + lookup
+    # overhead exceeds the savings here. Empirically measured: positional
+    # pool beats scan once |w| >= ~24 entries.
+    if w_len < _AddFreeWordsFast_MIN_SMALL then
+        return AddFreeWords(w1, w2_arg);
+    fi;
+
+    # Snapshot pool state. We may need to grow capacity inside the build
+    # loop if any (c, g) overflows the current bounds; in that case we
+    # bail and fall through to HAP for this call (since growing rewrites
+    # `stride` and would invalidate our partially-built keys).
+    pool := _AddFreeWordsFast_pool;
+    touched := _AddFreeWordsFast_touched;
+    stride := _AddFreeWordsFast_stride;
+    D := _AddFreeWordsFast_D;
+
+    # Build u as a mutable copy of w; entries get zeroed on cancellation.
+    u := ShallowCopy(w);
+
+    # Build pos_by_key (positional pool):
+    #   key = (g - 1) * stride + (c + D + 1)
+    # where c is the SIGNED cell index. Distinct (c, g) -> distinct keys,
+    # including sign discrimination. Pool[key] holds the ascending list
+    # of positions in w. `touched` records all keys we set, for cleanup.
+    #
+    # Capacity check is fused into the loop: if any entry exceeds the
+    # current bounds, we abort the pool build, reset the touched keys,
+    # grow the pool, and restart by delegating to HAP for this call (the
+    # next call will use the grown pool).
+    max_c := 0; max_g := 0;
+    for i in [1..w_len] do
+        c := w[i][1];
+        g := w[i][2];
+        if AbsInt(c) > max_c then max_c := AbsInt(c); fi;
+        if g > max_g then max_g := g; fi;
+        if max_c > D or max_g > _AddFreeWordsFast_G_max then
+            # Grow and bail. Reset what we set so far.
+            for key in touched do Unbind(pool[key]); od;
+            _AddFreeWordsFast_touched := EmptyPlist(256);
+            _AddFreeWordsFast_EnsureCapacity(max_c, max_g);
+            return AddFreeWords(w1, w2_arg);
+        fi;
+        key := (g - 1) * stride + (c + D + 1);
+        if IsBound(pool[key]) then
+            Add(pool[key], i);
+        else
+            pool[key] := [i];
+            Add(touched, key);
+        fi;
+    od;
+
+    # Lookup. For each x = [c, g] in v, look up key for [-c, g].
+    # v entries that overflow the current pool bounds (|neg_c| > D or
+    # g > G_max) can't match anything in pool (w's keys are bounded by
+    # those), so they fall through to `Add(u, x)`. The grow-and-bail
+    # path in the build loop above ensures SUBSEQUENT calls get a larger
+    # pool. We don't grow during v iteration because growing invalidates
+    # `stride` and would require recomputing pool keys.
+    #
+    # Pool invariant: each pool[key] is a non-empty list of positions in w.
+    # On pop, we Remove the head; if the list becomes empty we Unbind it.
+    # This keeps the lookup check to a single IsBound (avoiding a separate
+    # Length(pool[key]) > 0 check).
+    for x in v do
+        c := x[1];
+        g := x[2];
+        neg_c := -c;
+        if AbsInt(neg_c) <= D and g <= _AddFreeWordsFast_G_max then
+            key := (g - 1) * stride + (neg_c + D + 1);
+            if IsBound(pool[key]) then
+                entry := pool[key];
+                u[entry[1]] := 0;
+                if Length(entry) = 1 then
+                    Unbind(pool[key]);
+                else
+                    Remove(entry, 1);
+                fi;
+                continue;
+            fi;
+        fi;
+        Add(u, x);
+    od;
+
+    # Reset touched keys for next call. O(|w|), not O(|pool|).
+    for i in [1..Length(touched)] do
+        Unbind(pool[touched[i]]);
+    od;
+    _AddFreeWordsFast_touched := EmptyPlist(256);
+
+    return Filtered(u, i -> not i = 0);
+end;;
+
 _Homotopy2 := function(R, w)
     # Word-level Homotopy(2, w): for each cell x in w, look up
     # R!.homotopy(2, x) (which is internally memoised by HAP's
     # Contraction cache) and AddFreeWords accumulate the result.
+    #
+    # A-7 perf-5c (#282): replaced AddFreeWords with _AddFreeWordsFast,
+    # which uses an O(|w1|+|w2|) dictionary lookup instead of HAP's
+    # O(|w1|*|w2|) Position scan. The accumulator `ans` grows as we sum
+    # |w| homotopy contributions; HAP's linear scan made the per-call cost
+    # quadratic in |ans|. The dict path makes it linear.
     local ans, x;
     ans := [];
     for x in w do
-        ans := AddFreeWords(ans, R!.homotopy(2, x));
+        ans := _AddFreeWordsFast(ans, R!.homotopy(2, x));
     od;
     return ans;
 end;;
@@ -177,9 +418,9 @@ _Syzygy3FromParts := function(R, g1, S_g2g3, S_g1_g2g3, S_g1g2_g3, S_g1_g2)
     #   Syz := AddFreeWords(Syz, NegateWord(Syz([g1, g2])));
     #   return Homotopy(2, Syz);
     Syz := _MultByElt(R_elts, g1, S_g2g3);
-    Syz := AddFreeWords(Syz, S_g1_g2g3);
-    Syz := AddFreeWords(Syz, NegateWord(S_g1g2_g3));
-    Syz := AddFreeWords(Syz, NegateWord(S_g1_g2));
+    Syz := _AddFreeWordsFast(Syz, S_g1_g2g3);
+    Syz := _AddFreeWordsFast(Syz, NegateWord(S_g1g2_g3));
+    Syz := _AddFreeWordsFast(Syz, NegateWord(S_g1_g2));
     return _Homotopy2(R, Syz);
 end;;
 
@@ -233,25 +474,25 @@ _Syzygy3CombinedWord := function(R, gRep, a, S_gRep_a, S_a_gRep, S_a_b,
     # W1 (Triple #1 = Syz([gRep, a, b])):
     #   Mult(gRep, S_a_b) + S_gRep_ab - S_gRep_a_b - S_gRep_a
     W1 := _MultByElt(R_elts, gRep, S_a_b);
-    W1 := AddFreeWords(W1, S_gRep_ab);
-    W1 := AddFreeWords(W1, NegateWord(S_gRep_a_b));
-    W1 := AddFreeWords(W1, NegateWord(S_gRep_a));
+    W1 := _AddFreeWordsFast(W1, S_gRep_ab);
+    W1 := _AddFreeWordsFast(W1, NegateWord(S_gRep_a_b));
+    W1 := _AddFreeWordsFast(W1, NegateWord(S_gRep_a));
     # W2 (Triple #2 = Syz([a, gRep, b])):
     #   Mult(a, S_gRep_b) + S_a_gRep_b - S_a_gRep_b_2 - S_a_gRep
     W2 := _MultByElt(R_elts, a, S_gRep_b);
-    W2 := AddFreeWords(W2, S_a_gRep_b);
-    W2 := AddFreeWords(W2, NegateWord(S_a_gRep_b_2));
-    W2 := AddFreeWords(W2, NegateWord(S_a_gRep));
+    W2 := _AddFreeWordsFast(W2, S_a_gRep_b);
+    W2 := _AddFreeWordsFast(W2, NegateWord(S_a_gRep_b_2));
+    W2 := _AddFreeWordsFast(W2, NegateWord(S_a_gRep));
     # W3 (Triple #3 = Syz([a, b, gRep])):
     #   Mult(a, S_b_gRep) + S_a_b_gRep - S_ab_gRep - S_a_b
     W3 := _MultByElt(R_elts, a, S_b_gRep);
-    W3 := AddFreeWords(W3, S_a_b_gRep);
-    W3 := AddFreeWords(W3, NegateWord(S_ab_gRep));
-    W3 := AddFreeWords(W3, NegateWord(S_a_b));
+    W3 := _AddFreeWordsFast(W3, S_a_b_gRep);
+    W3 := _AddFreeWordsFast(W3, NegateWord(S_ab_gRep));
+    W3 := _AddFreeWordsFast(W3, NegateWord(S_a_b));
     # W := W1 - W2 + W3
     W := W1;
-    W := AddFreeWords(W, NegateWord(W2));
-    W := AddFreeWords(W, W3);
+    W := _AddFreeWordsFast(W, NegateWord(W2));
+    W := _AddFreeWordsFast(W, W3);
     return _Homotopy2(R, W);
 end;;
 
