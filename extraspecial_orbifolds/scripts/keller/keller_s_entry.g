@@ -57,7 +57,48 @@ if not IsBoundGlobal("SKeller") then
     fi;
 fi;
 
-KellerSEntry := function(m, omega_vec, i, j)
+KellerSEntry := function(arg)
+    local m, omega_vec, i, j, opts, lattice_source, mode_args;
+    if Length(arg) < 4 then
+        Error("KellerSEntry: usage KellerSEntry(m, omega_vec, i, j [, opts]).");
+    fi;
+    m := arg[1];
+    omega_vec := arg[2];
+    i := arg[3];
+    j := arg[4];
+    opts := fail;
+    if Length(arg) >= 5 then
+        opts := arg[5];
+    fi;
+    # K-4a-T4b (#188): if the caller requests `lattice_source := true`
+    # (via opts), route through the KRR lattice intertwiner builder
+    # (`SKellerLattice`) instead of the untwisted-baseline `SKeller`.
+    # At omega = 0 the two are numerically equivalent (K-3 anchor); the
+    # lattice path becomes meaningful when V-1 supplies a non-trivial
+    # omega-derived ε.
+    lattice_source := false;
+    if opts <> fail and IsRecord(opts) and IsBound(opts.lattice_source) then
+        lattice_source := opts.lattice_source;
+    fi;
+    if lattice_source then
+        if not IsBoundGlobal("SKellerLattice") then
+            Error("KellerSEntry: opts.lattice_source = true, but ",
+                  "`SKellerLattice` is not bound. Read(\"skeller_adapter.g\") ",
+                  "(which now bundles SKellerLattice for K-4a-T4b) and ",
+                  "Read(\"build_krr_intertwiner_data.g\") first.");
+        fi;
+        mode_args := rec();
+        if IsBound(opts.spectral_source) then
+            mode_args.spectral_source := opts.spectral_source;
+        fi;
+        if not KellerTwistIsTrivial(m, omega_vec) then
+            # Non-trivial omega: thread omega_vec into the lattice builder
+            # so SKellerLattice can pick up the V-1 epsilon (if loaded).
+            mode_args.omega_vec := omega_vec;
+        fi;
+        return SKellerLattice(m, i, j, mode_args);
+    fi;
+    # Default (untwisted-baseline) path.
     if KellerTwistIsTrivial(m, omega_vec) then
         # Trivial twist: S = S^0. Backend: SKeller at the same indices
         # (K-3 has confirmed this equals the closed-form S^0 entry).
@@ -65,8 +106,9 @@ KellerSEntry := function(m, omega_vec, i, j)
         # without changing the API.
         return SKeller(m, i, j);
     fi;
-    # Non-trivial twist: K-2 SKeller adapter.
+    # Non-trivial twist: K-2 SKeller adapter (legacy path, untwisted-equivalent
+    # at present; V-1's lattice ε requires the lattice_source = true branch).
     return SKeller(m, i, j);
 end;;
 
-Print("Loaded keller/keller_s_entry.g (D-VAN-6).\n");
+Print("Loaded keller/keller_s_entry.g (D-VAN-6, K-4a-T4b ready).\n");

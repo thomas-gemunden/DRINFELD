@@ -195,6 +195,123 @@ end;;
 
 
 # ============================================================
+# K-4a-T4b (#188): SKeller with KRR lattice intertwiner data.
+# ============================================================
+#
+# `SKellerLattice(m, i, j [, opts])` is the lattice-sourced variant of
+# `SKeller(m, i, j)`. It dispatches through `BuildKRRIntertwinerData(m,
+# G, opts)` (the K-4a-T4b bridge) instead of
+# `BuildIntertwinerDataUntwistedLazy(G)`.
+#
+# At omega = 0 (the K-4 / KRR-CT test case) both adapters agree
+# numerically — that is the K-3 acceptance test (#40, verified by
+# `test_build_krr_intertwiner_data.g` Test 1 byte-for-byte). The point
+# of `SKellerLattice` is the structural distinction: the intertwiner
+# record now declares lattice provenance via `.source = "krr-lattice"`,
+# and accepts an `omega_vec` field to drive the omega ≠ 0 codepath
+# (when V-1 / #14 is wired through). This is the wiring step required
+# by the issue body of #188.
+#
+# Cache key: "lattice_m<m>" (distinct from `m<m>` to avoid clobbering
+# the untwisted-baseline cache). Caching policy: per-m, with a separate
+# entry per requested `opts.spectral_source` (so different modes do
+# not stomp on each other). The `omega_vec` option is NOT cached
+# (each call rebuilds the intertwiner_data record for a non-zero
+# omega) — for omega = 0 the result is independent of omega_vec.
+SKellerLatticeRebuildCache := function(arg)
+    local m, opts, effective_opts, t0, Gbuilt, idata, entry, key,
+          source_label, fld;
+    m := arg[1];
+    opts := fail;
+    if Length(arg) >= 2 then
+        opts := arg[2];
+    fi;
+    if not IsBoundGlobal("BuildKRRIntertwinerData") then
+        Error("SKellerLatticeRebuildCache: BuildKRRIntertwinerData is not ",
+              "bound. Read(\"build_krr_intertwiner_data.g\") first.");
+    fi;
+    t0 := Runtime();
+    Gbuilt := SKellerBuildEmAsPcOrPerm(m);
+    # Default to lazy idx at m >= 7 (eager is intractable). The caller
+    # can override via opts.lazy.
+    effective_opts := rec();
+    if m >= 7 then
+        effective_opts.lazy := true;
+    fi;
+    if opts <> fail then
+        for fld in RecNames(opts) do
+            effective_opts.(fld) := opts.(fld);
+        od;
+    fi;
+    idata := BuildKRRIntertwinerData(m, Gbuilt.group, effective_opts);
+    if IsBound(effective_opts.spectral_source) then
+        source_label := effective_opts.spectral_source;
+    else
+        source_label := "default";
+    fi;
+    entry := rec(
+        group := Gbuilt.group,
+        matrix := Gbuilt.matrix,
+        data := idata,
+        rank := idata.idx.rank,
+        built_at := Runtime() - t0,
+        source := idata.source,
+        source_detail := idata.source_detail
+    );
+    key := Concatenation("lattice_m", String(m), "_", source_label);
+    SKellerCache.(key) := entry;
+    return entry;
+end;;
+
+SKellerLatticeGetCache := function(arg)
+    local m, opts, source_label, key;
+    m := arg[1];
+    opts := fail;
+    source_label := "default";
+    if Length(arg) >= 2 then
+        opts := arg[2];
+        if IsRecord(opts) and IsBound(opts.spectral_source) then
+            source_label := opts.spectral_source;
+        fi;
+    fi;
+    key := Concatenation("lattice_m", String(m), "_", source_label);
+    if not IsBound(SKellerCache.(key)) then
+        return SKellerLatticeRebuildCache(m, opts);
+    fi;
+    return SKellerCache.(key);
+end;;
+
+SKellerLattice := function(arg)
+    local m, i, j, opts, entry, idx, pair_i, pair_j, c1, k1, c2, k2;
+    if Length(arg) < 3 then
+        Error("SKellerLattice: usage SKellerLattice(m, i, j [, opts]).");
+    fi;
+    m := arg[1];
+    i := arg[2];
+    j := arg[3];
+    opts := fail;
+    if Length(arg) >= 4 then
+        opts := arg[4];
+    fi;
+    entry := SKellerLatticeGetCache(m, opts);
+    idx := entry.data.idx;
+    if i < 1 or i > idx.rank then
+        Error("SKellerLattice: global index i out of range: ", i,
+              " not in [1..", idx.rank, "] for E_+(", m, ")");
+    fi;
+    if j < 1 or j > idx.rank then
+        Error("SKellerLattice: global index j out of range: ", j,
+              " not in [1..", idx.rank, "] for E_+(", m, ")");
+    fi;
+    pair_i := idx.global_to_local[i];
+    pair_j := idx.global_to_local[j];
+    c1 := pair_i[1]; k1 := pair_i[2];
+    c2 := pair_j[1]; k2 := pair_j[2];
+    return ProjectorFormulaByIndex(c1, k1, c2, k2, entry.data);
+end;;
+
+
+# ============================================================
 # Convenience: list the central-row global indices for E_+(m).
 # Central rows correspond to class indices with |class| = 1 and
 # representative central in G. For E_+(m) these are the two singleton
