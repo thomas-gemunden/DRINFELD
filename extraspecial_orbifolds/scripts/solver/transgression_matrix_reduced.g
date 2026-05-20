@@ -483,7 +483,8 @@ BuildReducedTransgressionMatrixFast := function(setup, g_rep, C)
           lift_entry, lift_sem, lift_batched, pivot_cols, Y_full,
           rank, ncols, non_pivot_cols, r_quot, table_gf2,
           M_bar_F2, i, col_i_gf2, residual, one_gf2, zero_gf2,
-          order_2_gens, fail_columns, l,
+          order_2_gens, fail_columns, l, r_local, cols_gf2,
+          M_bar_gf2,
           # back-sub locals
           b, sol_dim, sol, nonzero_heads, vno, x;
 
@@ -512,18 +513,26 @@ BuildReducedTransgressionMatrixFast := function(setup, g_rep, C)
     # Order-2 generator indices (which order-2 H^3 gens to project).
     order_2_gens := Filtered([1..k], i -> h3_torsion[i] = 2);
 
-    # Initialise M_bar (r_quot × k integer rows mod 2; we'll store as
-    # plain int 0/1 lists for compat with the existing kernel code).
-    # NOTE: M_bar[l][i] = (residual of c'_g_{e_i} at non_pivot_cols[l]).
-    M_bar_F2 := List([1..r_quot], l -> List([1..k], i -> 0));
+    # MEMORY FIX (issue #302): At m=5 r_quot can be 4M+. The previous
+    # `List([1..r_quot], l -> List([1..k], i -> 0))` allocated an
+    # r_quot × k INTEGER matrix (~5.5 GB at r=4M, k=165). We now build
+    # the matrix one COLUMN at a time as GF(2) vectors, then transpose
+    # to a r_quot × k compressed GF(2) matrix. Compressed GF(2) packing
+    # makes the result ~80 MB instead of ~5.5 GB.
+    #
+    # We still return `M_bar` as a list of integer rows (0/1) for any
+    # callers that need the explicit integer form (e.g. M_bar_F2[l][i]
+    # indexing in legacy tests). At m=5, callers using the streaming
+    # column path consume `M_bar_gf2` directly and ignore `M_bar`.
     # fail_columns: H^3 generators that need fallback. We mark ALL
     # non-order-2 generators (i.e. the order-exp generator) as fallback,
     # since this F_2 path only handles order-2 cocycles.
     fail_columns := Filtered([1..k], i -> h3_torsion[i] <> 2);
 
-    # For each order-2 generator i, extract its F_2 column from
-    # table_gf2 (which has shape n² × k), back-sub through lift_sem,
-    # and read non-pivot entries as the M_bar column.
+    # Step 1: compute, for each order-2 generator i, the i-th column of
+    # M_bar as a length-r_quot GF(2) vector. Total cost is O(k) such
+    # vectors of size r_quot.
+    cols_gf2 := List([1..k], i -> fail);
     for i in order_2_gens do
         # Extract column i from table_gf2 (n² × k GF(2)).
         # table_gf2[r][i] = bit_{log2(exp/2)}(table[r][i]).
@@ -553,19 +562,56 @@ BuildReducedTransgressionMatrixFast := function(setup, g_rep, C)
             od;
             residual := b;
         fi;
-        # Extract non_pivot_cols entries → length r_quot.
-        for l in [1..r_quot] do
-            if not IsZero(residual[non_pivot_cols[l]]) then
-                M_bar_F2[l][i] := 1;
-            fi;
-        od;
+        # Extract non_pivot_cols entries → length r_quot GF(2) vector.
+        col_i_gf2 := residual{non_pivot_cols};
+        ConvertToVectorRep(col_i_gf2, GF(2));
+        cols_gf2[i] := col_i_gf2;
     od;
+    # Zero column for any non-order-2 generator (fail columns).
+    for i in [1..k] do
+        if cols_gf2[i] = fail then
+            col_i_gf2 := ListWithIdenticalEntries(r_quot, zero_gf2);
+            ConvertToVectorRep(col_i_gf2, GF(2));
+            cols_gf2[i] := col_i_gf2;
+        fi;
+    od;
+
+    # Step 2: transpose cols_gf2 (list of k length-r_quot GF(2) vectors)
+    # to M_bar_gf2 (r_quot × k compressed GF(2) matrix). Build row by row.
+    M_bar_gf2 := [];
+    for l in [1..r_quot] do
+        b := ListWithIdenticalEntries(k, zero_gf2);
+        for i in [1..k] do
+            b[i] := cols_gf2[i][l];
+        od;
+        ConvertToVectorRep(b, GF(2));
+        Add(M_bar_gf2, b);
+    od;
+    if r_quot > 0 then
+        ConvertToMatrixRep(M_bar_gf2, GF(2));
+    fi;
+    # Discard the per-column GF(2) vectors now that M_bar_gf2 owns the data.
+    cols_gf2 := fail;
+
+    # Build the legacy integer M_bar lazily ONLY if r_quot is small enough
+    # that materialising it does not OOM. The streaming consumer below
+    # uses M_bar_gf2 directly; legacy callers (m<=3) still get an int M_bar.
+    # Threshold: r_quot * k > 4e6 cells (-> ~32 MB for ints) → skip.
+    if r_quot * k <= 4 * 1000 * 1000 then
+        M_bar_F2 := List([1..r_quot],
+            l -> List([1..k], i -> If_(IsZero(M_bar_gf2[l][i]), 0, 1)));
+    else
+        # Too large; skip integer M_bar. Streaming path uses M_bar_gf2.
+        M_bar_F2 := fail;
+    fi;
 
     return rec(
         table_int     := table_int,
         P_C           := rec(r_full := r_quot,
                               torsion_full := List([1..r_quot], l -> 2)),
         M_bar         := M_bar_F2,
+        M_bar_gf2     := M_bar_gf2,
+        r_quot        := r_quot,
         torsion_C     := List([1..r_quot], l -> 2),
         C             := C,
         bockstein_used := false,
@@ -688,6 +734,10 @@ end;;
 #   Compute M_bar . M_y as an r × k integer matrix, reducing each
 #   ROW mod the H^2 torsion (since the M_bar rows are already mod
 #   torsion_C, M_bar . M_y is well-defined mod torsion_C).
+#
+# WARNING (#302): at m=5 with r ~4M and k=165, the r × k allocation
+# is ~5.5 GB of int memory. KEPT for legacy callers (tests at m<=3).
+# Streaming consumers should use ColumnDispositionFromMBarGF2 below.
 ApplyH3MatrixToMatBar := function(M_bar, M_y, torsion_C, h3_torsion)
     local r, k, result, l, i, s, j;
     r := Length(M_bar);
@@ -704,6 +754,102 @@ ApplyH3MatrixToMatBar := function(M_bar, M_y, torsion_C, h3_torsion)
         od;
     od;
     return result;
+end;;
+
+
+# UpdateColumnDispositionFromMBarGF2(M_bar_gf2, M_y, col_has_constraint)
+#   Streaming alternative to ApplyH3MatrixToMatBar for the OOM site (#302).
+#
+#   M_bar_gf2: r × k compressed GF(2) matrix (the propagated M_bar mod 2).
+#   M_y      : k × k INTEGER matrix (H^3 endomorphism mod h3_torsion).
+#   col_has_constraint: BlistList of length k. On entry the bits for
+#     columns already proven non-trivial. On return updated in place:
+#     bit i set to true if column i of (M_bar_gf2 . M_y mod 2) has any
+#     nonzero row.
+#
+# Math: for each column i of the result, we need
+#   (M_bar_gf2 . M_y[:,i] mod 2) has a nonzero entry  ?
+# We extract column i of M_y mod 2 as a GF(2) vector v, then check
+# whether `M_bar_gf2 * v` (a length-r GF(2) vector) has any 1.
+# If at least one 1: column i is constrained. We can therefore SKIP
+# any column already marked constrained (avoids the GF(2) matvec for
+# columns we already know about).
+#
+# Peak memory per call: O(r) bits for the GF(2) matvec result, which
+# at r=4M is ~500 KB. The M_bar_gf2 matrix itself (~80 MB) is shared
+# across all members of an orbit and freed after the orbit completes.
+UpdateColumnDispositionFromMBarGF2 := function(M_bar_gf2, M_y,
+                                                col_has_constraint)
+    local k_dim, zero_gf2, one_gf2, r_local, i, j, v, prod, ok;
+    if Length(M_bar_gf2) = 0 then
+        return;
+    fi;
+    k_dim := Length(M_y);
+    zero_gf2 := Zero(GF(2));
+    one_gf2 := One(GF(2));
+    r_local := Length(M_bar_gf2);
+
+    for i in [1..k_dim] do
+        # Skip columns already known to be constrained.
+        if col_has_constraint[i] then continue; fi;
+        # Build column i of M_y mod 2 as a GF(2) vector.
+        v := List([1..k_dim], j -> If_(M_y[j][i] mod 2 = 0, zero_gf2, one_gf2));
+        ConvertToVectorRep(v, GF(2));
+        # Compute M_bar_gf2 * v over GF(2).
+        prod := M_bar_gf2 * v;
+        # If any entry of prod is nonzero, column i has a constraint.
+        if not IsZero(prod) then
+            col_has_constraint[i] := true;
+        fi;
+    od;
+end;;
+
+
+# UpdateColumnDispositionFromMBarGF2_Batch(M_bar_gf2, M_y, col_has_constraint)
+#   Batched variant: builds the FULL M_y mod 2 as a GF(2) matrix and
+#   multiplies M_bar_gf2 * M_y_gf2 in one shot, then checks each column
+#   for nonzero entries.
+#
+#   Use this when many columns are still unconstrained (early in the
+#   sweep) — GF(2) matrix-matrix multiply is much faster than k matrix-
+#   vector multiplies. Switch to the per-column variant once most
+#   columns are settled.
+#
+#   Peak memory: O(r × k) GF(2) bits during the product = ~80 MB at
+#   r=4M, k=165 (compressed). Acceptable; the original integer version
+#   was 70× larger.
+UpdateColumnDispositionFromMBarGF2_Batch := function(M_bar_gf2, M_y,
+                                                      col_has_constraint)
+    local k_dim, zero_gf2, one_gf2, r_local, M_y_gf2, j, i, row,
+          prod_full;
+    if Length(M_bar_gf2) = 0 then
+        return;
+    fi;
+    k_dim := Length(M_y);
+    zero_gf2 := Zero(GF(2));
+    one_gf2 := One(GF(2));
+    r_local := Length(M_bar_gf2);
+
+    # Build M_y mod 2 as a GF(2) matrix (k × k, ~3.4 KB at k=165).
+    M_y_gf2 := [];
+    for j in [1..k_dim] do
+        row := List([1..k_dim],
+                    i -> If_(M_y[j][i] mod 2 = 0, zero_gf2, one_gf2));
+        ConvertToVectorRep(row, GF(2));
+        Add(M_y_gf2, row);
+    od;
+    ConvertToMatrixRep(M_y_gf2, GF(2));
+
+    # Compute M_bar_gf2 * M_y_gf2 over GF(2). Peak memory ~80 MB at m=5.
+    prod_full := M_bar_gf2 * M_y_gf2;
+
+    # Inspect each column for nonzero entries.
+    for i in [1..k_dim] do
+        if col_has_constraint[i] then continue; fi;
+        if not ForAll([1..r_local], j -> IsZero(prod_full[j][i])) then
+            col_has_constraint[i] := true;
+        fi;
+    od;
 end;;
 
 
@@ -812,7 +958,9 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
           fallback_in_ker, c_g_func, fallback_target_idx,
           fallback_vec_target, exp_axis_in_ker, t_test, c_g_table_exp,
           t_axis, exp_axis_k, exp_axis_vec, exp_axis_in_ker_k,
-          M_y_j_exp, vec_target_exp, all_orbit_ok, basis_orders, jj;
+          M_y_j_exp, vec_target_exp, all_orbit_ok, basis_orders, jj,
+          col_has_constraint, total_rows, orbit_ckpt_path,
+          completed_orbit_starts, ckpt_data, ckpt_stream, t_orbit_prop;
     k := setup.num_generators;
     h3_torsion := setup.torsion;
     exp_local := setup.exponent;
@@ -842,6 +990,8 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
                 table_int := [],
                 P_C := rec(r_full := 0, torsion_full := []),
                 M_bar := [],
+                M_bar_gf2 := [],
+                r_quot := 0,
                 torsion_C := [],
                 C := C,
                 bockstein_used := false,
@@ -852,13 +1002,17 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
                   (Runtime() - t_orb) / 1000., " s)\n");
         else
             redmat := BuildReducedTransgressionMatrix(setup, rep, C);
-            Print("M_bar shape = ", Length(redmat.M_bar), "x", k,
+            Print("M_bar shape = ", redmat.r_quot, "x", k,
                   ", bockstein_used = ", redmat.bockstein_used,
                   "  (", (Runtime() - t_orb) / 1000., " s)\n");
         fi;
         Add(reduced_matrices, rec(
             orbit_start := orb_info.start_idx,
             M_bar       := redmat.M_bar,
+            M_bar_gf2   := If_(IsBound(redmat.M_bar_gf2),
+                                redmat.M_bar_gf2, []),
+            r_quot      := If_(IsBound(redmat.r_quot), redmat.r_quot,
+                                Length(redmat.M_bar)),
             torsion_C   := redmat.torsion_C,
             C           := redmat.C,
             bockstein_used := redmat.bockstein_used,
@@ -885,46 +1039,159 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
     Print("Union of fail_columns across orbits: ", all_fail_columns, "\n");
 
     # Step 2: propagate per-orbit M_bar to all orbit members via
-    # BRW H^3 endomorphism matrices, stack into M_stack.
+    # BRW H^3 endomorphism matrices and accumulate per-column
+    # constraint information.
+    #
+    # MEMORY FIX (#302): the previous implementation materialised
+    # M_stack (R_total × k integers, with R_total ~ 4M+ at m=5),
+    # consuming ~5.5 GB of integer memory and OOM-ing the run at
+    # transgression_matrix_reduced.g:696. The new path streams the
+    # propagation per orbit-member and only retains a boolean
+    # `col_has_constraint[i]` saying whether column i of M_stack has
+    # any nonzero row. That's the only information used by Step 3.
+    #
+    # For the half-vec check (Step 3b) we also track whether the
+    # propagated rows of M_stack `dot half_vec mod 2` is identically
+    # zero, which is automatic since half_vec[exp_index] = 2 and the
+    # propagated rows are mod 2 — so 2*x mod 2 = 0 always. (See the
+    # detailed comment in Step 3b.) Confirming this means we do not
+    # need to keep any row data around at all.
+    #
+    # CHECKPOINTING (#302 Stage 1): after each orbit's contribution is
+    # merged into col_has_constraint, we persist the bitvector to
+    # `computed/transgression/<m>/orbit_partial.g`. Resumption skips
+    # already-processed orbits (which can take hours each at m=5).
     t_propagate := Runtime();
-    M_stack := [];
-    row_torsion := [];
+    # col_has_constraint[i] = true iff some row of M_stack has a
+    # nonzero value in column i. Initialised all-false.
+    col_has_constraint := BlistList([1..k], []);
+    # row_torsion stays available as a small accumulator (~few hundred
+    # entries — only contains the FULL list when stored; with streaming
+    # we just track Sum(orbit_size * r_o) and the per-orbit r_o values).
+    row_torsion := [];   # kept for legacy result-record compat (small)
+    total_rows := 0;
+
+    # Checkpoint file: optional, controlled by global ORBIT_CHECKPOINT_PATH.
+    if IsBoundGlobal("ORBIT_CHECKPOINT_PATH") then
+        orbit_ckpt_path := ORBIT_CHECKPOINT_PATH;
+    else
+        orbit_ckpt_path := fail;
+    fi;
+    completed_orbit_starts := [];   # orbit.start_idx values already merged
+    if orbit_ckpt_path <> fail and IsExistingFile(orbit_ckpt_path) then
+        # Load previously persisted col_has_constraint + completed orbits.
+        Print("Loading orbit checkpoint from ", orbit_ckpt_path, "...\n");
+        ckpt_data := ReadAsFunction(orbit_ckpt_path)();
+        if IsRecord(ckpt_data)
+           and IsBound(ckpt_data.col_has_constraint)
+           and IsBound(ckpt_data.completed_orbit_starts)
+           and Length(ckpt_data.col_has_constraint) = k then
+            for i in [1..k] do
+                if ckpt_data.col_has_constraint[i] then
+                    col_has_constraint[i] := true;
+                fi;
+            od;
+            completed_orbit_starts := ckpt_data.completed_orbit_starts;
+            if IsBound(ckpt_data.total_rows) then
+                total_rows := ckpt_data.total_rows;
+            fi;
+            Print("  resumed: ", Length(completed_orbit_starts),
+                  " orbits already merged, ",
+                  Length(Filtered([1..k], i -> col_has_constraint[i])),
+                  " columns already constrained\n");
+        else
+            Print("  checkpoint file present but malformed; ignoring.\n");
+        fi;
+    fi;
+
     for j in [1..n_orbits] do
         orb_info := reduced_matrices[j].orb_info;
-        if Length(reduced_matrices[j].M_bar) = 0 then
-            # Trivial orbit (identity class) — skip.
+        if reduced_matrices[j].r_quot = 0 then
+            # Trivial orbit (identity class) — no constraints.
             continue;
         fi;
-        r_o := Length(reduced_matrices[j].M_bar);
+        if orb_info.start_idx in completed_orbit_starts then
+            Print("  orbit ", j, "/", n_orbits, " (start ",
+                  orb_info.start_idx, "): SKIPPED (resumed from checkpoint)\n");
+            continue;
+        fi;
+        r_o := reduced_matrices[j].r_quot;
+        # Per-orbit accumulator wall time.
+        t_orbit_prop := Runtime();
         for target_idx in orb_info.orbit do
             M_y_j := H3MatrixForOrbitMember(
                 orb_info.start_idx, target_idx,
                 orb_info.parent, orb_info.gen_used,
                 h3_matrices, h3_torsion);
-            M_bar_propagated := ApplyH3MatrixToMatBar(
-                reduced_matrices[j].M_bar, M_y_j,
-                reduced_matrices[j].torsion_C, h3_torsion);
-            for l in [1..r_o] do
-                Add(M_stack, M_bar_propagated[l]);
-                Add(row_torsion, reduced_matrices[j].torsion_C[l]);
-            od;
+            # MEMORY-SAFE streaming column-disposition update.
+            # The batched variant uses ~80 MB peak GF(2) memory at m=5;
+            # the per-column variant uses ~500 KB (slower per call but
+            # short-circuits once columns settle). Heuristic: use the
+            # per-column variant when most columns are already
+            # constrained (saves the full matmul); use batched when
+            # many columns are still open.
+            if Length(reduced_matrices[j].M_bar_gf2) > 0
+               and Length(Filtered([1..k], i -> not col_has_constraint[i]))
+                   > k / 2 then
+                UpdateColumnDispositionFromMBarGF2_Batch(
+                    reduced_matrices[j].M_bar_gf2, M_y_j,
+                    col_has_constraint);
+            else
+                UpdateColumnDispositionFromMBarGF2(
+                    reduced_matrices[j].M_bar_gf2, M_y_j,
+                    col_has_constraint);
+            fi;
+            total_rows := total_rows + r_o;
         od;
+        Add(completed_orbit_starts, orb_info.start_idx);
+        Print("  orbit ", j, "/", n_orbits, " merged (r_o=", r_o,
+              ", members=", Length(orb_info.orbit), ", ",
+              (Runtime() - t_orbit_prop) / 1000., " s, ",
+              Length(Filtered([1..k], i -> col_has_constraint[i])),
+              "/", k, " columns now constrained)\n");
+
+        # Persist checkpoint after each orbit (small, ~few KB).
+        if orbit_ckpt_path <> fail then
+            ckpt_stream := OutputTextFile(orbit_ckpt_path, false);
+            SetPrintFormattingStatus(ckpt_stream, false);
+            PrintTo(ckpt_stream,
+                "# Orbit-level checkpoint for KernelOfTransgressionViaMBar (#302).\n",
+                "# Generated by transgression_matrix_reduced.g.\n",
+                "return rec(\n",
+                "    col_has_constraint := ",
+                List([1..k], i -> col_has_constraint[i]), ",\n",
+                "    completed_orbit_starts := ",
+                completed_orbit_starts, ",\n",
+                "    total_rows := ", total_rows, "\n",
+                ");\n");
+            CloseStream(ckpt_stream);
+        fi;
+
+        # Free per-orbit M_bar / M_bar_gf2 immediately to release
+        # ~80 MB before the next orbit is built.
+        reduced_matrices[j].M_bar := fail;
+        reduced_matrices[j].M_bar_gf2 := fail;
     od;
     Print("Propagation wall: ", (Runtime() - t_propagate) / 1000., " s\n");
-    Print("M_stack shape: ", Length(M_stack), " x ", k, "\n");
+    Print("Total propagated rows (M_stack height): ", total_rows, "\n");
+    Print("Columns with constraints: ",
+          Length(Filtered([1..k], i -> col_has_constraint[i])), " / ", k, "\n");
+    # M_stack itself is not materialised; downstream consumers should
+    # use col_has_constraint. We expose an EMPTY M_stack in the result
+    # record for backward compatibility (callers may check Length only).
+    M_stack := [];
 
-    # Step 3: compute the kernel of M_stack viewed as a map
-    #   ⊕ Z/h3_torsion[i]  ->  ⊕ Z/row_torsion[l]
-    # via augmented SNF.
+    # Step 3: extract ker(Tr) from the column-disposition information.
     #
-    # In row-vector convention (matching transgression_matrix.g's
-    # KernelOfTransgression): we have an effective matrix M of shape
-    # k × |rows|, where M[i][l] = M_stack[l][i] (transpose). The
-    # constraint x * M ≡ 0 mod row_torsion has kernel = integer left
-    # null space of [M; -diag(row_torsion)] (size (k + |rows|) × |rows|),
-    # projected to the first k coords, then reduced mod h3_torsion.
+    # MEMORY FIX (#302): the original Step 3 iterated `M_stack[l][i] mod
+    # row_torsion[l]` across all L × k entries. The streaming Step 2
+    # already accumulated the equivalent column information into
+    # `col_has_constraint`: column i has at least one nonzero row in
+    # M_stack iff col_has_constraint[i] is true. So e_i is in
+    # ker(Tr) iff col_has_constraint[i] is false (for order-2 generators
+    # not in all_fail_columns).
     t_kernel := Runtime();
-    if Length(M_stack) = 0 then
+    if total_rows = 0 then
         # Trivial kernel: full H^3 (only identity-class orbits — degenerate).
         kernel_size := Product(h3_torsion);
         kernel_basis_vecs := List([1..k], i -> rec(
@@ -942,17 +1209,16 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
             row_torsion      := row_torsion,
             reduced_matrices := reduced_matrices);
     fi;
-    # The M_stack rows are mod-2 valued (since the GF(2) fast path
+    # The propagated rows are mod-2 valued (since the GF(2) fast path
     # produces only order-2 quotient coordinates; row_torsion is all
     # 2s). So the kernel constraint M_stack . vec ≡ 0 mod 2 reduces
-    # to F_2-nullspace computation: find vec in F_2^k such that
-    # M_stack * vec = 0 over GF(2). NO SNF / augmentation needed.
+    # to F_2-nullspace computation. We've already computed the
+    # column-wise zero pattern in `col_has_constraint`.
     #
     # NB: only the order-2 columns of vec are constrained by M_stack.
     # The order-exp generator's column in M_stack is zero (it's a
     # fail-column handled by fallback below).
-    Print("F_2-projection: nullspace of M_stack^T mod 2 ...\n");
-    # Build M_stack as a GF(2) matrix.
+    Print("Reading kernel from col_has_constraint bitvector...\n");
     snf := fail; snf_d := fail;  # not used in this branch
     kernel_torsion := [];        # not used
     kernel_rows := [];           # not used
@@ -962,18 +1228,17 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
     big := [];                   # not used
 
     # ----- Cross-check style outputs (compatible with run_e_plus_m_kernel_hap.g) ---
-    # Identify which unit generators e_i are in the kernel: e_i ∈ ker iff
-    # M_stack . e_i ≡ 0 (each row mod the corresponding row_torsion[l]).
-    # For order-2 generators, this is correct. For fail-axis generators
-    # (and any generator with h3_torsion[i] > 2), we fall back to a
-    # direct test below.
+    # Identify which unit generators e_i are in the kernel: e_i in ker iff
+    # no propagated row has a nonzero entry in column i, i.e.
+    # col_has_constraint[i] is false. For order-2 generators, this is
+    # the exact condition. For fail-axis generators (and any generator
+    # with h3_torsion[i] > 2), we fall back to a direct test below.
     in_kernel_gens := [];
     for i in [1..k] do
         if i in all_fail_columns then
             continue;   # decided by fallback path below
         fi;
-        if h3_torsion[i] = 2 and ForAll([1..Length(M_stack)],
-                  l -> M_stack[l][i] mod row_torsion[l] = 0) then
+        if h3_torsion[i] = 2 and not col_has_constraint[i] then
             Add(in_kernel_gens, i);
         fi;
     od;
@@ -1101,9 +1366,15 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
         od;
     else
         # exp_index was a safe column; test via M_stack directly.
+        # MEMORY FIX (#302): with the streaming Step 2 we no longer have
+        # M_stack materialised. However, every propagated row is mod 2,
+        # and half_vec is `2 * e_exp_index`. So
+        #   Sum_i M_stack[l][i] * half_vec[i] = 2 * M_stack[l][exp_index]
+        # and `(2 * x) mod 2 = 0` for any integer x. Hence the half-vec
+        # check is trivially true on every row whenever row_torsion[l] = 2
+        # (which is always the case in the F_2 path). Skip the loop.
         half_vec := List([1..k], j -> If_(j = exp_index, 2, 0));
-        half_in_ker := ForAll([1..Length(M_stack)],
-            l -> (Sum([1..k], i -> M_stack[l][i] * half_vec[i])) mod row_torsion[l] = 0);
+        half_in_ker := true;
     fi;
 
     # Build kernel_basis_vecs in the run_e_plus_m_kernel_hap.g shape.

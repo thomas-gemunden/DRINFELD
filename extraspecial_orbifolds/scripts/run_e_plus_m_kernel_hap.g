@@ -560,6 +560,25 @@ if use_reduced_tr_matrix then
     Read("transgression_matrix_reduced.g");
     ChangeDirectoryCurrent(Filename(perf4_orig_cwd, ""));;
 
+    # ORBIT_CHECKPOINT_PATH (issue #302): if not already set by the caller,
+    # default to `<OutDir>/orbit_partial.g`. The
+    # KernelOfTransgressionViaMBar function picks this up via IsBoundGlobal
+    # and writes a per-orbit checkpoint after each merge. On rerun after a
+    # crash, the function skips orbits whose contribution has already been
+    # accumulated into col_has_constraint. Set to fail to disable.
+    if not IsBoundGlobal("ORBIT_CHECKPOINT_PATH") then
+        # Use absolute path: OutDir is relative to scripts/ but the
+        # KernelOfTransgressionViaMBar function may execute under a
+        # different CWD. Resolve to absolute via Filename().
+        ORBIT_CHECKPOINT_PATH := Concatenation(
+            Filename(DirectoryCurrent(), ""),
+            OutDir, "/orbit_partial.g");
+        Print("ORBIT_CHECKPOINT_PATH (default): ", ORBIT_CHECKPOINT_PATH, "\n");
+    else
+        Print("ORBIT_CHECKPOINT_PATH (caller-supplied): ",
+              ORBIT_CHECKPOINT_PATH, "\n");
+    fi;
+
     t_reduced := Runtime();;
     reduced_result := KernelOfTransgressionViaMBar(setup, orbits_data, classes,
                                                     G, h3_matrices);;
