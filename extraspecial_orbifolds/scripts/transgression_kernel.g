@@ -30,8 +30,41 @@
 
 LoadPackage("hap");
 
-# We use Gruen's UCT helper (in DRINFELD/src/modular_data.g):
-Read("../../src/modular_data.g");
+# We use Gruen's UCT helper (in DRINFELD/src/modular_data.g). Resolve
+# the path via INPUT_FILENAME() so this Read works regardless of GAP's
+# CWD when the caller Read this file by absolute path (issue #319).
+# The legacy relative form (`Read("../../src/modular_data.g")`) only
+# worked when GAP's CWD was extraspecial_orbifolds/scripts/, and silently
+# failed otherwise (BreakOnError := false leaves later definitions
+# unbound).
+#
+# Implementation note: GAP's INPUT_FILENAME() returns the path EXACTLY
+# as given to Read — absolute if the caller used an absolute path,
+# relative if they used a relative path. We only do the absolute-path
+# rewrite when INPUT_FILENAME() starts with "/"; otherwise we fall back
+# to the legacy relative form which only works under the implicit
+# "Read from scripts/ as CWD" convention.
+_TK_SELF := INPUT_FILENAME();;
+if _TK_SELF <> fail and _TK_SELF <> "stream"
+   and Length(_TK_SELF) > 0 and _TK_SELF[1] = '/' then
+    # Absolute-path Read. Strip "/transgression_kernel.g" to get the
+    # scripts dir, then strip "/extraspecial_orbifolds/scripts" to get
+    # the DRINFELD repo root.
+    _TK_SCRIPTS_DIR := _TK_SELF{
+        [1..Length(_TK_SELF) - Length("/transgression_kernel.g")]};;
+    _TK_REPO_ROOT := _TK_SCRIPTS_DIR{
+        [1..Length(_TK_SCRIPTS_DIR)
+           - Length("/extraspecial_orbifolds/scripts")]};;
+    Read(Concatenation(_TK_REPO_ROOT, "/src/modular_data.g"));
+else
+    # Relative-path Read (or INPUT_FILENAME unavailable / "stream"). The
+    # legacy form only works when GAP's CWD is extraspecial_orbifolds/
+    # scripts/ — exactly the historical foot-gun this file used to be
+    # subject to. Callers that Read this file by RELATIVE path are
+    # expected to already be in scripts/ (which the run_tests.sh harness
+    # ensures, and direct interactive use observes by convention).
+    Read("../../src/modular_data.g");
+fi;;
 
 # ----------------------------------------------------------------------
 # Setup: for a group G, get the H^3(G; Z/exp) data.

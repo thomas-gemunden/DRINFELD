@@ -54,24 +54,14 @@ if not IsExistingFile(Concatenation(_SCRIPTS_DIR, "/bw_lattice.g")) then
           "check INPUT_FILENAME() path resolution.");
 fi;
 
-# IMPORTANT — CWD for the dependency-load phase.
-# `twisted_group_algebra.g` contains `Read("bw_lattice.g")` and
-# `Read("em_construction.g")` (relative, resolved against GAP's CWD,
-# not against the Read'er's directory). If GAP's CWD is anywhere other
-# than `_SCRIPTS_DIR` when we Read `twisted_group_algebra.g`, that
-# inner Read fails — and with `BreakOnError := false` the failure is
-# silent, leaving `UnimodSigma` (defined later in the file) unbound.
-# This was the root cause of issue #315: Test 1 (lite mode) doesn't
-# need `UnimodSigma` so it passed, but Test 2's `EmUnimodGroup(3)` did
-# and errored with "Variable 'UnimodSigma' must have an assigned value".
-#
-# Fix: chdir into `_SCRIPTS_DIR` for the load phase. We restore the
-# previous CWD after all dependencies have loaded.
-# Note: DirectoryCurrent() returns a Directory object; we extract its
-# path string via Filename(d, "") so ChangeDirectoryCurrent (which
-# requires a string) accepts it on the way back.
-_OLD_CWD := Filename(DirectoryCurrent(), "");;
-ChangeDirectoryCurrent(_SCRIPTS_DIR);
+# Historical note (issue #315 / #319): a previous version of this test
+# included a `ChangeDirectoryCurrent(_SCRIPTS_DIR)` workaround because
+# `twisted_group_algebra.g` did unconditional CWD-relative Reads of
+# `bw_lattice.g` and `em_construction.g`. Those Reads have been removed
+# in PR #321 (which fixes #319); this test now loads dependencies in
+# the same order as before but no longer needs the chdir workaround.
+# The Reads in this file are all done via `_T_Read` (absolute path), so
+# CWD is irrelevant to the dependency-load phase.
 
 # Helper to Read by absolute path.
 _T_Read := function(rel)
@@ -123,10 +113,6 @@ _T_Read("closed_form_central.g");
 # path is exercised.
 _T_Read("krr_spectral_characters.g");
 _T_Read("build_krr_intertwiner_data.g");
-
-# Restore CWD now that all dependencies are loaded; downstream code
-# does not Read further files at runtime.
-ChangeDirectoryCurrent(_OLD_CWD);
 
 # Verify that the critical globals are actually bound. If any are not,
 # fail loudly here instead of letting Test 2 / Test 3 crash mid-run
