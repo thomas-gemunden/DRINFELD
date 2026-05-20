@@ -1028,4 +1028,256 @@ BuildRestrictionMatrices := function(m, source)
     return result;
 end;;
 
-Print("Loaded detecting_family_restriction.g (D-VAN-2: BuildRestrictionMatrices).\n");
+
+# =====================================================================
+# Slack-trimming pass: minimal verified detecting family (issue #313).
+#
+# Helper `_DETF_KernelOrderSNF` is defined first so the parser sees it
+# bound when `_DETF_TrimmedFamily` is read in (avoids the "unbound
+# global" syntax warning even though GAP resolves globals at call
+# time).
+
+# SNF-based |ker(joint restriction)| for the given EA index subset +
+# D_8 (always) + Q_8 (optional). Internal helper for _DETF_TrimmedFamily.
+#
+# Math: H^3(G; U(1)) = ⊕_i Z/torsion_G[i]; for a family
+# F = {H_1, ..., H_k}, the joint restriction `R: H^3(G; U(1)) -> ⊕_j
+# H^3(H_j; U(1))` is determined by stacking the per-H restriction
+# matrices column-wise into a single k_G × N integer matrix M (where
+# N = Σ_j k_{H_j}). The image of R inside the H-side ambient group
+# A_H = ⊕_j Z/torsion_H_j has order |A_H| / |coker([M; D_H])| where
+# D_H = diag(torsion_H). |ker(R)| = |H^3(G; U(1))| / |image(R)|.
+_DETF_KernelOrderSNF := function(data, ea_indices, include_D8, include_Q8)
+    local M_blocks, T_blocks, j, M, T_H, N, D_H, B, snf, factors,
+          k, image_order, group_order;
+    M_blocks := [];
+    T_blocks := [];
+    for j in ea_indices do
+        Add(M_blocks, data.res_EA_list[j]);
+        Append(T_blocks, data.torsion_EA_list[j]);
+    od;
+    if include_D8 then
+        Add(M_blocks, data.res_D8);
+        Append(T_blocks, data.torsion_D8);
+    fi;
+    if include_Q8 and data.res_Q8 <> fail then
+        Add(M_blocks, data.res_Q8);
+        Append(T_blocks, data.torsion_Q8);
+    fi;
+    # Concatenate column-wise: each block is k_G × k_{H_j}.
+    M := TransposedMat(Concatenation(List(M_blocks, TransposedMat)));
+    T_H := T_blocks;
+    N := Length(T_H);
+    if N = 0 then
+        # Degenerate: no subgroups → image is trivial → |ker| = |H^3(G)|.
+        return Product(data.torsion_G);
+    fi;
+    D_H := List([1..N], i -> List([1..N], j2 ->
+                If_(i = j2, T_H[i], 0)));
+    B := Concatenation(M, D_H);
+    snf := SmithNormalFormIntegerMat(B);
+    factors := [];
+    for k in [1..Minimum(Length(snf), N)] do
+        if snf[k][k] = 0 then
+            Error("_DETF_KernelOrderSNF: SNF has a zero invariant ",
+                  "factor (infinite cokernel). The D_H block in B ",
+                  "should make the cokernel finite; this should never ",
+                  "happen unless data.torsion_* is malformed.");
+        fi;
+        Add(factors, snf[k][k]);
+    od;
+    image_order := Product(T_H) / Product(factors);
+    group_order := Product(data.torsion_G);
+    return group_order / image_order;
+end;;
+
+
+# Main public entry point.
+#
+# `_DETF_TrimmedFamily(m, [opts])` returns a verified-minimal detecting
+# family for `res: H^3(E_+(m); U(1)) -> ⊕ H^3(H; U(1))`. The full
+# production family from `BuildRestrictionMatrices(m, "hap")` has slack
+# at every m ≥ 2 (refuted to be tight at m=2 and m=3 by PR #310): we
+# shrink it via greedy growth, then verify local tightness.
+#
+# Algorithm (PR #310 §6.2):
+#
+#   1. Start with {D_8, Q_8} included (always required for the cyclic
+#      A(4) summand per Harada-Kono 1.1; D_8 alone is insufficient at
+#      m ≥ 3 and Q_8 alone is insufficient at m=2).
+#   2. Iteratively add the EA index `j` (among those in
+#      `data.H_EA_list`) whose joint restriction with the current
+#      family reduces the SNF-computed kernel order the most. Ties
+#      broken by smallest index (deterministic).
+#   3. Stop when |ker| = 1.
+#   4. Verify local tightness: drop each EA in the resulting family
+#      and check that |ker| > 1 (i.e. no smaller subset of the chosen
+#      EAs works with {D_8, Q_8}).
+#
+# At m=2 this reproduces PR #310's witness `{EA_2, EA_3, EA_5}`
+# (matching one of the two minimum size-3 EA witnesses); at m=3 it
+# reproduces `{EA_4, EA_6, EA_7, EA_11, EA_16, EA_22}`. At m=5 the
+# greedy over the 112-EA production family (axis-aligned + pair-swap
+# Lagrangians) converges to 9 EAs (sorted: [33, 48, 54, 57, 70, 76,
+# 88, 89, 109]) in ~19 min wall (cold), well below the issue #313
+# conjecture of 12-22 EAs.
+#
+# Cost model (reference walls, measured on a 2026 laptop with a cold
+# BuildRestrictionMatrices cache; warm-cache walls drop ~5-10x):
+#
+#   * m=2: 6 EAs * 3 greedy steps = ~18 SNFs, each on a tiny matrix.
+#     ~120 ms cold (most of which is BuildRestrictionMatrices).
+#   * m=3: 30 EAs * 6 greedy steps = ~180 SNFs. ~5 s cold.
+#   * m=5: 112 EAs * 9 greedy steps = ~1000 SNFs on growing matrices
+#     (up to ~280x270 at the last greedy step). ~19 min wall cold,
+#     almost all of which is the BuildRestrictionMatrices(5, "hap")
+#     HAP resolution build + 114 EquivariantChainMaps; the greedy +
+#     SNF + drop-one verification adds <1 min on top.
+#   * m=7: NOT YET SUPPORTED. BuildRestrictionMatrices(7, "hap")
+#     errors because ResolutionFiniteGroup(E_+(7), 4) OOMs at ~60 GB
+#     (#137). The m=7 trimmed family requires a separate path
+#     through LHSResolutionEPlus(7, 5) (PR #252) + per-EA restriction
+#     matrices via the LHS resolution. That infrastructure is gated
+#     on Q-int A2/A3 (issue #136) and not delivered here; this PR
+#     errors at m=7 with an explanatory message and defers the m=7
+#     path to a follow-up issue so the m <= 5 deliverable can ship.
+#
+# Returns rec(
+#   m                       : m
+#   ea_indices_chosen       : list of indices into data.H_EA_list,
+#                             in greedy-pick order (sorted via
+#                             `result.ea_indices_chosen_sorted`)
+#   ea_indices_chosen_sorted: above, sorted ascending (matches PR
+#                             #310's witness convention)
+#   include_D8              : true
+#   include_Q8              : true iff Q_8 found by _DETF_FindQ8In
+#   final_ker               : 1 if injective, else >1 (stuck)
+#   ea_count                : Length(ea_indices_chosen)
+#   family_size             : ea_count + 1 (D_8) + (1 if Q_8 else 0)
+#   greedy_log              : list of recs (ea := j, ker := k) per step
+#   locally_tight           : true iff every drop-one subfamily fails
+#   drop_one_kers           : per-position |ker| after dropping that EA
+#                             from the chosen list
+#   walltime_ms             : ms wall
+#   data                    : the BuildRestrictionMatrices rec used
+# ).
+_DETF_TrimmedFamily := function(arg)
+    local m, opts, source, t0, t_end, data, n_EA, include_Q8,
+          ea_chosen, greedy_log, curr_ker, best_j, best_ker, j, k_try,
+          ea_sorted, drop_kers, i, sub_indices, ker_drop, locally_tight,
+          result;
+
+    if Length(arg) = 0 then
+        Error("_DETF_TrimmedFamily(m, [opts]): missing m.");
+    fi;
+    m := arg[1];
+    # If_ eagerly evaluates both branches, so arg[2] would error when
+    # only one argument was passed. Use a plain if-fi here.
+    if Length(arg) >= 2 then
+        opts := arg[2];
+    else
+        opts := rec();
+    fi;
+
+    if not (IsInt(m) and m >= 1) then
+        Error("_DETF_TrimmedFamily: m must be a positive integer; got ", m);
+    fi;
+
+    if IsBound(opts.source) then
+        source := opts.source;
+    else
+        source := "hap";
+    fi;
+    if not (source in ["hap", "quillen"]) then
+        Error("_DETF_TrimmedFamily: opts.source must be \"hap\" or ",
+              "\"quillen\"; got ", source);
+    fi;
+    if source = "hap" and m > 5 then
+        Error("_DETF_TrimmedFamily: source=\"hap\" is not supported for ",
+              "m = ", m, " (BuildRestrictionMatrices errors at m > 5). ",
+              "The m=7 trimmed family requires a separate path via ",
+              "LHSResolutionEPlus(", m, ", 5) (issue #313 §m=7), which is ",
+              "gated on Q-int A2/A3 (issue #136). At m = ", m, ".");
+    fi;
+    if source = "quillen" then
+        Error("_DETF_TrimmedFamily: source=\"quillen\" is gated on Q-int ",
+              "A2/A3 (issue #136); not yet implemented. At m = ", m, ".");
+    fi;
+
+    t0 := Runtime();
+    data := BuildRestrictionMatrices(m, source);
+    n_EA := Length(data.H_EA_list);
+    include_Q8 := (data.res_Q8 <> fail);
+
+    # ---- Greedy growth ----
+    ea_chosen := [];
+    greedy_log := [];
+    curr_ker := _DETF_KernelOrderSNF(data, [], true, include_Q8);
+    while curr_ker > 1 do
+        best_j := fail;
+        best_ker := curr_ker;
+        for j in [1..n_EA] do
+            if j in ea_chosen then continue; fi;
+            k_try := _DETF_KernelOrderSNF(data,
+                                          Concatenation(ea_chosen, [j]),
+                                          true, include_Q8);
+            if k_try < best_ker then
+                best_j := j;
+                best_ker := k_try;
+            fi;
+        od;
+        if best_j = fail then
+            # Greedy stuck: no single-EA addition reduces |ker|.
+            # Return the partial family with status flagged.
+            break;
+        fi;
+        Add(ea_chosen, best_j);
+        Add(greedy_log, rec(ea := best_j, ker := best_ker));
+        curr_ker := best_ker;
+    od;
+
+    ea_sorted := SortedList(ea_chosen);
+
+    # ---- Local tightness: drop-one test ----
+    # For each chosen EA, remove it and recompute |ker|. If ANY drop
+    # yields |ker| = 1, the chosen family is not locally tight (the
+    # dropped index was redundant).
+    drop_kers := [];
+    locally_tight := true;
+    if curr_ker = 1 then
+        for i in [1..Length(ea_chosen)] do
+            sub_indices := Concatenation(ea_chosen{[1..i - 1]},
+                                          ea_chosen{[i + 1..Length(ea_chosen)]});
+            ker_drop := _DETF_KernelOrderSNF(data, sub_indices,
+                                              true, include_Q8);
+            Add(drop_kers, ker_drop);
+            if ker_drop = 1 then
+                locally_tight := false;
+            fi;
+        od;
+    fi;
+
+    t_end := Runtime();
+
+    result := rec(
+        m                        := m,
+        source                   := source,
+        ea_indices_chosen        := ea_chosen,
+        ea_indices_chosen_sorted := ea_sorted,
+        include_D8               := true,
+        include_Q8               := include_Q8,
+        final_ker                := curr_ker,
+        ea_count                 := Length(ea_chosen),
+        family_size              := Length(ea_chosen) + 1
+                                    + If_(include_Q8, 1, 0),
+        greedy_log               := greedy_log,
+        locally_tight            := locally_tight,
+        drop_one_kers            := drop_kers,
+        walltime_ms              := t_end - t0,
+        data                     := data
+    );
+    return result;
+end;;
+
+
+Print("Loaded detecting_family_restriction.g (D-VAN-2: BuildRestrictionMatrices, _DETF_TrimmedFamily).\n");
