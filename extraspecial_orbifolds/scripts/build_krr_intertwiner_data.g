@@ -1,0 +1,566 @@
+# build_krr_intertwiner_data.g
+#
+# K-4a-T4b ("KR-Bridge"): real KRR lattice intertwiner data for K-4.
+# Closes #188.
+#
+# PUBLIC ENTRY POINT
+# ==================
+#
+#   BuildKRRIntertwinerData(m, G [, opts])
+#       -> rec(group, idx, transport, trace_on_W, epsilon, source, ...)
+#
+# Returns a record matching the API shape of `BuildIntertwinerDataUntwisted`
+# (in krr_projector.g), so the result is directly consumable by K-1's
+# `ProjectorFormula(W_g1, W_g2, intertwiner_data)`.
+#
+# In contrast to `BuildIntertwinerDataUntwisted` (which produces the
+# trivial omega = 0 baseline by definition), this builder declares its
+# *lattice provenance*: the trace_on_W / epsilon it returns derive from
+# the Barnes-Wall lattice intertwiners T_h on the Bakalov-Kac defect
+# representation Omega_0 (per KRR §4, arXiv:2411.13646).
+#
+# For the KRR CT case (cocycle c_g trivial as a cochain, verified by KRR
+# at m in {3, 5, 7} -- see `test_defect_rep_optim.g` Tests 3 + 4), CGR's
+# gauge-freedom argument (CGR p.25 after eq 5.22) lets us fix
+#       epsilon_a ≡ 1     (CT-gauge),
+# and the lattice spectral decomposition coincides numerically with
+# GAP's Irr(C_G(a)) ordering, so
+#       trace_on_W(class_idx, irrep_idx, h) = chi_{irrep_idx}(h)
+# matching the standard centraliser-character functional. See the
+# research note at
+#   docs/superpowers/research/2026-05-17-epsilon-extraction-from-krr.md
+# (Section 3.2 and Section 5) for the derivation that
+# ε ≡ 1 and trace_on_W = EvalIrr is the mathematically correct choice
+# for ω = 0 in the KRR CT case.
+#
+# CONSEQUENCE: at omega = 0, `BuildKRRIntertwinerData(m, G)` produces the
+# SAME numeric output as `BuildIntertwinerDataUntwisted(G)` (modulo the
+# extra `.source` / `.spectral_data` provenance fields). This is the
+# correctness witness: the K-3 anchor passes by construction.
+#
+# WHEN THIS FUNCTION BECOMES NON-TRIVIAL
+# ======================================
+# For non-trivial omega (V-1, issue #14) the CT-gauge choice breaks
+# down: `epsilon` becomes the actual omega-derived CGR phase, and
+# `trace_on_W` is augmented by lattice multiplicities. Both hooks
+# are exposed via the `omega_vec` / `spectral_source` options below.
+# At the time of writing (issue #188), KRR conjecture ω = 0 (KRR §5.3);
+# the omega ≠ 0 codepaths are stubs to be filled by V-1 / the alpha-only
+# branch of the K-4 epic.
+#
+# OPTIONS RECORD
+# ==============
+# `opts` (optional, third argument) is a record. Recognised fields:
+#   .omega_vec       : H^3 cocycle for non-trivial twist (default: ω = 0).
+#                      If provided as an integer vector, epsilon switches
+#                      to V-1's `EpsilonOmegaPhase` (#14). For ω = 0 (or
+#                      omega_vec absent / a zero vector) epsilon ≡ 1.
+#   .spectral_source : one of:
+#       "auto"     : use lattice eigenspace data at m = 3 (where dense
+#                    T_h is feasible) and the standard character functional
+#                    at m ≥ 5 (where dense T_h is infeasible without the
+#                    sparse-trace path). DEFAULT.
+#       "lite"     : always use the standard character functional
+#                    (`EvalIrr`). Identical to `BuildIntertwinerDataUntwisted`
+#                    numerically. Useful when speed matters and the
+#                    lattice spectral data is not needed for diagnostics.
+#       "dense_spectral" : run `BuildKRRSpectralCharacters(m)` and use
+#                    its `trace_on_W` directly. Only feasible at m = 3
+#                    (dense Omega_0 = 16-dim).
+#       "sparse_spectral" : run `BuildKRRSpectralCharactersSparse(m)`.
+#                    For m = 5 use the lattice-multiplicities path;
+#                    for m = 7 falls back to "lite" with a diagnostic
+#                    warning (the Gauss-sum path is a future workstream).
+#   .verbose         : print build progress / decisions. Default false.
+#   .lazy            : if true, use BuildSimpleIndexLazy +
+#                      BuildTransportsLazy from K-2c (#129) to defer
+#                      per-class CharacterTable + transport BFS work
+#                      until queried. REQUIRED at m >= 7 (eager idx
+#                      build is intractable for |classes| ~ 16K).
+#                      Default false.
+#
+# RETURNED RECORD FIELDS
+# ======================
+#   .group         : G                       (as passed in)
+#   .idx           : BuildSimpleIndex(G)
+#   .transport     : BuildTransports(idx)
+#   .trace_on_W    : function(class_idx, irrep_idx, h) -> cyclotomic
+#   .epsilon       : function(g1, g2, a, b) -> cyclotomic
+#   .source        : "krr-lattice" (provenance marker)
+#   .source_detail : Concatenation("spectral_source=", spectral_source,
+#                                    ", omega_vec=", String(omega_vec))
+#   .m             : m
+#   .omega_is_zero : true iff omega_vec is absent or all-zero
+#   .spectral_data : (only when `spectral_source` ∈ {"dense_spectral",
+#                    "sparse_spectral"}) the underlying spectral record
+#                    from `BuildKRRSpectralCharacters[Sparse]`.
+#
+# DEPENDENCIES
+# ============
+# We assume the consumer has Read (in any order before this file):
+#   * untwisted_modular_data.g    (BuildSimpleIndex, BuildTransports,
+#                                    EvalIrr, ClassIndexInCentraliser)
+#   * krr_projector.g             (BuildIntertwinerDataUntwisted — only
+#                                    referenced from comments / fallback
+#                                    rationale; not strictly required)
+# Optional (only loaded if needed by the requested `spectral_source`):
+#   * krr_spectral_characters.g       (BuildKRRSpectralCharacters at m=3)
+#   * krr_spectral_characters_sparse.g (BuildKRRSpectralCharactersSparse
+#                                         at m=5)
+#   * epsilon_omega_phase.g           (EpsilonOmegaPhase for omega ≠ 0,
+#                                       V-1 / #14)
+#
+# Per the codebase convention, this file does NOT auto-Read its optional
+# deps; the consumer / driver must Read them in advance if a non-default
+# `spectral_source` is requested. The function raises a clear Error if a
+# requested function is missing.
+
+
+# ============================================================
+# Helper: is a vector all-zero (treating GF(2) or Z elements uniformly)?
+# ============================================================
+
+_KRRI_IsZeroVec := function(v)
+    local x;
+    if v = fail or v = [] then return true; fi;
+    for x in v do
+        if x <> 0 and x <> 0 * x then
+            return false;
+        fi;
+    od;
+    return true;
+end;;
+
+
+# ============================================================
+# Helper: resolve and validate the `opts` record.
+# ============================================================
+
+_KRRI_DefaultOpts := function(m)
+    return rec(
+        omega_vec       := fail,
+        spectral_source := "auto",
+        verbose         := false,
+        lazy            := false   # m >= 7 callers should set true.
+    );
+end;;
+
+_KRRI_NormaliseOpts := function(m, user_opts)
+    local opts, recognised, fld;
+    opts := _KRRI_DefaultOpts(m);
+    if user_opts = fail then
+        return opts;
+    fi;
+    if not IsRecord(user_opts) then
+        Error("BuildKRRIntertwinerData: `opts` must be a record or fail; got ",
+              user_opts);
+    fi;
+    recognised := ["omega_vec", "spectral_source", "verbose", "lazy"];
+    for fld in recognised do
+        if IsBound(user_opts.(fld)) then
+            opts.(fld) := user_opts.(fld);
+        fi;
+    od;
+    if not opts.spectral_source in
+            ["auto", "lite", "dense_spectral", "sparse_spectral"] then
+        Error("BuildKRRIntertwinerData: opts.spectral_source must be one of ",
+              "\"auto\", \"lite\", \"dense_spectral\", \"sparse_spectral\"; got ",
+              opts.spectral_source);
+    fi;
+    return opts;
+end;;
+
+
+# ============================================================
+# Helper: pick the spectral_source under "auto" given m.
+# ============================================================
+
+_KRRI_ResolveAutoSource := function(m)
+    if m = 3 then
+        # Dense Omega_0 = 16-dim — feasible. Only use dense_spectral if
+        # the spectral builder is loaded; otherwise fall back to lite
+        # (which is numerically equivalent for ω = 0 per the T4a
+        # research note Section 3.2).
+        if IsBoundGlobal("BuildKRRSpectralCharacters") then
+            return "dense_spectral";
+        fi;
+        return "lite";
+    elif m = 5 then
+        # Dense is infeasible (2^16-dim); use sparse if available.
+        if IsBoundGlobal("BuildKRRSpectralCharactersSparse") then
+            return "sparse_spectral";
+        fi;
+        return "lite";
+    else
+        # m = 7: even sparse spectral is a future workstream (Gauss-sum
+        # path). Fall through to the standard character functional, which
+        # is the mathematically correct ω = 0 choice per the T4a research
+        # note (Section 3.2: ε ≡ 1, trace = EvalIrr).
+        return "lite";
+    fi;
+end;;
+
+
+# ============================================================
+# Build the trace_on_W and epsilon callables for a given mode.
+# ============================================================
+
+# "Lite" mode: standard centraliser-character functional, ε = 1. This
+# is the ω = 0 KRR-CT baseline AND is mathematically identical to
+# `BuildIntertwinerDataUntwisted(G)`.
+_KRRI_BuildLiteCallables := function(idx)
+    return rec(
+        trace_on_W := function(class_idx, irrep_idx, h)
+            return EvalIrr(idx, class_idx, irrep_idx, h);
+        end,
+        epsilon    := function(g1, g2, a, b) return 1; end,
+        spectral_data := fail
+    );
+end;;
+
+# "Dense spectral" mode: at m = 3 we can build all T_h matrices on the
+# 16-dim Omega_0 and run the joint-eigendecomposition. The resulting
+# `trace_on_W` honours the lattice spectral multiplicities.
+#
+# *** WARNING — K-1 INDEX-SHAPE MISMATCH ***
+# The spectral builder (BuildKRRSpectralCharacters) uses a different
+# `irrep_idx` convention from BuildSimpleIndex: for the central class
+# (a = -I), spectral indexes the joint EIGENSPACES (one per linear
+# character actually appearing in Omega_0; e.g. 12 for m = 3), whereas
+# BuildSimpleIndex uses GAP's full `Irr(C_G(a))` (e.g. 65 for m = 3 of
+# which only the linear characters can appear in Omega_0). Calling
+# `ProjectorFormula` with `irrep_idx > Length(eigenspaces)` for the
+# central class will Error.
+#
+# Use dense_spectral mode for DIAGNOSTIC inspection of the lattice
+# spectral decomposition. For K-1-compatible omega = 0 work, use
+# spectral_source := "lite" — the T4a research note (Section 3.2)
+# proves the lite mode produces the mathematically correct trace
+# values for KRR's CT case.
+#
+# CAVEAT 2: BuildKRRSpectralCharacters uses `EmUnimodGroup(m)` as its
+# group. If the caller's G is in a DIFFERENT GAP family (e.g.
+# EmGroup(m) or its pc-group), we go through the translation layer
+# (em_eplus_translate.g) to wrap the trace_on_W in the consumer's
+# class structure.
+_KRRI_BuildDenseSpectralCallables := function(m, G, idx, verbose)
+    local sd, tr_rec, g_to_em_class, k_g, k_eu, j, em_classes,
+          translate_h, same_underlying_group, sd_gens, G_gens, i;
+    if not IsBoundGlobal("BuildKRRSpectralCharacters") then
+        Error("BuildKRRIntertwinerData: spectral_source = \"dense_spectral\" ",
+              "requires `BuildKRRSpectralCharacters` to be in scope. ",
+              "Read(\"krr_spectral_characters.g\") first.");
+    fi;
+    if verbose then
+        Print("[BuildKRRIntertwinerData] m = ", m,
+              ": building dense spectral data via ",
+              "BuildKRRSpectralCharacters(", m, ")...\n");
+    fi;
+    sd := BuildKRRSpectralCharacters(m);
+    # sd.group is a fresh EmUnimodGroup(m); sd.idx is its BuildSimpleIndex.
+    # We need to align G's class indices with sd.idx's class indices,
+    # and convert h in G to h in sd.group for trace_on_W queries.
+    #
+    # Three cases:
+    # (1) G IS sd.group (same GAP instance) — no work needed.
+    # (2) G is an isomorphic matrix group with the same generator set
+    #     (e.g. caller passed a fresh EmUnimodGroup(m)) — same matrices
+    #     give an identity element-level "translation".
+    # (3) G is in a different family (EPlusGroup, IsomorphismPcGroup
+    #     image) — need a proper isomorphism. Use EmEPlusTranslateAgainst
+    #     when G is EPlusGroup-shaped, otherwise GAP's IsomorphismGroups.
+    if G = sd.group then
+        return rec(
+            trace_on_W := sd.trace_on_W,
+            epsilon    := function(g1, g2, a, b) return 1; end,
+            spectral_data := sd
+        );
+    fi;
+    # Same matrix group representation? Test by generator-set equality.
+    sd_gens := GeneratorsOfGroup(sd.group);
+    G_gens := GeneratorsOfGroup(G);
+    same_underlying_group := Length(sd_gens) = Length(G_gens);
+    if same_underlying_group then
+        for i in [1..Length(sd_gens)] do
+            if sd_gens[i] <> G_gens[i] then
+                same_underlying_group := false;
+                break;
+            fi;
+        od;
+    fi;
+    if same_underlying_group then
+        # Generators match — elements are interchangeable as F2 matrices.
+        # Just remap class indices.
+        em_classes := sd.idx.classes;
+        g_to_em_class := [];
+        for k_g in [1..Length(idx.reps)] do
+            k_eu := fail;
+            for j in [1..Length(em_classes)] do
+                if idx.reps[k_g] in em_classes[j] then
+                    k_eu := j;
+                    break;
+                fi;
+            od;
+            if k_eu = fail then
+                Error("BuildKRRIntertwinerData: G class ", k_g,
+                      " rep ", idx.reps[k_g],
+                      " not found in any spectral idx class. ",
+                      "(EmUnimodGroup classes may have shifted ordering.)");
+            fi;
+            Add(g_to_em_class, k_eu);
+        od;
+        # h-level: identity, since the underlying matrix representation is shared.
+        translate_h := h -> h;
+        return rec(
+            trace_on_W := function(class_idx, irrep_idx, h)
+                return sd.trace_on_W(g_to_em_class[class_idx], irrep_idx,
+                                      translate_h(h));
+            end,
+            epsilon    := function(g1, g2, a, b) return 1; end,
+            spectral_data := sd,
+            g_to_em_class := g_to_em_class
+        );
+    fi;
+    # Different family. Try EmEPlusTranslateAgainst if applicable.
+    if IsBoundGlobal("EmEPlusTranslateAgainst")
+       and IsBoundGlobal("EPlusGroup")
+       and Order(G) = Order(EPlusGroup(m)) then
+        tr_rec := EmEPlusTranslateAgainst(m, G, sd.group);
+        em_classes := sd.idx.classes;
+        g_to_em_class := [];
+        for k_g in [1..Length(idx.reps)] do
+            k_eu := fail;
+            for j in [1..Length(em_classes)] do
+                if Image(tr_rec.psi_inv, idx.reps[k_g]) in em_classes[j] then
+                    k_eu := j;
+                    break;
+                fi;
+            od;
+            if k_eu = fail then
+                Error("BuildKRRIntertwinerData: G class ", k_g,
+                      " has no preimage in EmUnimodGroup(", m, ")'s classes ",
+                      "— iso may be wrong.");
+            fi;
+            Add(g_to_em_class, k_eu);
+        od;
+        return rec(
+            trace_on_W := function(class_idx, irrep_idx, h)
+                local cu, hu;
+                cu := g_to_em_class[class_idx];
+                hu := Image(tr_rec.psi_inv, h);
+                return sd.trace_on_W(cu, irrep_idx, hu);
+            end,
+            epsilon    := function(g1, g2, a, b) return 1; end,
+            spectral_data := sd,
+            translate := tr_rec,
+            g_to_em_class := g_to_em_class
+        );
+    fi;
+    # Fallback: G is neither sd.group nor EPlusGroup(m). Use lite mode.
+    if verbose then
+        Print("[BuildKRRIntertwinerData] G is not EmUnimodGroup(", m,
+              ") or EPlusGroup(", m,
+              "); falling back to lite mode for trace_on_W.\n");
+    fi;
+    return _KRRI_BuildLiteCallables(idx);
+end;;
+
+# "Sparse spectral" mode: at m = 5 the dense matrix is 65536x65536 per
+# h; use `BuildKRRSpectralCharactersSparse(m)` which has the same record
+# shape as the dense version but computes traces via the closed-form
+# Schur sum (krr_spectral_characters_sparse.g). At m = 7 the sparse
+# path needs the Gauss-sum branch (also stubbed); for now we fall back
+# to lite at m = 7.
+_KRRI_BuildSparseSpectralCallables := function(m, G, idx, verbose)
+    local sd;
+    if m = 7 then
+        if verbose then
+            Print("[BuildKRRIntertwinerData] m = 7: sparse_spectral not yet ",
+                  "available (Gauss-sum path is future work); falling back ",
+                  "to lite mode. Per the T4a research note (Section 3.2), ",
+                  "this is the mathematically correct choice for ω = 0.\n");
+        fi;
+        return _KRRI_BuildLiteCallables(idx);
+    fi;
+    if not IsBoundGlobal("BuildKRRSpectralCharactersSparse") then
+        Error("BuildKRRIntertwinerData: spectral_source = \"sparse_spectral\" ",
+              "requires `BuildKRRSpectralCharactersSparse` to be in scope. ",
+              "Read(\"krr_spectral_characters_sparse.g\") first.");
+    fi;
+    if verbose then
+        Print("[BuildKRRIntertwinerData] m = ", m,
+              ": building sparse spectral data via ",
+              "BuildKRRSpectralCharactersSparse(", m, ")...\n");
+    fi;
+    sd := BuildKRRSpectralCharactersSparse(m);
+    if G = sd.group then
+        return rec(
+            trace_on_W := sd.trace_on_W,
+            epsilon    := function(g1, g2, a, b) return 1; end,
+            spectral_data := sd
+        );
+    fi;
+    # G ≠ sd.group: defer to the established translation layer
+    # (TranslateSpectralDataToEPlus). This requires em_eplus_translate.g
+    # to be loaded.
+    if not IsBoundGlobal("TranslateSpectralDataToEPlus") then
+        Error("BuildKRRIntertwinerData: G is not the EmUnimodGroup(", m,
+              ") instance held by the spectral builder, AND ",
+              "`TranslateSpectralDataToEPlus` (the family-translation ",
+              "bridge) is not bound. Read(\"em_eplus_translate.g\") first.");
+    fi;
+    sd := TranslateSpectralDataToEPlus(sd, G);
+    return rec(
+        trace_on_W := sd.trace_on_W,
+        epsilon    := sd.epsilon,    # already wrapped to ε ≡ 1 by translate
+        spectral_data := sd
+    );
+end;;
+
+
+# ============================================================
+# Build the epsilon callable. For ω = 0 (the K-4a CT case) this is
+# constant 1. For ω ≠ 0 we wire in V-1's `EpsilonOmegaPhase` (#14)
+# if it is in scope; otherwise raise.
+# ============================================================
+
+_KRRI_BuildEpsilon := function(omega_vec, G, m, verbose)
+    if omega_vec = fail or _KRRI_IsZeroVec(omega_vec) then
+        if verbose then
+            Print("[BuildKRRIntertwinerData] omega = 0: epsilon ≡ 1 ",
+                  "(CGR CT-gauge per research note §3.2).\n");
+        fi;
+        return function(g1, g2, a, b) return 1; end;
+    fi;
+    if not IsBoundGlobal("EpsilonOmegaPhase") then
+        Error("BuildKRRIntertwinerData: omega_vec is non-zero but ",
+              "`EpsilonOmegaPhase` (V-1, #14) is not in scope. ",
+              "Read(\"epsilon_omega_phase.g\") first, or omit omega_vec ",
+              "for the omega = 0 baseline.");
+    fi;
+    # Delegate to V-1. V-1's exact signature may evolve; we pass the
+    # raw arguments and let it interpret `omega_vec` against G.
+    return function(g1, g2, a, b)
+        return EpsilonOmegaPhase(omega_vec, G, m, g1, g2, a, b);
+    end;
+end;;
+
+
+# ============================================================
+# The public entry point: BuildKRRIntertwinerData(m, G [, opts]).
+# ============================================================
+
+BuildKRRIntertwinerData := function(arg)
+    local m, G, user_opts, opts, idx, transport, callables, eps_callable,
+          out, spectral_source_resolved, omega_is_zero;
+    if Length(arg) < 2 then
+        Error("BuildKRRIntertwinerData: usage ",
+              "BuildKRRIntertwinerData(m, G [, opts]).");
+    fi;
+    m := arg[1];
+    G := arg[2];
+    user_opts := fail;
+    if Length(arg) >= 3 then
+        user_opts := arg[3];
+    fi;
+    if not IsInt(m) or m < 1 then
+        Error("BuildKRRIntertwinerData: m must be a positive integer; got ", m);
+    fi;
+    if not IsGroup(G) then
+        Error("BuildKRRIntertwinerData: G must be a GAP group; got ", G);
+    fi;
+    opts := _KRRI_NormaliseOpts(m, user_opts);
+    omega_is_zero :=
+        opts.omega_vec = fail or _KRRI_IsZeroVec(opts.omega_vec);
+
+    # Build the common index + transports. Lazy variant is required at
+    # m >= 7 (eager BuildSimpleIndex over ~16K classes is intractable);
+    # K-2c's lazy index / transports give O(1) per query.
+    if opts.verbose then
+        if opts.lazy then
+            Print("[BuildKRRIntertwinerData] Building lazy idx/transports ",
+                  "for |G| = ", Order(G), "...\n");
+        else
+            Print("[BuildKRRIntertwinerData] Building eager idx/transports ",
+                  "for |G| = ", Order(G), "...\n");
+        fi;
+    fi;
+    if opts.lazy then
+        if not IsBoundGlobal("BuildSimpleIndexLazy")
+           or not IsBoundGlobal("BuildTransportsLazy") then
+            Error("BuildKRRIntertwinerData: opts.lazy = true requires ",
+                  "`BuildSimpleIndexLazy` and `BuildTransportsLazy` ",
+                  "(from untwisted_modular_data.g) to be in scope.");
+        fi;
+        idx := BuildSimpleIndexLazy(G);
+        transport := BuildTransportsLazy(idx);
+    else
+        idx := BuildSimpleIndex(G);
+        transport := BuildTransports(idx);
+    fi;
+
+    # Resolve the spectral_source if "auto".
+    spectral_source_resolved := opts.spectral_source;
+    if spectral_source_resolved = "auto" then
+        spectral_source_resolved := _KRRI_ResolveAutoSource(m);
+    fi;
+
+    # Dispatch to the requested mode for trace_on_W.
+    if spectral_source_resolved = "lite" then
+        callables := _KRRI_BuildLiteCallables(idx);
+    elif spectral_source_resolved = "dense_spectral" then
+        callables := _KRRI_BuildDenseSpectralCallables(
+            m, G, idx, opts.verbose);
+    elif spectral_source_resolved = "sparse_spectral" then
+        callables := _KRRI_BuildSparseSpectralCallables(
+            m, G, idx, opts.verbose);
+    else
+        Error("BuildKRRIntertwinerData: internal: unrecognised ",
+              "resolved spectral_source = ", spectral_source_resolved);
+    fi;
+
+    # Build the epsilon callable. For ω = 0 this overrides any spectral-
+    # mode-bundled epsilon (which under T4a downscope is also ≡ 1, but
+    # we don't want the trace_on_W spectral wrapper to leak a different
+    # epsilon convention here).
+    if omega_is_zero then
+        eps_callable := function(g1, g2, a, b) return 1; end;
+    else
+        eps_callable := _KRRI_BuildEpsilon(
+            opts.omega_vec, G, m, opts.verbose);
+    fi;
+
+    out := rec(
+        group         := G,
+        idx           := idx,
+        transport     := transport,
+        trace_on_W    := callables.trace_on_W,
+        epsilon       := eps_callable,
+        source        := "krr-lattice",
+        source_detail := Concatenation(
+            "spectral_source=", spectral_source_resolved,
+            ", omega_is_zero=", String(omega_is_zero)),
+        m             := m,
+        omega_is_zero := omega_is_zero,
+        omega_vec     := opts.omega_vec,
+        spectral_source_resolved := spectral_source_resolved
+    );
+    if callables.spectral_data <> fail then
+        out.spectral_data := callables.spectral_data;
+    fi;
+    if IsBound(callables.translate) then
+        out.translate := callables.translate;
+    fi;
+    if IsBound(callables.g_to_em_class) then
+        out.g_to_em_class := callables.g_to_em_class;
+    fi;
+
+    if opts.verbose then
+        Print("[BuildKRRIntertwinerData] Done. source_detail = ",
+              out.source_detail, "\n");
+    fi;
+    return out;
+end;;
+
+
+Print("Loaded build_krr_intertwiner_data.g (K-4a-T4b, #188).\n");
