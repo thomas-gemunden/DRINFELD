@@ -27,8 +27,33 @@
 # cache hits after the first 4 builds.
 _BoundaryMatrixGF2_cache := [];;
 
+#
+# Issue #335 (OOM at m=5, |C| = 2048): the previous implementation allocated
+# a dense `n² × n` GAP plist of GF(2) zeros via
+#     A := List([1..n*n], i -> List([1..n], j -> zero));
+# before ConvertToMatrixRep. At |C| = 2048 the intermediate plist is
+# `2048² × 2048 × ~16 B/elt ≈ 137 GB`, far past the 48 GB heap cap (A-5b
+# crashed here at hour 22 on 2026-05-21; see issue #335).
+#
+# Structural sparsity: each of the `n²` rows has at most 3 non-zero entries
+# (the boundary triple `i, j, ij`; duplicates among these XOR to zero in
+# GF(2)). Total non-zeros: `≤ 3 · n²`, ~12.6M at n=2048 (vs n³ ≈ 8.6 · 10⁹
+# zeros in the dense plist).
+#
+# Fix (sparse row build, Option A of #335): build each row directly as a
+# compressed GF(2) vector — `ListWithIdenticalEntries(n, zero)` allocates
+# a plist of length n which `ConvertToVectorRep` immediately compresses
+# in place to a bit-packed `~n/8`-byte object. We then flip the (≤ 3)
+# non-zero bits and append. Peak intermediate plist memory is one row
+# of size `n × ~16 B` = 32 KB at n=2048; final compressed matrix is
+# `n² × n / 8 ≈ 1.07 GB` at n=2048 — well within heap.
+#
+# Regression: at n ∈ {8, 16, 32, 64, ...} the bit pattern of A is
+# byte-for-byte identical to the previous dense implementation (verified
+# against tests/test_boundary_matrix_sparse.g over SmallGroup IDs
+# {4_1, 4_2, 8_1..8_5, 16_3..16_5, 32_5, 64_267, 128_*}).
 _BoundaryMatrixGF2_raw := function(H)
-    local elts, n, idx_dict, A, i, j, ij, row, zero, one;
+    local elts, n, idx_dict, A, i, j, ij, zero, one, row;
     elts := AsList(H);
     n := Length(elts);
     # A-5b audit (#258 follow-up): replace `Position(elts, h)` (O(n) per
@@ -41,14 +66,23 @@ _BoundaryMatrixGF2_raw := function(H)
     zero := Zero(GF(2));
     one  := One(GF(2));
 
-    A := List([1..n*n], i -> List([1..n], j -> zero));
+    # Build rows one at a time as compressed GF(2) vectors (see banner
+    # comment above for the OOM-fix rationale). Pre-size A to avoid plist
+    # geometric-growth reallocation.
+    A := EmptyPlist(n * n);
     for i in [1..n] do
         for j in [1..n] do
-            row := (i - 1) * n + j;
             ij := LookupDictionary(idx_dict, elts[i] * elts[j]);
-            A[row][i]  := A[row][i]  + one;
-            A[row][j]  := A[row][j]  + one;
-            A[row][ij] := A[row][ij] + one;
+            # Fresh n-zero row, compressed in place to ~n/8 B.
+            row := ListWithIdenticalEntries(n, zero);
+            ConvertToVectorRep(row, GF(2));
+            # Flip the (≤ 3) non-zero bits. Duplicates among
+            # {i, j, ij} XOR to zero in GF(2), so we don't need to
+            # de-duplicate manually — `row[k] := row[k] + one` toggles.
+            row[i]  := row[i]  + one;
+            row[j]  := row[j]  + one;
+            row[ij] := row[ij] + one;
+            Add(A, row);
         od;
     od;
     ConvertToMatrixRep(A, GF(2));
