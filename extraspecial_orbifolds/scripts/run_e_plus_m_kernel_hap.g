@@ -89,6 +89,11 @@ Read("transgression_per_generator_brw.g");
 # transgression_resume.g defines PersistGenerator / LoadResumeState /
 # TransgressionKernelResumable. Lives in scripts/.
 Read("transgression_resume.g");
+# solver/orbit_cache_persist.g defines SaveOrbitCache / LoadOrbitCache for
+# the per-BRW-orbit cocycle-basis caches (issue #336). At m=5 the cache
+# build takes ~15 h; persisting them lets a crashed/killed run resume
+# without redoing that work.
+Read("solver/orbit_cache_persist.g");
 
 if m = 7 then
     if not IsBoundGlobal("LHSResolutionEPlus") then
@@ -424,9 +429,17 @@ od;
 # solver/snf_wrapper.g for downstream consumers that need per-class
 # sibling caches (e.g. the proposed perf-4' transgression-matrix
 # re-architecture). See #277 for rationale.
+#
+# Disk persistence (issue #336): each orbit's cache is persisted to
+#   <OutDir>/orbit_<orbit_idx>_cache.g
+# right after it's built. On relaunch we try LoadOrbitCache first; on
+# fingerprint match we skip the rebuild. This is critical at m=5 where
+# the full orbit-cache phase takes ~15 h.
 Print("Building per-orbit cocycle-basis caches (rep-only)...\n");
 t_caches := Runtime();;
 orbit_caches := [];;
+n_loaded_from_disk := 0;;
+n_built_fresh := 0;;
 for orb_info in orbits_data do
     rep := Representative(classes[orb_info.start_idx]);
     C := Centralizer(G, rep);
@@ -435,39 +448,76 @@ for orb_info in orbits_data do
           ", rep order = ", Order(rep),
           ", orbit size ", Length(orb_info.orbit), ") ... ");
     t_one := Runtime();
-    if IsOne(rep) then
-        # Identity class: c_g(h, k) = omega(id, h, k) - omega(h, id, k)
-        # + omega(h, k, id) = 0 for normalized omega. Build an
-        # all-zero table without the n²·k Syzygy chain.
-        cache_elts := AsList(C);
-        cache_n := Length(cache_elts);
-        cache_table := List([1..cache_n * cache_n],
-                            r -> List([1..k], i -> 0));
-        ConvertToMatrixRep(cache_table);
-        cache_idx_map := NewDictionary(cache_elts[1], true, cache_elts);
-        for cache_a in [1..cache_n] do
-            AddDictionary(cache_idx_map, cache_elts[cache_a], cache_a);
-        od;
-        # GF(2) view: also all zero.
-        cache_table_gf2 := List([1..cache_n * cache_n],
-                                 r -> List([1..k], i -> Zero(GF(2))));
-        ConvertToMatrixRep(cache_table_gf2, GF(2));
-        # Identity class is a singleton orbit at m=2, 3, 5, 7; no
-        # sibling transport needed.
-        Add(orbit_caches, rec(C := C, table := cache_table,
+
+    # Try to load from disk first.
+    cache_path := Concatenation(OutDir, "/orbit_",
+                                 String(orb_info.start_idx),
+                                 "_cache.g");
+    expected_fp := _OrbitCacheFingerprint(setup, rep, m);
+    loaded_cache := LoadOrbitCache(cache_path, expected_fp, G);
+
+    if loaded_cache <> fail then
+        Add(orbit_caches, loaded_cache);
+        # Pre-populate snf_wrapper.g's module-level cache too so any
+        # downstream BuildPerClassCocycleBasis call (e.g. from a
+        # sibling-transport path) hits the loaded result.
+        PopulateBasisCacheFromLoaded(setup, rep, loaded_cache);
+        n_loaded_from_disk := n_loaded_from_disk + 1;
+        Print((Runtime() - t_one) / 1000., " s (LOADED from ", cache_path, ")\n");
+    else
+        if IsOne(rep) then
+            # Identity class: c_g(h, k) = omega(id, h, k) - omega(h, id, k)
+            # + omega(h, k, id) = 0 for normalized omega. Build an
+            # all-zero table without the n²·k Syzygy chain.
+            cache_elts := AsList(C);
+            cache_n := Length(cache_elts);
+            cache_table := List([1..cache_n * cache_n],
+                                r -> List([1..k], i -> 0));
+            ConvertToMatrixRep(cache_table);
+            cache_idx_map := NewDictionary(cache_elts[1], true, cache_elts);
+            for cache_a in [1..cache_n] do
+                AddDictionary(cache_idx_map, cache_elts[cache_a], cache_a);
+            od;
+            # GF(2) view: also all zero.
+            cache_table_gf2 := List([1..cache_n * cache_n],
+                                     r -> List([1..k], i -> Zero(GF(2))));
+            ConvertToMatrixRep(cache_table_gf2, GF(2));
+            # Identity class is a singleton orbit at m=2, 3, 5, 7; no
+            # sibling transport needed.
+            fresh_cache := rec(C := C, table := cache_table,
                                table_gf2 := cache_table_gf2,
                                elts := cache_elts, n := cache_n,
-                               idx_map := cache_idx_map));
-        Print((Runtime() - t_one) / 1000., " s (degenerate, identity class)\n");
-    else
-        # Non-identity orbit: build the rep cache only. Sibling transport
-        # is not consumed by PerVecTransgressionShared (see header comment
-        # above this block).
-        Add(orbit_caches, BuildPerClassCocycleBasis(setup, rep, C));
-        Print((Runtime() - t_one) / 1000., " s (rep-only)\n");
+                               idx_map := cache_idx_map);
+            Add(orbit_caches, fresh_cache);
+            n_built_fresh := n_built_fresh + 1;
+            Print((Runtime() - t_one) / 1000., " s (degenerate, identity class)");
+        else
+            # Non-identity orbit: build the rep cache only. Sibling transport
+            # is not consumed by PerVecTransgressionShared (see header comment
+            # above this block).
+            fresh_cache := BuildPerClassCocycleBasis(setup, rep, C);
+            Add(orbit_caches, fresh_cache);
+            n_built_fresh := n_built_fresh + 1;
+            Print((Runtime() - t_one) / 1000., " s (rep-only)");
+        fi;
+        # Persist the freshly-built cache to disk (issue #336). We do
+        # this even for the identity orbit so the on-disk state covers
+        # the full orbit list uniformly. Errors during save are
+        # surfaced but do not crash the run — the cache is still in
+        # memory and usable for this session.
+        catch_save := CALL_WITH_CATCH(SaveOrbitCache,
+            [cache_path, orb_info.start_idx, m, setup, rep, fresh_cache]);
+        if catch_save[1] = false then
+            Print(" [WARN: SaveOrbitCache failed: ", catch_save[2], "]");
+        else
+            Print(" [persisted to ", cache_path, "]");
+        fi;
+        Print("\n");
     fi;
 od;
-Print("Per-orbit caches wall: ", (Runtime() - t_caches) / 1000., " s total\n");
+Print("Per-orbit caches wall: ", (Runtime() - t_caches) / 1000.,
+      " s total (loaded ", n_loaded_from_disk, ", built ",
+      n_built_fresh, ")\n");
 
 # ----------------------------------------------------------------------
 # Per-generator sweep using shared caches.
