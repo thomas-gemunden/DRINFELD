@@ -239,6 +239,32 @@ _K4A_SecsSince := function(t0)
     return (Runtime() - t0) / 1000.0;
 end;;
 
+# Issue #333 followup: D-VAN's minimum-detecting-family EA indices per m.
+# K-4a's original single-EA choice (`MaximalElementaryAbelian_E_plus(m).subgroup`,
+# i.e. `candidates[1]`) is NOT enough for injectivity at m >= 3 — the m=3
+# sweep showed 11/36 basis vectors of H^3(E_+(3); U(1)) restrict to zero on
+# the single chosen E (kernel includes e_4, 8, 12, 14, 17, 20, 22, 23, 31,
+# 32, 33). D-VAN's per-m minimum family (greedy-tightened in PR #320, with
+# final_ker = 1 verified at m <= 5) does detect every non-zero cocycle.
+#
+# These indices are into `BuildRestrictionMatrices(m, "hap").H_EA_list`.
+_K4A_DVAN_EA_FAMILIES := rec();;
+_K4A_DVAN_EA_FAMILIES.("2") := [3, 2, 5];;
+_K4A_DVAN_EA_FAMILIES.("3") := [4, 6, 7, 11, 16, 22];;
+# m=5: PR #320 minimum-detecting-family, indices into BuildRestrictionMatrices(5, "hap").H_EA_list.
+# Verified `final_ker = 1` at m=5 via streaming greedy + drop-one tightening.
+_K4A_DVAN_EA_FAMILIES.("5") := [33, 48, 54, 57, 70, 76, 88, 89, 109];;
+# m=7: TBD pending D-VAN m=7 production run completion (in flight).
+
+_K4A_GetDVANEAFamily := function(m)
+    local key;
+    key := String(m);
+    if not IsBound(_K4A_DVAN_EA_FAMILIES.(key)) then
+        return fail;
+    fi;
+    return _K4A_DVAN_EA_FAMILIES.(key);
+end;;
+
 # Given an `H` (abelian subgroup) and a restricted intertwiner_data,
 # compute the CT modular data and the H-untwisted modular data, then
 # call JointPermutationMatcher. Return rec(is_abelian, is_coboundary,
@@ -246,7 +272,16 @@ end;;
 _K4A_ClassifyAbelianBranch := function(restricted, H)
     local t0, modular_ct, modular_untwisted, match;
     t0 := Runtime();
-    modular_ct := ComputeCTModularData(restricted, H);
+    # Issue #333: at omega != 0 the projective consumption downstream of
+    # RestrictTraceOnWToSubgroupProjective produces a (S, T) that does
+    # not match the ground-truth Z(Vec^{omega|_H}_H) modular data. When
+    # _K4A_RestrictForBranch attaches `modular_ct_override` (computed
+    # via direct ComputeModularData(H, omega|_H, val, exp)), prefer it.
+    if IsBound(restricted.modular_ct_override) then
+        modular_ct := restricted.modular_ct_override;
+    else
+        modular_ct := ComputeCTModularData(restricted, H);
+    fi;
     modular_untwisted := ComputeUntwistedModularData(H);
     # Matcher arg order doesn't matter (it's symmetric in the (S, T)
     # comparison up to relabelling), but for readability we put the
@@ -274,7 +309,13 @@ end;;
 _K4A_ClassifyNonAbelianBranch := function(restricted, H, classifier)
     local t0, modular_ct, class_res;
     t0 := Runtime();
-    modular_ct := ComputeCTModularData(restricted, H);
+    # Issue #333: prefer ground-truth (S, T) from direct ComputeModularData
+    # over the broken projective consumption. See _K4A_RestrictForBranch.
+    if IsBound(restricted.modular_ct_override) then
+        modular_ct := restricted.modular_ct_override;
+    else
+        modular_ct := ComputeCTModularData(restricted, H);
+    fi;
     class_res := classifier(modular_ct.S, DiagonalOfMat(modular_ct.T));
     return rec(
         is_abelian      := false,
@@ -282,6 +323,68 @@ _K4A_ClassifyNonAbelianBranch := function(restricted, H, classifier)
         class_idx       := class_res.class_idx,
         pi              := class_res.pi,
         all_matches     := class_res.all_matches,
+        wall_seconds    := _K4A_SecsSince(t0)
+    );
+end;;
+
+
+# Issue #333 followup: E-branch classifier over D-VAN's minimum detecting
+# family of maximal EAs. Replaces the single-EA `_K4A_ClassifyAbelianBranch`
+# when `opts.lattice_source = true` and `omega_vec != 0`. At single-EA the
+# kernel of restriction to {E_chosen, D_8, Q_8} is non-trivial at m >= 3
+# (e_31, e_32, e_33 at m=3 are in the kernel — verified empirically),
+# producing false-negative `trivial` verdicts. Multi-EA over D-VAN's per-m
+# minimum family has trivial kernel (D-VAN at m <= 5 has `final_ker = 1`).
+#
+# Inputs:
+#   opts          : the K4aClassify opts record (must have lattice_source +
+#                   omega_vec set and non-zero for this path to trigger).
+#   m             : positive integer.
+#   ea_indices    : list of integers, D-VAN EA indices into
+#                   `BuildRestrictionMatrices(m, "hap").H_EA_list`.
+#
+# Returns: rec(is_abelian := true, is_coboundary := AND over all EAs,
+# per_ea_results := [list of {ea_idx, is_coboundary} recs], wall_seconds,
+# family_source := "dvan-min-family").
+_K4A_ClassifyEBranchMulti := function(opts, m, ea_indices)
+    local t0, restmats, setup_G, omega_G, omega_H_fn, val, expon,
+          per_ea, is_coboundary_all, ea_idx, H_EA, modular_ct,
+          modular_untwisted, match;
+    t0 := Runtime();
+    restmats := BuildRestrictionMatrices(m, "hap");
+    setup_G := restmats.setup_G;
+    omega_G := StandardCocycleOf(setup_G, opts.omega_vec);
+    omega_H_fn := function(x, y, z) return omega_G(x, y, z); end;
+    val := Gcd(Gcd(opts.omega_vec), setup_G.exponent);
+    expon := setup_G.exponent / val;
+    per_ea := [];
+    is_coboundary_all := true;
+    for ea_idx in ea_indices do
+        H_EA := restmats.H_EA_list[ea_idx];
+        modular_ct := ComputeModularData(H_EA, omega_H_fn, val, expon);
+        modular_untwisted := ComputeUntwistedModularData(H_EA);
+        match := JointPermutationMatcher(
+            modular_untwisted.S, modular_untwisted.T,
+            modular_ct.S, modular_ct.T);
+        Add(per_ea, rec(
+            ea_idx        := ea_idx,
+            ea_order      := Order(H_EA),
+            is_coboundary := match.ok
+        ));
+        if not match.ok then
+            is_coboundary_all := false;
+        fi;
+        if opts.verbose then
+            Print("  [_K4A_ClassifyEBranchMulti] EA #", ea_idx,
+                  " (|EA| = ", Order(H_EA),
+                  "): is_coboundary = ", match.ok, "\n");
+        fi;
+    od;
+    return rec(
+        is_abelian      := true,
+        is_coboundary   := is_coboundary_all,
+        per_ea_results  := per_ea,
+        family_source   := "dvan-min-family",
         wall_seconds    := _K4A_SecsSince(t0)
     );
 end;;
@@ -360,6 +463,8 @@ _K4A_OmegaIsZero := function(omega_vec)
 end;;
 
 _K4A_RestrictForBranch := function(opts, data, H_subgroup)
+    local restricted, parent_G, setup_G_full, omega_G_cocycle, omega_H,
+          val, expon;
     if opts.lattice_source
        and (not _K4A_OmegaIsZero(opts.omega_vec))
        and IsBoundGlobal("RestrictTraceOnWToSubgroupProjective") then
@@ -367,7 +472,28 @@ _K4A_RestrictForBranch := function(opts, data, H_subgroup)
             Print("  [_K4A_RestrictForBranch] routing through ",
                   "RestrictTraceOnWToSubgroupProjective (#328)\n");
         fi;
-        return RestrictTraceOnWToSubgroupProjective(data, H_subgroup);
+        restricted := RestrictTraceOnWToSubgroupProjective(data, H_subgroup);
+        # Issue #333: the projective trace consumed by
+        # ComputeCTModularData(restricted, H) produces (S, T) that does
+        # NOT match any stored Aut-orbit rep via JointPermutationMatcher.
+        # The ground-truth Z(Vec^{omega|_H}_H) (S, T), computed directly
+        # via StandardCocycleOf + ComputeModularData, DOES match. Attach
+        # it here as `modular_ct_override` so the abelian and non-abelian
+        # branch classifiers consume the correct (S, T).
+        parent_G := data.group;
+        if opts.verbose then
+            Print("  [_K4A_RestrictForBranch] computing ground-truth ",
+                  "(S, T) via ComputeModularData(H, omega|_H, val, exp) ",
+                  "(#333)\n");
+        fi;
+        setup_G_full := SetupCohomology3(parent_G);
+        omega_G_cocycle := StandardCocycleOf(setup_G_full, opts.omega_vec);
+        omega_H := function(x, y, z) return omega_G_cocycle(x, y, z); end;
+        val := Gcd(Gcd(opts.omega_vec), setup_G_full.exponent);
+        expon := setup_G_full.exponent / val;
+        restricted.modular_ct_override := ComputeModularData(
+            H_subgroup, omega_H, val, expon);
+        return restricted;
     fi;
     return RestrictTraceOnWToSubgroup(data, H_subgroup);
 end;;
@@ -651,16 +777,29 @@ K4aClassify := function(arg)
     # At m < 5 the legacy path (BuildIntertwinerDataUntwisted +
     # RestrictTraceOnWToSubgroup) is retained — it is the K-4a-T7
     # anchor and changing it would invalidate #201's regression test.
-    if m >= 5 then
+    # Issue #333 followup: at omega != 0 the single-EA E branch has a
+    # non-trivial kernel (e.g. e_31, e_32, e_33 at m=3 give false-negative
+    # `trivial` verdicts). Route to multi-EA classifier over D-VAN's
+    # minimum detecting family when a hardcoded family is available.
+    if opts.lattice_source
+       and (not _K4A_OmegaIsZero(opts.omega_vec))
+       and _K4A_GetDVANEAFamily(m) <> fail then
+        if opts.verbose then
+            Print("  [E branch] routing to multi-EA classifier over ",
+                  "D-VAN minimum family at m = ", m, " (issue #333).\n");
+        fi;
+        E_class := _K4A_ClassifyEBranchMulti(opts, m, _K4A_GetDVANEAFamily(m));
+    elif m >= 5 then
         data_E := TranslateSpectralDataToEPlus(sparse_data, ea_rec.parent);
         restricted_E := RestrictTraceOnWToSubgroupHonourParent(
             data_E, ea_rec.subgroup);
+        E_class := _K4A_ClassifyAbelianBranch(restricted_E, ea_rec.subgroup);
     else
         data_E := _K4A_BuildBranchData(opts, m, ea_rec.parent);
         restricted_E := _K4A_RestrictForBranch(opts, data_E,
                                                 ea_rec.subgroup);
+        E_class := _K4A_ClassifyAbelianBranch(restricted_E, ea_rec.subgroup);
     fi;
-    E_class := _K4A_ClassifyAbelianBranch(restricted_E, ea_rec.subgroup);
     t_E_branch := _K4A_SecsSince(t_branch_0);
     Print("  E-branch result: is_coboundary = ", E_class.is_coboundary,
           " (", t_E_branch, " s)\n");
