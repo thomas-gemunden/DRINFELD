@@ -60,6 +60,12 @@ if K2C_SELF = fail or K2C_SELF = "stream" then
     Error("test_k2c_lazy_transports.g: INPUT_FILENAME() unavailable; ",
           "Read the file by its absolute path.");
 fi;
+# Issue #325: when this file is Read via a relative path,
+# INPUT_FILENAME() returns the relative path as-given and the slicing
+# below would produce wrong/empty results. Promote to absolute first.
+if Length(K2C_SELF) > 0 and K2C_SELF[1] <> '/' then
+    K2C_SELF := Filename(DirectoryCurrent(), K2C_SELF);
+fi;
 K2C_SELFDIR := K2C_SELF{
     [1..Length(K2C_SELF) - Length("/test_k2c_lazy_transports.g")]};;
 K2C_SCRIPTSDIR := K2C_SELFDIR{

@@ -25,6 +25,12 @@ if _SCRIPT_SELF = fail or _SCRIPT_SELF = "stream" then
     Error("test_em_eplus_translate_pipeline.g: INPUT_FILENAME() ",
           "unavailable; Read by absolute path.");
 fi;
+# Issue #325: when this file is Read via a relative path,
+# INPUT_FILENAME() returns the relative path as-given and the slicing
+# below would produce wrong/empty results. Promote to absolute first.
+if Length(_SCRIPT_SELF) > 0 and _SCRIPT_SELF[1] <> '/' then
+    _SCRIPT_SELF := Filename(DirectoryCurrent(), _SCRIPT_SELF);
+fi;
 _SCRIPT_SELFDIR := _SCRIPT_SELF{
     [1..Length(_SCRIPT_SELF)
        - Length("/test_em_eplus_translate_pipeline.g")]};;

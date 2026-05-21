@@ -37,6 +37,12 @@ if _SCRIPT_SELF = fail or _SCRIPT_SELF = "stream" then
           "invoke this test via an absolute Read(\"/.../tests/test_build_",
           "krr_intertwiner_data.g\").");
 fi;
+# Issue #325: when this file is Read via a relative path,
+# INPUT_FILENAME() returns the relative path as-given and the slicing
+# below would produce wrong/empty results. Promote to absolute first.
+if Length(_SCRIPT_SELF) > 0 and _SCRIPT_SELF[1] <> '/' then
+    _SCRIPT_SELF := Filename(DirectoryCurrent(), _SCRIPT_SELF);
+fi;
 _SELF_DIR := _SCRIPT_SELF{
     [1..Length(_SCRIPT_SELF)
        - Length("/test_build_krr_intertwiner_data.g")]};;
