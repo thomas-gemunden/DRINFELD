@@ -68,11 +68,48 @@ fi;;
 
 # ----------------------------------------------------------------------
 # Setup: for a group G, get the H^3(G; Z/exp) data.
+#
+# Resolution dispatch (issue #339):
+#   * Abelian groups go through `ResolutionAbelianGroup(G, 4)` — HAP's
+#     specialised builder that uses the elementary-abelian structure
+#     (tensor product of small cyclic resolutions). Cell counts grow
+#     polynomially in rank, not as |G|^4. At rank-8 (|G| = 256)
+#     `ResolutionFiniteGroup(G, 4)` OOMs (256^4 ~ 4.3B cells in the
+#     bar resolution), whereas `ResolutionAbelianGroup(G, 4)` finishes
+#     in < 1 min and < 4 GB heap. This is the per-EA hot path for the
+#     D-VAN m=7 streaming driver (each rank-8 EA needs an H-side
+#     context).
+#   * Non-abelian groups use `ResolutionFiniteGroup(G, 4)` as before.
+#
+# Math invariants preserved: H^*(G; M) is intrinsic to G and M, so the
+# choice of free ZG-resolution doesn't change cohomology groups,
+# torsion, or exponent. The hombasis / cyclebasis / cocyclebasis are
+# resolution-dependent representations of the same abstract subgroup,
+# but invariants like |ker(joint restriction)| (computed via SNF on
+# the augmented matrix) are basis-independent. Downstream callers in
+# detecting_family_restriction.g (RestrictionMatrixViaHAP and
+# _DETF_KernelOrderSNF) consume only hombasis / cyclebasis (for the
+# coordinate solve) and torsion, never cocyclebasis — so the dispatch
+# is transparent.
+#
+# CAVEAT: callers using `setup.UCT.cocyclebasis` (StandardCocycleOf
+# and related transgression_kernel.g helpers) on the abelian path will
+# see a different cocyclebasis representation than under the prior
+# `ResolutionFiniteGroup` path. In practice such callers only run on
+# the parent G = E_+(m) (non-abelian extraspecial 2-group), so they
+# are unaffected. If a caller passes an abelian group to
+# `StandardCocycleOf`, the result is still mathematically valid (a
+# cocycle on the abelian group) but its chain-level integer
+# representation differs from the prior `ResolutionFiniteGroup` path.
 # ----------------------------------------------------------------------
 
 SetupCohomology3 := function(G)
     local R, K, UCT;
-    R := ResolutionFiniteGroup(G, 4);
+    if IsAbelian(G) then
+        R := ResolutionAbelianGroup(G, 4);
+    else
+        R := ResolutionFiniteGroup(G, 4);
+    fi;
     K := TensorWithIntegers(R);
     UCT := UniversalCoefficientsTheorem(K, 3);
     return rec(group := G, R := R, K := K, UCT := UCT,
