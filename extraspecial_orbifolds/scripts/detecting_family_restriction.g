@@ -119,6 +119,76 @@ end;;
 #   exp_G/exp_H — recovers the prior partial-fix arithmetic exactly.
 #   For exp_G | exp_H this gives L = exp_H, rescale_G = exp_H/exp_G,
 #   rescale_H = 1 — the new Q_8 case.
+# --- Fast GroupCohomologyFunctor (issue #329) -----------------------
+#
+# Drop-in replacement for `GroupCohomologyFunctor(K1, K2, phi, n)` that
+# takes PRE-COMPUTED UCT records for K1 and K2 instead of recomputing
+# them every call. Returns the same `F` matrix in the output rec.
+#
+# Why this matters (issue #329, root cause): src/modular_data.g's
+# `GroupCohomologyFunctor` body calls `UniversalCoefficientsTheorem`
+# on BOTH K1 and K2 every time. At m=5 LHS K_G has dim 286 at degree 3
+# and the cocyclebasis / lift step inside UCT (a 286-square matrix
+# inverse + SNF) takes ~15 s. At m=7 LHS K_G has dim 680 and the inner
+# UCT takes ~5 min. Since `RestrictionMatrixViaHAP` and the streaming
+# m=7 driver call `GroupCohomologyFunctor` once per EA against the
+# SAME setup_G.K, that UCT recomputation is the dominant per-EA cost.
+#
+# The fix: pass setup_G.UCT and ctx_H.UCT (already computed by
+# SetupCohomology3 / _DETF_BuildSetupG_LHS), skip the redundant UCT
+# work, and just do the cycle-basis solve.
+#
+# Empirically (m=5 LHS, EA of order 64):
+#   * GroupCohomologyFunctor + EquivariantChainMap: ~17 s per EA.
+#   * _FastGroupCohomologyFunctor + EquivariantChainMap: ~1 s per EA.
+#
+# Semantics: the original `GroupCohomologyFunctor` returns a rec with
+# `matrix := F, mapping := hphi, p := Lcm(m1,m2), m1, m2`. The
+# downstream `RestrictionMatrixViaHAP` only reads `gcf!.matrix`, so
+# we only need to compute that. The `s := NormalFormIntMat(Z1, 13)`
+# line in the original is computed but assigned to an unused local.
+# Safe to drop.
+_FastGroupCohomologyFunctor := function(UCT1, UCT2, phi, n)
+    local Z1, Z2, F, b, row, x;
+    Z1 := UCT1!.cyclebasis;
+    Z2 := UCT2!.cyclebasis;
+    # F[i] = coordinates of phi_*(Z1[i]) in basis Z2.
+    #
+    # Issue #329 (further speedup): use SolutionMat (rational solver) instead
+    # of SolutionIntMat. Z2 is a Z-basis of the integer cycle subspace, and
+    # phi_*(Z1[i]) is by construction in span_Z(Z2) (chain map preserves
+    # cycles, and the integer cycle subspace is Z2-spanned). The unique
+    # solution is therefore always integer. SolutionMat is ~10x faster than
+    # SolutionIntMat at m=5 LHS (51 ms vs 1000 ms for 41 RHSs).
+    #
+    # Defensive check: if any row is non-integer we have a deeper bug
+    # (e.g., phi not preserving cycles, or Z2 not spanning the cycle
+    # subspace over Z). Fall back to SolutionIntMat then (slow but exact).
+    F := [];
+    for b in Z1 do
+        row := SolutionMat(Z2, phi!.mapping(b, n));
+        if row = fail then
+            Error("_FastGroupCohomologyFunctor: SolutionMat returned fail ",
+                  "for image of Z1 entry; phi.mapping output is not in ",
+                  "span_Q(Z2).");
+        fi;
+        # Verify integer; otherwise fall back to SolutionIntMat for
+        # correctness (slow but exact).
+        if not ForAll(row, IsInt) then
+            row := SolutionIntMat(Z2, phi!.mapping(b, n));
+            if row = fail then
+                Error("_FastGroupCohomologyFunctor: SolutionIntMat ",
+                      "returned fail for image of Z1 entry; image is ",
+                      "not in span_Z(Z2).");
+            fi;
+        fi;
+        Add(F, row);
+    od;
+    return rec(matrix := F,
+               m1 := UCT1!.exponent,
+               m2 := UCT2!.exponent);
+end;;
+
 RestrictionMatrixViaHAP := function(setup_G, ctx_H, phi_HG)
     local R_G, K_G, UCT_G, exp_G, k_G, hombasis_G,
           R_H, K_H, UCT_H, exp_H, k_H, torsion_H, hombasis_H, hb_len_H,
@@ -160,7 +230,12 @@ RestrictionMatrixViaHAP := function(setup_G, ctx_H, phi_HG)
     rescale_H := L / exp_H;
 
     chainmap := TensorWithIntegers(EquivariantChainMap(R_H, R_G, phi_HG));
-    gcf := GroupCohomologyFunctor(K_H, K_G, chainmap, 3);
+    # Issue #329: use _FastGroupCohomologyFunctor with the already-
+    # computed UCT records (setup_G.UCT, ctx_H.UCT) instead of
+    # GroupCohomologyFunctor which recomputes UCT(K_G) on every call
+    # (~15 s at m=5 LHS, ~5 min at m=7 LHS, vs ~1 s and ~30 s for the
+    # actual chain-map mapping work).
+    gcf := _FastGroupCohomologyFunctor(UCT_H, UCT_G, chainmap, 3);
     F := gcf!.matrix;
     autmat := TransposedMat(F);
 
@@ -178,13 +253,28 @@ RestrictionMatrixViaHAP := function(setup_G, ctx_H, phi_HG)
         # reduce mod L, project onto hombasis_H_rescaled.
         hom_G_rescaled := List(hombasis_G[i], x -> x * rescale_G);
         image_modL := List(hom_G_rescaled * autmat, x -> x mod L);
-        sol := SolutionIntMat(aug_matrix, image_modL);
+        # Issue #329: use SolutionMat (rational) instead of SolutionIntMat.
+        # aug_matrix has integer rows (hombasis rescaled + L * I slack); the
+        # RHS is integer; the unique solution (in span_Q of aug_matrix's
+        # rows) is integer iff the system is solvable over Z. Defensive
+        # fallback to SolutionIntMat on non-integer solution.
+        sol := SolutionMat(aug_matrix, image_modL);
         if sol = fail then
             Error("RestrictionMatrixViaHAP: could not project image of ",
                   "hombasis_G[", i, "] onto hombasis_H_rescaled ",
                   "(L = ", L, "). Possible cause: phi is not actually ",
                   "a homomorphism, or hombasis_H doesn't span the right ",
                   "submodule of H^3(H; Z/L).");
+        fi;
+        if not ForAll(sol, IsInt) then
+            # SolutionMat gave a non-integer solution; fall back to
+            # SolutionIntMat for an exact integer answer.
+            sol := SolutionIntMat(aug_matrix, image_modL);
+            if sol = fail then
+                Error("RestrictionMatrixViaHAP: integer solve failed ",
+                      "after SolutionMat fallback for hombasis_G[", i,
+                      "] (L = ", L, ").");
+            fi;
         fi;
         col_coeffs := sol{[1..k_H]};
         for j in [1..k_H] do

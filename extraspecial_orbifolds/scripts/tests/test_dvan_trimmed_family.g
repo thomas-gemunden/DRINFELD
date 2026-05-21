@@ -268,8 +268,10 @@ fi;
 #   * Greedy convergence to final_ker = 1.
 #
 # We assert the BASIS-INDEPENDENT invariants at m ∈ {2, 3}; m=5
-# under TRIMMED_RUN_M5_LHS gate (~30-40 min cold, since LHS at m=5
-# is fast but the 112 per-EA chain maps still take ~15 min).
+# under TRIMMED_RUN_M5_LHS gate (~5-6 min cold post #329; was
+# ~30-40 min before #329's _FastGroupCohomologyFunctor +
+# SolutionMat optimization brought per-EA wall from ~17 s to
+# ~0.7 s).
 
 Print("\n--- T7: LHS-path cross-validation (issue #322) ---\n");
 
@@ -310,7 +312,11 @@ run_m5_lhs := IsBoundGlobal("TRIMMED_RUN_M5_LHS")
               and ValueGlobal("TRIMMED_RUN_M5_LHS") = true;;
 
 if run_m5_lhs then
-    Print("\n--- T7b: m=5 LHS cross-validation (~30-40 min cold) ---\n");
+    # Wall budget: ~5-6 min cold post #329 (was ~30-40 min before #329's
+    # _FastGroupCohomologyFunctor + SolutionMat optimization). Setup
+    # build ~50 s + 112 per-EA chain maps at ~0.7 s each ~= ~80 s; plus
+    # greedy + drop-one (~few minutes of SNF).
+    Print("\n--- T7b: m=5 LHS cross-validation (~5-6 min cold) ---\n");
     if not run_m5 then
         Print("  (set TRIMMED_RUN_M5 := true alongside to compare LHS ",
               "and HAP at m=5)\n");
