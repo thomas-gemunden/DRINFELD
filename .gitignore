@@ -35,3 +35,10 @@
 
 # Large canonical-block files for m >= 7 (multi-GB)
 extraspecial_orbifolds/computed/E_plus_7/structural/canonical_blocks.g
+
+# Driver runtime checkpoint / cache files (per-run, regeneratable).
+# kernel.g is the final shipped artefact and IS versioned; sweep_state.g
+# (per-generator resumability state) and orbit_<n>_cache.g (issue #336
+# per-BRW-orbit cocycle-basis caches) are local-only.
+computed/transgression/*/sweep_state.g
+computed/transgression/*/orbit_*_cache.g
