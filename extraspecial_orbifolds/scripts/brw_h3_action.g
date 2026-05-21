@@ -58,8 +58,8 @@ fi;
 
 H3MatrixOfAutomorphism := function(setup, phi)
     local R, K, UCT, exp, torsion, k, hombasis, hb_len,
-          chainmap, gcf, F, autmat, M_y, i, image_vec, j,
-          aug_matrix, sol, col_coeffs;
+          chainmap, F, autmat, M_y, i, image_vec, j,
+          aug_matrix, sol, col_coeffs, Z;
 
     R := setup.R;
     K := setup.K;
@@ -78,9 +78,30 @@ H3MatrixOfAutomorphism := function(setup, phi)
     # autmat := TransposedMat(F) so that phi^*(h) = h * autmat,
     # i.e. left-multiplication via "v^autmat" / row-times-matrix.
     # This matches the existing AutomorphismOrbits in src/modular_data.g.
+    #
+    # Issue #329: bypass GroupCohomologyFunctor's UCT recomputation
+    # (~15 s at m=5 LHS, ~5 min at m=7 LHS) by computing F directly
+    # from the cached UCT.cyclebasis. Same `F` matrix as before.
+    # Also: SolutionMat (rational) replaces SolutionIntMat — by
+    # construction `chainmap.mapping(Z[i], 3)` is in span_Z(Z) (chain
+    # maps preserve cycles, Z is a Z-basis of cycle subgroup), so the
+    # unique rational solution is integer. ~10x faster than
+    # SolutionIntMat at m=5; defensive fallback to SolutionIntMat
+    # only on non-integer answer.
     chainmap := TensorWithIntegers(EquivariantChainMap(R, R, phi));
-    gcf := GroupCohomologyFunctor(K, K, chainmap, 3);
-    F := gcf!.matrix;
+    Z := UCT.cyclebasis;
+    F := [];
+    for i in [1..Length(Z)] do
+        sol := SolutionMat(Z, chainmap!.mapping(Z[i], 3));
+        if sol = fail or not ForAll(sol, IsInt) then
+            sol := SolutionIntMat(Z, chainmap!.mapping(Z[i], 3));
+            if sol = fail then
+                Error("H3MatrixOfAutomorphism: integer solve failed for ",
+                      "Z[", i, "]; phi may not preserve cycles");
+            fi;
+        fi;
+        Add(F, sol);
+    od;
     autmat := TransposedMat(F);
 
     # Pre-build the augmented matrix for projecting any image_vec onto
@@ -93,16 +114,25 @@ H3MatrixOfAutomorphism := function(setup, phi)
             If_(r = c, exp, 0))));
 
     # M_y has columns = coordinates of phi^*(hombasis[i]) in hombasis.
+    # Issue #329: SolutionMat (rational) replaces SolutionIntMat. Fallback
+    # to SolutionIntMat only on non-integer answer.
     M_y := NullMat(k, k);
     for i in [1..k] do
         # phi^*(hombasis[i]) viewed as a length-hb_len vector mod exp.
         # Use row * matrix: hombasis[i] is a row vector of length |ZZ|.
         image_vec := List(hombasis[i] * autmat, x -> x mod exp);
-        sol := SolutionIntMat(aug_matrix, image_vec);
+        sol := SolutionMat(aug_matrix, image_vec);
         if sol = fail then
             Error("H3MatrixOfAutomorphism: could not project image of ",
                   "hombasis[", i, "] onto hombasis. ",
                   "phi may not be an automorphism, or basis is wrong.");
+        fi;
+        if not ForAll(sol, IsInt) then
+            sol := SolutionIntMat(aug_matrix, image_vec);
+            if sol = fail then
+                Error("H3MatrixOfAutomorphism: integer solve failed ",
+                      "after SolutionMat fallback for hombasis[", i, "].");
+            fi;
         fi;
         col_coeffs := sol{[1..k]};
         for j in [1..k] do
