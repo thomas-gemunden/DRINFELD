@@ -322,8 +322,54 @@ _K4A_BuildBranchData := function(opts, m, H_parent)
     );
     if opts.omega_vec <> fail then
         krr_opts.omega_vec := opts.omega_vec;
+        # When the user supplies a non-zero omega_vec the "lite" trace
+        # (= EvalIrr) is mathematically WRONG (it returns ordinary,
+        # not projective, character values); the resulting G-level
+        # data also wouldn't bind `projective_data`, so the per-branch
+        # dispatcher `_K4A_RestrictForBranch` would silently fall
+        # through to `RestrictTraceOnWToSubgroup` — exactly the bug
+        # this issue (#328) fixes at the H-level. Route through
+        # the projective path explicitly here so the dispatcher sees
+        # the right parent data shape.
+        if opts.spectral_source = "lite" then
+            krr_opts.spectral_source := "projective";
+        elif opts.spectral_source = "auto" then
+            # "auto" already routes to "projective" at ω ≠ 0 inside
+            # BuildKRRIntertwinerData; leave alone.
+            ;
+        fi;
     fi;
     return BuildKRRIntertwinerData(m, H_parent, krr_opts);
+end;;
+
+
+# `_K4A_RestrictForBranch(opts, data, H_subgroup)`:
+# Pick the right restriction variant based on the orchestrator opts.
+# If `opts.lattice_source = true and opts.omega_vec is non-zero`, route
+# through the per-branch projective restriction (issue #328) so the
+# H-level CT modular data reflects the slant 2-cocycle of ω by each
+# H-class rep. Otherwise fall back to the legacy untwisted-baseline
+# restriction (RestrictTraceOnWToSubgroup) which is the K-4a anchor.
+_K4A_OmegaIsZero := function(omega_vec)
+    local x;
+    if omega_vec = fail or omega_vec = [] then return true; fi;
+    for x in omega_vec do
+        if x <> 0 then return false; fi;
+    od;
+    return true;
+end;;
+
+_K4A_RestrictForBranch := function(opts, data, H_subgroup)
+    if opts.lattice_source
+       and (not _K4A_OmegaIsZero(opts.omega_vec))
+       and IsBoundGlobal("RestrictTraceOnWToSubgroupProjective") then
+        if opts.verbose then
+            Print("  [_K4A_RestrictForBranch] routing through ",
+                  "RestrictTraceOnWToSubgroupProjective (#328)\n");
+        fi;
+        return RestrictTraceOnWToSubgroupProjective(data, H_subgroup);
+    fi;
+    return RestrictTraceOnWToSubgroup(data, H_subgroup);
 end;;
 
 
@@ -347,17 +393,18 @@ end;;
 #   .omega_vec      : non-trivial 3-cocycle on E_+(m). Only consumed
 #                     when `lattice_source = true`; threaded through
 #                     to `BuildKRRIntertwinerData`'s `opts.omega_vec`,
-#                     which routes through V-1's `EpsilonOmegaPhase`.
-#                     CAVEAT: at omega ≠ 0, the K-4a CT-gauge research
-#                     note's §3.2 invariant (epsilon ≡ 1 ↔ trace =
-#                     EvalIrr) breaks: trace_on_W also needs the
-#                     projective character table. That is K-4a-T4c
-#                     work, not V-1. Until T4c lands, omega ≠ 0
-#                     produces structurally-correct epsilon values but
-#                     unchanged trace_on_W, so the per-branch CT
-#                     modular data is NOT the omega-twisted Drinfeld
-#                     center — it is the omega = 0 baseline with a
-#                     non-trivial epsilon decoration. Use with care.
+#                     which routes through V-1's `EpsilonOmegaPhase`
+#                     for ε and PR #327 / #323's projective character
+#                     table for trace_on_W on G. At ω ≠ 0 and
+#                     m < 5 the orchestrator routes the per-branch
+#                     restriction through
+#                     `RestrictTraceOnWToSubgroupProjective` (issue
+#                     #328), so the H-level CT modular data reflects
+#                     the slant 2-cocycle of ω by each H-class rep.
+#                     At ω = 0 the projective path collapses to the
+#                     untwisted baseline byte-for-byte (acceptance
+#                     criterion 1 of #328), so this default-omega
+#                     case is unchanged from earlier K-4a runs.
 #                     Default: fail (omega = 0).
 #   .spectral_source: forwarded to `BuildKRRIntertwinerData`. Default
 #                     "lite" (numerically equivalent to untwisted
@@ -610,7 +657,8 @@ K4aClassify := function(arg)
             data_E, ea_rec.subgroup);
     else
         data_E := _K4A_BuildBranchData(opts, m, ea_rec.parent);
-        restricted_E := RestrictTraceOnWToSubgroup(data_E, ea_rec.subgroup);
+        restricted_E := _K4A_RestrictForBranch(opts, data_E,
+                                                ea_rec.subgroup);
     fi;
     E_class := _K4A_ClassifyAbelianBranch(restricted_E, ea_rec.subgroup);
     t_E_branch := _K4A_SecsSince(t_branch_0);
@@ -628,7 +676,8 @@ K4aClassify := function(arg)
             data_D8, d8_rec.subgroup);
     else
         data_D8 := _K4A_BuildBranchData(opts, m, d8_rec.parent);
-        restricted_D8 := RestrictTraceOnWToSubgroup(data_D8, d8_rec.subgroup);
+        restricted_D8 := _K4A_RestrictForBranch(opts, data_D8,
+                                                 d8_rec.subgroup);
     fi;
     D8_class := _K4A_ClassifyNonAbelianBranch(
         restricted_D8, d8_rec.subgroup, ClassifyOnD8);
@@ -647,7 +696,8 @@ K4aClassify := function(arg)
             data_Q8, q8_rec.subgroup);
     else
         data_Q8 := _K4A_BuildBranchData(opts, m, q8_rec.parent);
-        restricted_Q8 := RestrictTraceOnWToSubgroup(data_Q8, q8_rec.subgroup);
+        restricted_Q8 := _K4A_RestrictForBranch(opts, data_Q8,
+                                                 q8_rec.subgroup);
     fi;
     Q8_class := _K4A_ClassifyNonAbelianBranch(
         restricted_Q8, q8_rec.subgroup, ClassifyOnQ8);

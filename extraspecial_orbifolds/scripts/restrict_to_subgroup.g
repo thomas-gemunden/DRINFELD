@@ -88,10 +88,16 @@
 _rts_loaded_um := IsBoundGlobal("BuildSimpleIndex");;
 _rts_loaded_kp := IsBoundGlobal("BuildIntertwinerDataUntwisted");;
 
+# Capture the load-time directory so the projective path's lazy load of
+# build_krr_intertwiner_data.g / epsilon_omega.g works even when invoked
+# from a different CWD (mirrors the snapshot used by
+# `build_krr_intertwiner_data.g` for the same reason).
+_RTS_LOAD_DIR := fail;;
 _rts_self := INPUT_FILENAME();;
 if _rts_self <> fail and _rts_self <> "stream" then
     _rts_dir := _rts_self{[1..Length(_rts_self)
                             - Length("/restrict_to_subgroup.g")]};;
+    _RTS_LOAD_DIR := _rts_dir;
     if not _rts_loaded_um then
         _rts_um_cand := Concatenation(_rts_dir,
                                        "/untwisted_modular_data.g");;
@@ -150,6 +156,71 @@ if not IsBound(BuildIntertwinerDataUntwisted) then
     Error("restrict_to_subgroup.g: BuildIntertwinerDataUntwisted not ",
           "bound after loading krr_projector.g.");
 fi;
+
+# `_RTS_EnsureProjectiveHelpers()` (issue #328):
+# Lazily load `build_krr_intertwiner_data.g` (for the projective helpers
+# `_KRRI_AlphaG`, `_KRRI_ProjectiveCharsForG`, `_KRRI_TryMatchProjToIrr`)
+# and `epsilon_omega.g` (for the integer-phase backbone `EpsilonOmega`)
+# the first time the projective variant of the restriction is invoked.
+# We do NOT load these eagerly at file-Read time because (i) the
+# untwisted path doesn't need them and (ii) `epsilon_omega.g` transitively
+# requires HAP, which has multi-second load cost we don't want to pay on
+# every user `Read("restrict_to_subgroup.g")`.
+_RTS_EnsureProjectiveHelpers := function()
+    local cand, p, _name;
+    for _name in [ "_KRRI_AlphaG", "_KRRI_ProjectiveCharsForG",
+                   "_KRRI_TryMatchProjToIrr" ] do
+        if IsBoundGlobal(_name) then continue; fi;
+        if _RTS_LOAD_DIR <> fail then
+            cand := Concatenation(_RTS_LOAD_DIR,
+                                  "/build_krr_intertwiner_data.g");
+            if IsExistingFile(cand) then
+                Read(cand);
+                break;
+            fi;
+        fi;
+        for p in [ "build_krr_intertwiner_data.g",
+                   "./build_krr_intertwiner_data.g",
+                   "extraspecial_orbifolds/scripts/build_krr_intertwiner_data.g" ] do
+            if IsExistingFile(p) then
+                Read(p);
+                break;
+            fi;
+        od;
+        break;
+    od;
+    for _name in [ "_KRRI_AlphaG", "_KRRI_ProjectiveCharsForG",
+                   "_KRRI_TryMatchProjToIrr" ] do
+        if not IsBoundGlobal(_name) then
+            Error("restrict_to_subgroup.g: required helper ", _name,
+                  " not bound after loading build_krr_intertwiner_data.g; ",
+                  "ensure that file sits alongside restrict_to_subgroup.g.");
+        fi;
+    od;
+    if not IsBoundGlobal("EpsilonOmega") then
+        if _RTS_LOAD_DIR <> fail then
+            cand := Concatenation(_RTS_LOAD_DIR, "/epsilon_omega.g");
+            if IsExistingFile(cand) then
+                Read(cand);
+            fi;
+        fi;
+        if not IsBoundGlobal("EpsilonOmega") then
+            for p in [ "epsilon_omega.g",
+                       "./epsilon_omega.g",
+                       "extraspecial_orbifolds/scripts/epsilon_omega.g" ] do
+                if IsExistingFile(p) then
+                    Read(p);
+                    break;
+                fi;
+            od;
+        fi;
+        if not IsBoundGlobal("EpsilonOmega") then
+            Error("restrict_to_subgroup.g: required helper `EpsilonOmega` ",
+                  "not bound after loading epsilon_omega.g; ensure that ",
+                  "file sits alongside restrict_to_subgroup.g.");
+        fi;
+    fi;
+end;;
 
 
 # ============================================================
@@ -712,5 +783,268 @@ RestrictTraceOnWToSubgroupHonourParent := function(intertwiner_data_G, H)
         # comparison.
         baseline_trace_on_W := base_data.trace_on_W,
         baseline_epsilon := base_data.epsilon
+    );
+end;;
+
+
+# ============================================================
+# Public: RestrictTraceOnWToSubgroupProjective  (issue #328)
+# ============================================================
+#
+# Per-branch projective restriction of a G-level intertwiner_data record
+# carrying non-trivial omega-cocycle context to a subgroup H. This is the
+# direct counterpart of `RestrictTraceOnWToSubgroup` but preserves the
+# projective character information from the G-level slant 2-cocycle
+# instead of substituting in the untwisted H baseline (the bug fixed by
+# this issue).
+#
+# WHEN TO USE
+# -----------
+# Use this variant when the parent record was produced by
+# `BuildKRRIntertwinerData(m, G, opts)` with a non-zero `opts.omega_vec`
+# (i.e. it carries a `.projective_data` field bound by PR #327 / #323).
+# In that case the G-level `trace_on_W` evaluates projective characters
+# of `(C_G(a_G), α_{a_G}^G)`; the corresponding H-level restriction must
+# evaluate projective characters of `(C_H(a_H), α_{a_H}^H)` for the
+# pulled-back 2-cocycle, NOT the ordinary characters of C_H(a_H) as the
+# untwisted baseline would give.
+#
+# At ω = 0 (or when `.projective_data` is absent / omega_vec is zero or
+# fail), this function delegates to `RestrictTraceOnWToSubgroup` for
+# byte-for-byte identical output (acceptance criterion 1 of #328).
+#
+# MATH
+# ----
+# Given the G-level slant 2-cocycle
+#
+#   α_{a_G}^G(x, y) := ω(x, y, a_G)
+#                    − ω(x, y · a_G · y^{-1}, y)
+#                    + ω(x · y · a_G · y^{-1} · x^{-1}, x, y)
+#
+# (the CGR/Mignard–Schauenburg slant of ω by the class rep a_G; the
+# exact convention used by `_KRRI_AlphaG` in build_krr_intertwiner_data.g),
+# and a conjugator `conj ∈ G` with `conj · a_H · conj^{-1} = a_G`, the
+# H-level slant 2-cocycle on `C_H(a_H)` is the pullback
+#
+#   α_{a_H}^H(x_H, y_H) := α_{a_G}^G(conj · x_H · conj^{-1},
+#                                     conj · y_H · conj^{-1})
+#
+# where x_H, y_H ∈ C_H(a_H). This is a 2-cocycle on `C_H(a_H)` because:
+#
+#   * conjugation by `conj` is a group homomorphism G → G whose
+#     restriction maps `C_G(a_H) → C_G(a_G)` bijectively;
+#   * `C_H(a_H) ⊆ C_G(a_H)`, so `conj · C_H(a_H) · conj^{-1} ⊆ C_G(a_G)`;
+#   * α_{a_G}^G is a 2-cocycle on `C_G(a_G)` by the standard slant
+#     identity (CGR §4, derived from ω's 3-cocycle equation), so its
+#     pullback along a homomorphism is again a 2-cocycle.
+#
+# We then build the central extension of `C_H(a_H)` by `Z/m_omega` along
+# α_{a_H}^H and pick the genuinely α-projective characters via the same
+# helpers used at G-level (`_KRRI_BuildCentralExtension`,
+# `_KRRI_ProjectiveCharsForG`, `_KRRI_TryMatchProjToIrr`). The result is
+# memoised per H-class index.
+#
+# H-LEVEL EPSILON
+# ---------------
+# The K-1 / CT-modular-data formula in `ct_modular_data.g` uses
+# `intertwiner_data.epsilon(g_i, g_j, a, b)` with sections t_a, s_b
+# obtained from the transport list of the *underlying* index — for the
+# H restriction this is the H-transport, i.e. `RepresentativeAction(H, ·)`.
+# To stay consistent we wire the H-level epsilon through `EpsilonOmega`
+# (the integer-phase backbone in epsilon_omega.g) with G replaced by H:
+#
+#   epsilon_H(g1, g2, a, b) := E(m_omega)^{
+#       EpsilonOmega(H, omega_cb, g1, g2, a, b, m_omega) }
+#
+# where `omega_cb` is the cached G-level callable from the parent's
+# projective context. Since H-elements are also G-elements, evaluating
+# `omega_cb` on H-triples is just the inclusion-pullback `i^* ω` (same
+# numerical formula). The sections t_a, s_b are picked from H, matching
+# the convention used by `BuildTransports(idx_H)` in `_CTComputeSBlock`.
+#
+# INPUTS
+# ------
+#   intertwiner_data_G : record from BuildKRRIntertwinerData(m, G, opts)
+#                        with `opts.omega_vec` non-zero. Must carry
+#                        `.projective_data` (with `.ctx`,
+#                        `.omega_vec`) and `.idx`. If `.projective_data`
+#                        is absent or `omega_vec` is zero / fail, the
+#                        call delegates to `RestrictTraceOnWToSubgroup`.
+#   H                  : subgroup of intertwiner_data_G.group.
+#
+# OUTPUT RECORD
+# -------------
+# Same shape as `RestrictTraceOnWToSubgroup` plus a `.projective_data_H`
+# diagnostic field:
+#
+#   .group         : H
+#   .idx           : BuildSimpleIndex(H)
+#   .transport     : BuildTransports(idx_H)
+#   .trace_on_W    : function(k_H, irrep_idx_H, h_H) -> cyclotomic
+#                    -- projective character of (C_H(a_H), α_{a_H}^H).
+#   .epsilon       : function(g1, g2, a, b) -> cyclotomic
+#                    -- H-level CGR phase via EpsilonOmega(H, ...).
+#   .class_to_G    : per-H-class mapping (k_G, conj) as in
+#                    RestrictTraceOnWToSubgroup.
+#   .parent_G      : G.
+#   .parent_data   : the original intertwiner_data_G.
+#   .projective_data_H : rec(
+#                    .ctx            -- parent's projective ctx
+#                                       (omega_cb, m_omega, ...)
+#                    .per_class      -- length |classes(H)|, lazy
+#                                       projective records per H-class
+#                    .per_class_perm -- length |classes(H)|, lazy
+#                                       align permutation or "intrinsic"
+#                    .proj_for_class -- callable: k_H -> proj record).
+#   .source        : "projective-restriction".
+#
+RestrictTraceOnWToSubgroupProjective := function(intertwiner_data_G, H)
+    local G, idx_H, transport_H, idx_G, class_to_G, k_H, a_H, mapping,
+          base_data, gens_H, bad_gen, has_proj, omega_vec, ctx, omega_cb,
+          m_omega, per_class, per_class_perm, proj_for_class,
+          new_trace_on_W, new_epsilon, parent_data;
+    G := intertwiner_data_G.group;
+    gens_H := GeneratorsOfGroup(H);
+    bad_gen := First(gens_H, g -> not (g in G));
+    if bad_gen <> fail then
+        Error("RestrictTraceOnWToSubgroupProjective: H has a generator ",
+              bad_gen, " not in intertwiner_data_G.group.");
+    fi;
+    parent_data := intertwiner_data_G;
+    # Decide whether the parent record actually carries non-trivial
+    # projective context. If not, fall back to the untwisted variant
+    # so callers can route everything through this function safely.
+    has_proj := IsBound(parent_data.projective_data)
+                and parent_data.projective_data <> fail;
+    if has_proj then
+        omega_vec := parent_data.projective_data.omega_vec;
+        if omega_vec = fail then
+            has_proj := false;
+        elif Length(omega_vec) > 0 and ForAll(omega_vec, x -> x = 0) then
+            # All-zero omega_vec is mathematically α ≡ 0, which gives
+            # back the untwisted characters byte-for-byte (via
+            # `_KRRI_TryMatchProjToIrr`'s alignment). But the projective
+            # path is the slow option; the fast equivalent is to
+            # delegate to the untwisted restriction. Both produce
+            # byte-for-byte identical CT modular data, by the same
+            # alignment property used in the G-level projective tests
+            # (see test_build_krr_intertwiner_data_projective.g P1).
+            has_proj := false;
+        fi;
+    fi;
+    if not has_proj then
+        return RestrictTraceOnWToSubgroup(intertwiner_data_G, H);
+    fi;
+
+    _RTS_EnsureProjectiveHelpers();
+
+    # Build H-side simple index + transports the same way the untwisted
+    # restriction does.
+    base_data := BuildIntertwinerDataUntwisted(H);
+    idx_H := base_data.idx;
+    transport_H := base_data.transport;
+    idx_G := intertwiner_data_G.idx;
+
+    # Build the H-class -> (G-class, conjugator) mapping.
+    class_to_G := [];
+    for k_H in [1..Length(idx_H.reps)] do
+        a_H := idx_H.reps[k_H];
+        mapping := _RTS_FindGClassOf(idx_G, a_H, G);
+        Add(class_to_G, mapping);
+    od;
+
+    ctx := parent_data.projective_data.ctx;
+    omega_cb := ctx.omega_cb;
+    m_omega := ctx.m_omega;
+
+    # Per-H-class projective table cache. Each entry, on first query,
+    # holds the rec returned by `_KRRI_ProjectiveCharsForG(C_H,
+    # alpha_H_a, m_omega)`. The corresponding `per_class_perm[k_H]` is:
+    #   * a permutation list  perm : Irr(C_H(a_H)) -> proj.table  when
+    #     α_{a_H}^H is a coboundary on C_H(a_H);
+    #   * the symbol "intrinsic" when α_{a_H}^H is genuinely non-trivial
+    #     in H^2(C_H(a_H); Z/m_omega) (the projective characters cannot
+    #     be aligned with the ordinary ones).
+    per_class := List([1..Length(idx_H.classes)], _ -> fail);
+    per_class_perm := List([1..Length(idx_H.classes)], _ -> fail);
+
+    proj_for_class := function(k_H_arg)
+        local a_H_loc, conj_loc, a_G_loc, C_H, alpha_H_a, proj, perm;
+        if per_class[k_H_arg] <> fail then
+            return per_class[k_H_arg];
+        fi;
+        a_H_loc := idx_H.reps[k_H_arg];
+        conj_loc := class_to_G[k_H_arg].conj;
+        a_G_loc := idx_G.reps[class_to_G[k_H_arg].k_G];
+        C_H := idx_H.centralisers[k_H_arg];
+        # Pullback closure: α_{a_H}^H(x_H, y_H) =
+        #   α_{a_G}^G(conj · x_H · conj^{-1}, conj · y_H · conj^{-1}).
+        # _KRRI_AlphaG takes g = a_G and the (already-G-conjugated) x, y.
+        alpha_H_a := function(x_H, y_H)
+            return _KRRI_AlphaG(omega_cb, m_omega, a_G_loc,
+                                 conj_loc * x_H * conj_loc^-1,
+                                 conj_loc * y_H * conj_loc^-1);
+        end;
+        proj := _KRRI_ProjectiveCharsForG(C_H, alpha_H_a, m_omega);
+        per_class[k_H_arg] := proj;
+        # Align with Irr(C_H(a_H)) when α is a coboundary; "intrinsic"
+        # otherwise. _EnsureClassData materialises lazy idx_H slices
+        # (no-op for eager).
+        _EnsureClassData(idx_H, k_H_arg);
+        perm := _KRRI_TryMatchProjToIrr(
+            proj, C_H, idx_H.irreps[k_H_arg], idx_H.cc_centraliser[k_H_arg]);
+        if perm = fail then
+            per_class_perm[k_H_arg] := "intrinsic";
+        else
+            per_class_perm[k_H_arg] := perm;
+        fi;
+        return proj;
+    end;
+
+    new_trace_on_W := function(k_H_arg, irrep_idx_arg, h_arg)
+        local proj, perm, j;
+        proj := proj_for_class(k_H_arg);
+        perm := per_class_perm[k_H_arg];
+        if perm = "intrinsic" then
+            j := irrep_idx_arg;
+        else
+            j := perm[irrep_idx_arg];
+        fi;
+        if j < 1 or j > Length(proj.table) then
+            Error("RestrictTraceOnWToSubgroupProjective: ",
+                  "irrep_idx ", irrep_idx_arg, " (mapped to ", j,
+                  ") out of bounds for k_H = ", k_H_arg,
+                  " (|proj.table| = ", Length(proj.table), ").");
+        fi;
+        return proj.lift(h_arg) ^ proj.table[j];
+    end;
+
+    # H-level epsilon: pull back ω from G to H via the inclusion, then
+    # use the standard integer-phase backbone. We use H (not G) as the
+    # ambient group for `RepresentativeAction` to stay consistent with
+    # the H-side transport list used by `_CTComputeSBlock`.
+    new_epsilon := function(g1, g2, a, b)
+        local int_phase;
+        int_phase := EpsilonOmega(H, omega_cb, g1, g2, a, b, m_omega);
+        return E(m_omega) ^ int_phase;
+    end;
+
+    return rec(
+        group        := H,
+        idx          := idx_H,
+        transport    := transport_H,
+        trace_on_W   := new_trace_on_W,
+        epsilon      := new_epsilon,
+        class_to_G   := class_to_G,
+        parent_G     := G,
+        parent_data  := parent_data,
+        source       := "projective-restriction",
+        projective_data_H := rec(
+            ctx              := ctx,
+            per_class        := per_class,
+            per_class_perm   := per_class_perm,
+            proj_for_class   := proj_for_class,
+            omega_vec        := omega_vec
+        )
     );
 end;;
