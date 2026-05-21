@@ -61,6 +61,12 @@ if RTS_SELF = fail or RTS_SELF = "stream" then
     Error("test_restrict_to_subgroup.g: INPUT_FILENAME() unavailable; ",
           "Read by absolute path.");
 fi;
+# Issue #325: when this file is Read via a relative path,
+# INPUT_FILENAME() returns the relative path as-given and the slicing
+# below would produce wrong/empty results. Promote to absolute first.
+if Length(RTS_SELF) > 0 and RTS_SELF[1] <> '/' then
+    RTS_SELF := Filename(DirectoryCurrent(), RTS_SELF);
+fi;
 RTS_SELFDIR := RTS_SELF{[1..Length(RTS_SELF)
                             - Length("/test_restrict_to_subgroup.g")]};;
 RTS_SCRIPTSDIR := RTS_SELFDIR{
