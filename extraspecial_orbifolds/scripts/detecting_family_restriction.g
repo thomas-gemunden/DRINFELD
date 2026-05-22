@@ -1328,6 +1328,57 @@ end;;
 # N = Σ_j k_{H_j}). The image of R inside the H-side ambient group
 # A_H = ⊕_j Z/torsion_H_j has order |A_H| / |coker([M; D_H])| where
 # D_H = diag(torsion_H). |ker(R)| = |H^3(G; U(1))| / |image(R)|.
+
+# Cluster candidates by F_2 RREF of their restriction matrices (issue
+# #350). Two candidates with the same F_2 RREF contribute identical
+# F_2-row-space additions to any joint restriction; picking one
+# representative per RREF class is mathematically safe for the F_2
+# part of the kernel. (Residual Z/4 ambiguity from the Pontryagin
+# top — sub-dominant in the greedy — is caught by #345's top-K
+# prescreening + #346's early-termination.)
+#
+# Caches F_2 versions of the per-block restriction matrices on the
+# `data` record on first call.
+#
+# Returns: rec(reps := [list of candidate indices, one per cluster],
+#              n_clusters := <int>, total := <int>).
+_DETF_ClusterCandidatesByF2RREF := function(data, candidate_indices)
+    local j, M_F2, rref_list, found, entry, reps;
+    if not IsBound(data!.res_EA_list_F2) then
+        data!.res_EA_list_F2 := List(data.res_EA_list,
+                                     M -> M * One(GF(2)));
+        for j in [1..Length(data!.res_EA_list_F2)] do
+            ConvertToMatrixRep(data!.res_EA_list_F2[j], GF(2));
+        od;
+    fi;
+    # List of [RREF_matrix, [indices in cluster]] tuples. Linear-scan
+    # dedup (O(n_clusters^2 × matrix-eq); fine at n=1000, matrix ~30x455).
+    # Can't use a record keyed by String(RREF) — GAP record names cap
+    # at 1023 chars and the stringified RREF exceeds that.
+    rref_list := [];
+    for j in candidate_indices do
+        M_F2 := MutableCopyMat(data!.res_EA_list_F2[j]);
+        TriangulizeMat(M_F2);
+        found := false;
+        for entry in rref_list do
+            if entry[1] = M_F2 then
+                Add(entry[2], j);
+                found := true;
+                break;
+            fi;
+        od;
+        if not found then
+            Add(rref_list, [M_F2, [j]]);
+        fi;
+    od;
+    reps := List(rref_list, e -> e[2][1]);
+    return rec(
+        reps        := reps,
+        n_clusters  := Length(reps),
+        total       := Length(candidate_indices)
+    );
+end;;
+
 _DETF_KernelOrderSNF := function(data, ea_indices, include_D8, include_Q8)
     local M_blocks, T_blocks, j, M, T_H, N, D_H, B, snf, factors,
           k, image_order, group_order;
@@ -1434,7 +1485,8 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
           data, n_EA, ea_chosen, greedy_log, curr_ker,
           best_j, best_ker, j, k_try, ea_sorted, drop_kers,
           sub_indices, ker_drop, locally_tight, result,
-          seed, rs;
+          seed, rs,
+          cluster_info;
 
     # Allow opts.m override for testing the streaming path at smaller m.
     # Default = 7 (the production case).
@@ -1632,6 +1684,22 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
     if verbose then
         Print("[_DETF_TrimmedFamily_m7]   initial ker (just {D_8, Q_8}) = ",
               curr_ker, "\n");
+    fi;
+    # Issue #350: cluster candidates by F_2 RREF — DIAGNOSTIC ONLY.
+    # Empirical at m=3: 30 candidates -> 3 clusters, but the m=3 D-VAN
+    # greedy needs 6 EAs to reach ker = 1 (PR #320 anchor). Pre-
+    # clustering by individual F_2 RREF over-clusters: it loses Z/4
+    # information from the Pontryagin top, and it ignores the
+    # joint-restriction interaction (a candidate's contribution to the
+    # joint kernel depends on what's already in the stack, not just its
+    # individual F_2 RREF). DO NOT use as a hard filter in the greedy
+    # — could miss the optimal family. Reported as info for follow-up
+    # design.
+    if verbose then
+        cluster_info := _DETF_ClusterCandidatesByF2RREF(data, [1..n_EA]);
+        Print("[_DETF_TrimmedFamily_m7] F_2-RREF clustering (info ",
+              "only; not used as filter): ", cluster_info.total,
+              " candidates -> ", cluster_info.n_clusters, " clusters\n");
     fi;
     while curr_ker > 1 do
         best_j := fail;
