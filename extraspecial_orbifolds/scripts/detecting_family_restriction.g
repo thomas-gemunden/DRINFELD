@@ -1379,6 +1379,50 @@ _DETF_ClusterCandidatesByF2RREF := function(data, candidate_indices)
     );
 end;;
 
+# F_2 prescreening helper (issue #345): cheap rank-over-GF(2) of the
+# joint restriction matrix, used to rank candidates before running the
+# expensive integer SNF. Higher F_2-rank → larger F_2-image → typically
+# smaller kernel under the full integer SNF.
+#
+# Caches per-block F_2 versions on the `data` record on first call to
+# avoid recomputing them inside the inner greedy loop. The cache is
+# keyed by IsIdenticalObj so subsequent calls find it instantly.
+#
+# Returns: integer rank of the F_2-reduced matrix.
+_DETF_FpRankF2 := function(data, ea_indices, candidate, include_D8, include_Q8)
+    local cache, M_blocks, M, M_F2, j;
+    if not IsBound(data!.res_EA_list_F2) then
+        # Build F_2 cache on first call.
+        cache := List(data.res_EA_list, M -> M * One(GF(2)));
+        for j in [1..Length(cache)] do
+            ConvertToMatrixRep(cache[j], GF(2));
+        od;
+        data!.res_EA_list_F2 := cache;
+        data!.res_D8_F2 := data.res_D8 * One(GF(2));
+        ConvertToMatrixRep(data!.res_D8_F2, GF(2));
+        if data.res_Q8 <> fail then
+            data!.res_Q8_F2 := data.res_Q8 * One(GF(2));
+            ConvertToMatrixRep(data!.res_Q8_F2, GF(2));
+        else
+            data!.res_Q8_F2 := fail;
+        fi;
+    fi;
+    M_blocks := List(ea_indices, j -> data!.res_EA_list_F2[j]);
+    if candidate <> fail then
+        Add(M_blocks, data!.res_EA_list_F2[candidate]);
+    fi;
+    if include_D8 then
+        Add(M_blocks, data!.res_D8_F2);
+    fi;
+    if include_Q8 and data!.res_Q8_F2 <> fail then
+        Add(M_blocks, data!.res_Q8_F2);
+    fi;
+    if Length(M_blocks) = 0 then return 0; fi;
+    M := TransposedMat(Concatenation(List(M_blocks, TransposedMat)));
+    ConvertToMatrixRep(M, GF(2));
+    return RankMat(M);
+end;;
+
 _DETF_KernelOrderSNF := function(data, ea_indices, include_D8, include_Q8)
     local M_blocks, T_blocks, j, M, T_H, N, D_H, B, snf, factors,
           k, image_order, group_order;
@@ -1486,7 +1530,8 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
           best_j, best_ker, j, k_try, ea_sorted, drop_kers,
           sub_indices, ker_drop, locally_tight, result,
           seed, rs,
-          cluster_info;
+          cluster_info,
+          ranks, K_TOP, top_K_indices;
 
     # Allow opts.m override for testing the streaming path at smaller m.
     # Default = 7 (the production case).
@@ -1701,11 +1746,35 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
               "only; not used as filter): ", cluster_info.total,
               " candidates -> ", cluster_info.n_clusters, " clusters\n");
     fi;
+    # Issue #345: F_2 prescreening + top-K integer SNF.
+    # For each greedy step, first rank candidates by F_2 augmented rank
+    # (cheap GF(2) Gauss). Take the top-K candidates by F_2 rank, then
+    # run the expensive integer SNF only on those K. K is set high
+    # enough to catch the Z/exp torsion ambiguities (F_2 rank doesn't
+    # perfectly correlate with integer kernel size on the Z/4 part).
     while curr_ker > 1 do
         best_j := fail;
         best_ker := curr_ker;
+        # --- Phase 1: F_2 prescreen ---
+        # Rank all candidates by F_2 augmented rank; sort descending.
+        ranks := [];
         for j in [1..n_EA] do
             if j in ea_chosen then continue; fi;
+            Add(ranks, [j, _DETF_FpRankF2(data, ea_chosen, j,
+                                          true, include_Q8)]);
+        od;
+        SortBy(ranks, x -> -x[2]);
+        # Take top-K candidates.
+        K_TOP := 10;
+        top_K_indices := List(ranks{[1..Minimum(K_TOP, Length(ranks))]},
+                              x -> x[1]);
+        if verbose then
+            Print("[_DETF_TrimmedFamily_m7]   F_2 prescreen: top-",
+                  Length(top_K_indices), " candidates by F_2 rank: ",
+                  top_K_indices, "\n");
+        fi;
+        # --- Phase 2: integer SNF on top-K only ---
+        for j in top_K_indices do
             k_try := _DETF_KernelOrderSNF(data,
                                           Concatenation(ea_chosen, [j]),
                                           true, include_Q8);
