@@ -1712,6 +1712,17 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
             if k_try < best_ker then
                 best_j := j;
                 best_ker := k_try;
+                if k_try = 1 then
+                    # Early termination (issue #346): ker = 1 is the
+                    # minimum achievable; no further candidate can do
+                    # better at this step. Skip remaining candidates.
+                    if verbose then
+                        Print("[_DETF_TrimmedFamily_m7]   ",
+                              "early-term at candidate ", j, ": ker = 1; ",
+                              "skipping ", n_EA - j, " remaining.\n");
+                    fi;
+                    break;
+                fi;
             fi;
         od;
         if best_j = fail then
@@ -1732,6 +1743,15 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
             Print("[_DETF_TrimmedFamily_m7]   step ", Length(ea_chosen),
                   ": added candidate ", best_j, ", ker = ", best_ker,
                   "\n");
+        fi;
+        if curr_ker = 1 then
+            # Outer greedy early-terminate (issue #346): goal reached,
+            # proceed to drop-one tightening.
+            if verbose then
+                Print("[_DETF_TrimmedFamily_m7]   goal ker=1 reached, ",
+                      "exiting greedy.\n");
+            fi;
+            break;
         fi;
     od;
 
@@ -1929,6 +1949,13 @@ _DETF_TrimmedFamily := function(arg)
             if k_try < best_ker then
                 best_j := j;
                 best_ker := k_try;
+                if k_try = 1 then
+                    # Early termination (issue #346): ker = 1 is the
+                    # minimum achievable; no further candidate can do
+                    # better at this step. Skip the remaining
+                    # n_EA - j candidates and proceed.
+                    break;
+                fi;
             fi;
         od;
         if best_j = fail then
@@ -1939,6 +1966,11 @@ _DETF_TrimmedFamily := function(arg)
         Add(ea_chosen, best_j);
         Add(greedy_log, rec(ea := best_j, ker := best_ker));
         curr_ker := best_ker;
+        if curr_ker = 1 then
+            # Outer greedy early-terminate (issue #346): goal reached,
+            # proceed to drop-one tightening.
+            break;
+        fi;
     od;
 
     ea_sorted := SortedList(ea_chosen);
