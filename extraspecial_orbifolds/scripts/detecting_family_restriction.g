@@ -1531,7 +1531,8 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
           sub_indices, ker_drop, locally_tight, result,
           seed, rs,
           cluster_info,
-          ranks, K_TOP, top_K_indices;
+          ranks, K_TOP, top_K_indices,
+          K_ADD_PER_STEP, candidate_kers, additions, entry, new_ker;
 
     # Allow opts.m override for testing the streaming path at smaller m.
     # Default = 7 (the production case).
@@ -1746,15 +1747,18 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
               "only; not used as filter): ", cluster_info.total,
               " candidates -> ", cluster_info.n_clusters, " clusters\n");
     fi;
-    # Issue #345: F_2 prescreening + top-K integer SNF.
-    # For each greedy step, first rank candidates by F_2 augmented rank
-    # (cheap GF(2) Gauss). Take the top-K candidates by F_2 rank, then
-    # run the expensive integer SNF only on those K. K is set high
-    # enough to catch the Z/exp torsion ambiguities (F_2 rank doesn't
-    # perfectly correlate with integer kernel size on the Z/4 part).
+    # Combined strategy from #345 (F_2 prescreen) + #349 (top-K batch):
+    #   Phase 1: cheap F_2 augmented-rank screen → top K_TOP=10 candidates.
+    #   Phase 2: integer SNF on those K_TOP only.
+    #   Phase 3: batch-add the K_ADD_PER_STEP=5 strongest from Phase 2
+    #            (those that strictly improve curr_ker); recompute the
+    #            joint kernel once. Drop-one downstream tightens away any
+    #            redundant additions. NOTE: this supersedes #346's per-
+    #            candidate early-termination (incompatible with batch:
+    #            every Phase-2 candidate's k_try must be scored to rank).
+    K_ADD_PER_STEP := 5;
     while curr_ker > 1 do
-        best_j := fail;
-        best_ker := curr_ker;
+        candidate_kers := [];
         # --- Phase 1: F_2 prescreen ---
         # Rank all candidates by F_2 augmented rank; sort descending.
         ranks := [];
@@ -1778,23 +1782,16 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
             k_try := _DETF_KernelOrderSNF(data,
                                           Concatenation(ea_chosen, [j]),
                                           true, include_Q8);
-            if k_try < best_ker then
-                best_j := j;
-                best_ker := k_try;
-                if k_try = 1 then
-                    # Early termination (issue #346): ker = 1 is the
-                    # minimum achievable; no further candidate can do
-                    # better at this step. Skip remaining candidates.
-                    if verbose then
-                        Print("[_DETF_TrimmedFamily_m7]   ",
-                              "early-term at candidate ", j, ": ker = 1; ",
-                              "skipping ", n_EA - j, " remaining.\n");
-                    fi;
-                    break;
-                fi;
-            fi;
+            Add(candidate_kers, [j, k_try]);
         od;
-        if best_j = fail then
+        # Sort ascending by k_try; take top K_ADD strictly improving
+        # candidates.
+        SortBy(candidate_kers, x -> x[2]);
+        additions := Filtered(candidate_kers, x -> x[2] < curr_ker);
+        if Length(additions) > K_ADD_PER_STEP then
+            additions := additions{[1..K_ADD_PER_STEP]};
+        fi;
+        if IsEmpty(additions) then
             # Greedy stuck: no single sampled-EA addition reduces |ker|.
             # The sample is insufficient. Caller should rerun with a
             # larger sample_size.
@@ -1805,23 +1802,25 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
             fi;
             break;
         fi;
-        Add(ea_chosen, best_j);
-        Add(greedy_log, rec(ea := best_j, ker := best_ker));
-        curr_ker := best_ker;
+        # Add the batch, then recompute the joint kernel.
+        for entry in additions do
+            Add(ea_chosen, entry[1]);
+        od;
+        new_ker := _DETF_KernelOrderSNF(data, ea_chosen, true, include_Q8);
         if verbose then
-            Print("[_DETF_TrimmedFamily_m7]   step ", Length(ea_chosen),
-                  ": added candidate ", best_j, ", ker = ", best_ker,
-                  "\n");
+            Print("[_DETF_TrimmedFamily_m7]   super-step ",
+                  Length(greedy_log) / K_ADD_PER_STEP + 1,
+                  ": added ", Length(additions), " candidates ",
+                  List(additions, x -> x[1]),
+                  ", joint ker = ", new_ker, "\n");
         fi;
-        if curr_ker = 1 then
-            # Outer greedy early-terminate (issue #346): goal reached,
-            # proceed to drop-one tightening.
-            if verbose then
-                Print("[_DETF_TrimmedFamily_m7]   goal ker=1 reached, ",
-                      "exiting greedy.\n");
-            fi;
-            break;
-        fi;
+        # Log entries: one per added EA, all with the joint post-batch
+        # kernel (downstream consumers only need ea_chosen + ker stamps;
+        # the join-kernel value is the correct post-state).
+        for entry in additions do
+            Add(greedy_log, rec(ea := entry[1], ker := new_ker));
+        od;
+        curr_ker := new_ker;
     od;
 
     ea_sorted := SortedList(ea_chosen);
