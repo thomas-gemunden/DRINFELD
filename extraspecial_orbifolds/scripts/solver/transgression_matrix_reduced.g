@@ -960,7 +960,8 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
           t_axis, exp_axis_k, exp_axis_vec, exp_axis_in_ker_k,
           M_y_j_exp, vec_target_exp, all_orbit_ok, basis_orders, jj,
           col_has_constraint, total_rows, orbit_ckpt_path,
-          completed_orbit_starts, ckpt_data, ckpt_stream, t_orbit_prop;
+          completed_orbit_starts, ckpt_data, ckpt_stream, t_orbit_prop,
+          M_bar_gf2_val, r_quot_val, cache_val, fail_columns_val;
     k := setup.num_generators;
     h3_torsion := setup.torsion;
     exp_local := setup.exponent;
@@ -1006,19 +1007,46 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
                   ", bockstein_used = ", redmat.bockstein_used,
                   "  (", (Runtime() - t_orb) / 1000., " s)\n");
         fi;
+        # Issue #363: build the per-orbit record entry using real
+        # `if/else` blocks rather than the strict-eval `If_` shim.
+        # `If_` evaluates BOTH branches before dispatch, so the lazy
+        # fallback `Length(redmat.M_bar)` (intended only when r_quot
+        # is unbound) explodes when M_bar = fail. At m=5, the lazy-
+        # integer-M_bar path in BuildReducedTransgressionMatrix
+        # (lines 596-606) deliberately returns M_bar = fail when
+        # r_quot * k > 4e6 cells; r_quot is always set.
+        if IsBound(redmat.M_bar_gf2) then
+            M_bar_gf2_val := redmat.M_bar_gf2;
+        else
+            M_bar_gf2_val := [];
+        fi;
+        if IsBound(redmat.r_quot) then
+            r_quot_val := redmat.r_quot;
+        elif IsList(redmat.M_bar) then
+            r_quot_val := Length(redmat.M_bar);
+        else
+            r_quot_val := 0;
+        fi;
+        if IsBound(redmat.cache) then
+            cache_val := redmat.cache;
+        else
+            cache_val := fail;
+        fi;
+        if IsBound(redmat.fail_columns) then
+            fail_columns_val := redmat.fail_columns;
+        else
+            fail_columns_val := [];
+        fi;
         Add(reduced_matrices, rec(
             orbit_start := orb_info.start_idx,
             M_bar       := redmat.M_bar,
-            M_bar_gf2   := If_(IsBound(redmat.M_bar_gf2),
-                                redmat.M_bar_gf2, []),
-            r_quot      := If_(IsBound(redmat.r_quot), redmat.r_quot,
-                                Length(redmat.M_bar)),
+            M_bar_gf2   := M_bar_gf2_val,
+            r_quot      := r_quot_val,
             torsion_C   := redmat.torsion_C,
             C           := redmat.C,
             bockstein_used := redmat.bockstein_used,
-            cache       := If_(IsBound(redmat.cache), redmat.cache, fail),
-            fail_columns := If_(IsBound(redmat.fail_columns),
-                                redmat.fail_columns, []),
+            cache       := cache_val,
+            fail_columns := fail_columns_val,
             orb_info    := orb_info));
     od;
     Print("Per-orbit M_bar build wall: ", (Runtime() - t_red) / 1000., " s\n");
