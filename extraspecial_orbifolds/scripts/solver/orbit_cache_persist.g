@@ -228,16 +228,27 @@ SaveOrbitCache := function(path, orbit_idx, m_param, setup, rep, cache)
     SetPrintFormattingStatus(stream, false);
 
     PrintTo(stream,
-        "# Orbit cocycle-basis cache (issue #336) — auto-generated.\n",
+        "# Orbit cocycle-basis cache (issues #336, #365) — auto-generated.\n",
         "# Orbit index: ", orbit_idx, "\n",
         "# m: ", m_param, "\n",
         "# |C(rep)| = n = ", n, ", k = ", k, "\n",
         "# Format version: ", _ORBIT_CACHE_FORMAT_VERSION, "\n",
         "#\n",
         "# Re-populate via:\n",
-        "#   data := ReadAsFunction(\"", path, "\")();\n",
-        "#   LoadOrbitCache reconstructs C, elts, idx_map, table_gf2.\n",
-        "return rec(\n",
+        "#   _ORBIT_CACHE_DATA := fail;;\n",
+        "#   Read(\"", path, "\");;\n",
+        "#   # _ORBIT_CACHE_DATA now holds the cache record.\n",
+        "#   LoadOrbitCache wraps this and reconstructs C, elts, idx_map, table_gf2.\n",
+        "#\n",
+        "# The leading top-level assignment (instead of `return rec(...)` ",
+        "with\n",
+        "# ReadAsFunction) is required because at m=5 the table_rows literal ",
+        "has\n",
+        "# 4.2M rows, which exceeds GAP's per-function bytecode size limit ",
+        "in\n",
+        "# the function created by ReadAsFunction. Read() of a top-level ",
+        "# statement bypasses that limit.\n",
+        "_ORBIT_CACHE_DATA := rec(\n",
         "    version := ", _ORBIT_CACHE_FORMAT_VERSION, ",\n",
         "    orbit_idx := ", orbit_idx, ",\n",
         "    fingerprint := rec(\n",
@@ -319,16 +330,44 @@ LoadOrbitCache := function(path, expected_fp, G)
         Error("LoadOrbitCache: G must be a PcGroup");
     fi;
 
-    catch := CALL_WITH_CATCH(ReadAsFunction, [path]);
-    if catch[1] = false then
-        Print("LoadOrbitCache: failed to ReadAsFunction(", path, "); ",
-              "treating as missing.\n");
-        return fail;
-    fi;
-    data := catch[2]();
-    if not IsRecord(data) then
-        Print("LoadOrbitCache: file ", path, " did not return a record.\n");
-        return fail;
+    # Issue #365: prefer Read() on the new top-level-assignment file
+    # format. ReadAsFunction wraps the file in a function whose
+    # bytecode hits GAP's per-function size limit at m=5 (the
+    # table_rows literal alone is ~692M cells). Read() processes
+    # top-level statements directly without that limit.
+    _ORBIT_CACHE_DATA := fail;
+    catch := CALL_WITH_CATCH(Read, [path]);
+    if catch[1] = true and IsRecord(_ORBIT_CACHE_DATA) then
+        data := _ORBIT_CACHE_DATA;
+        _ORBIT_CACHE_DATA := fail;  # release reference for GC.
+    else
+        # Fallback for the legacy `return rec(...);;` format (any cache
+        # written before issue #365 landed). The Read() above failed
+        # because top-level `return` is a syntax error; CALL_WITH_CATCH
+        # caught it. ReadAsFunction works on files small enough to fit
+        # under the per-function bytecode limit (m=2/3 caches).
+        _ORBIT_CACHE_DATA := fail;
+        catch := CALL_WITH_CATCH(ReadAsFunction, [path]);
+        if catch[1] = false then
+            Print("LoadOrbitCache: failed to load(", path, "); ",
+                  "treating as missing.\n");
+            return fail;
+        fi;
+        # ReadAsFunction returns `fail` (not throws) when the parser
+        # hits the per-function size limit. Detect this explicitly so
+        # we don't propagate the "no method for CallFuncList on fail"
+        # crash that was issue #365.
+        if catch[2] = fail then
+            Print("LoadOrbitCache: ReadAsFunction returned fail at ",
+                  path, " (likely parser size limit); treating as ",
+                  "missing.\n");
+            return fail;
+        fi;
+        data := catch[2]();
+        if not IsRecord(data) then
+            Print("LoadOrbitCache: file ", path, " did not return a record.\n");
+            return fail;
+        fi;
     fi;
 
     if not IsBound(data.version) or data.version <> _ORBIT_CACHE_FORMAT_VERSION then
