@@ -345,46 +345,42 @@ end;;
 
 # Strict F_2 coboundary test on a c_table (modulus 2^L); returns the
 # F_2 witness (as a list of 0/1 integers) or fail.
-IB_StrictF2Witness := function(c_table, A_F2_T, n)
-    local b_F2, beta_F2, beta_int, i, one;
-    one := One(GF(2));
-    b_F2 := List([1..n*n], i -> (c_table[i] mod 2) * one);
-    ConvertToVectorRep(b_F2, GF(2));
-    beta_F2 := SolutionMat(A_F2_T, b_F2);
-    if beta_F2 = fail then return fail; fi;
-    beta_int := List(beta_F2, x -> If_(IsZero(x), 0, 1));
-    return beta_int;
+#
+# Issue #367: previously called `SolutionMat(A_F2_T, b_F2)` directly,
+# which does a fresh Gaussian elimination on a n × n^2 matrix per call.
+# At m=5 (n up to 2048) this dominates the fail-column wall — each
+# RREF is O(n^3 / 64) word ops, called ~1024 times per IB_RecCob, and
+# the cached `_GetCachedSemForAT(C)` factorisation in mod2_solver.g
+# was being bypassed. Routing through IsCoboundary2Mod2VecWithWitness
+# reuses the cached factorisation; per-call cost drops to back-sub only.
+IB_StrictF2Witness := function(C, c_table, n)
+    local result;
+    result := IsCoboundary2Mod2VecWithWitness(C,
+                  List([1..n*n], i -> c_table[i] mod 2));
+    if not result.yes then return fail; fi;
+    return List(result.witness, x -> If_(IsZero(x), 0, 1));
 end;;
 
-# IB_TableMod2WithLift(c_table, n, A_F2_T, hom_basis) — WithLift test
-# operating directly on a length-n² integer table (avoids re-evaluating
-# the cochain function).
-IB_TableMod2WithLift := function(c_table, n, A_F2_T, hom_basis)
-    local b_F2, num_basis, mask, alpha, alpha_cup_alpha_F2, residual,
-          sol, i, one, zero;
-    one := One(GF(2));
-    zero := Zero(GF(2));
-    b_F2 := List([1..n*n], i -> (c_table[i] mod 2) * one);
-    ConvertToVectorRep(b_F2, GF(2));
-    num_basis := Length(hom_basis);
-    for mask in [0..(2^num_basis - 1)] do
-        alpha := IB_AlphaFromMask(hom_basis, mask);
-        if Length(alpha) = 0 then
-            alpha_cup_alpha_F2 := List([1..n*n], i -> zero);
-        else
-            # A-5b R2-9 (#258 follow-up): the previous code allocated a
-            # zero-list then immediately overwrote it; drop the wasted
-            # allocation. The `* one` promotion is compiled (vec * scalar).
-            alpha_cup_alpha_F2 := IB_AlphaCupAlpha(alpha, n) * one;
-        fi;
-        ConvertToVectorRep(alpha_cup_alpha_F2, GF(2));
-        residual := b_F2 - alpha_cup_alpha_F2;
-        sol := SolutionMat(A_F2_T, residual);
-        if sol <> fail then
-            return true;
-        fi;
-    od;
-    return false;
+# IB_TableMod2WithLift(C, c_table, n) — WithLift test operating
+# directly on a length-n^2 integer table (avoids re-evaluating the
+# cochain function).
+#
+# Issue #367: the original implementation enumerated all
+# `2^num_basis` masks over IB_F2HomBasis(C) and, per mask, called
+# `SolutionMat(A_F2_T, b - alpha cup alpha)`. On F_2 the cup-square
+# `beta(alpha) = alpha cup alpha` is additive (mixed cross terms
+# `alpha cup alpha' + alpha' cup alpha` are coboundaries), so the
+# set {beta(alpha) : alpha in Hom(C, F_2)} modulo B^2 equals
+# `span(BocksteinH1ToH2(C)) + B^2`. The mask enumeration was therefore
+# computing exactly the same kernel-membership test that
+# `IsCoboundary2Mod2WithLiftVec(C, c)` answers in a single back-
+# substitution against the cached `_GetLiftSemForC(C)` factorisation.
+# Replacing the loop with that single call cuts the per-IB_RecCob
+# cost by `2^num_basis * <speedup from cached RREF>` — about 10^4x
+# at m=5.
+IB_TableMod2WithLift := function(C, c_table, n)
+    return IsCoboundary2Mod2WithLiftVec(C,
+               List([1..n*n], i -> c_table[i] mod 2));
 end;;
 
 # IB_DivBy2 — utility: subtract subtrahend (length-n² integers) from
@@ -410,16 +406,16 @@ end;;
 # arithmetic) instead of the O(n³) Position-based path. `elts` and
 # `idx` are kept in the signature for compatibility with the legacy
 # fallback but are unused on the mult path.
-IB_RecCob := function(c_table, modulus, elts, n, idx, A_F2_T, hom_basis, mult)
+IB_RecCob := function(C, c_table, modulus, elts, n, idx, A_F2_T, hom_basis, mult)
     local L, beta_int, delta_beta, c_table_next, mask, alpha,
           alpha_cup_alpha, c_table_shifted, num_basis;
     if modulus = 2 then
         # Base case: strict F_2 coboundary test.
-        return IB_StrictF2Witness(c_table, A_F2_T, n) <> fail;
+        return IB_StrictF2Witness(C, c_table, n) <> fail;
     fi;
 
     # Strict mod-2 test on c_table (gives β_0).
-    beta_int := IB_StrictF2Witness(c_table, A_F2_T, n);
+    beta_int := IB_StrictF2Witness(C, c_table, n);
     if beta_int = fail then return false; fi;
 
     # Compute d_1 at modulus / 2.
@@ -436,10 +432,12 @@ IB_RecCob := function(c_table, modulus, elts, n, idx, A_F2_T, hom_basis, mult)
     if modulus = 4 then
         # Inner level is modulus = 2 (F_2). The "[d - α∪α] = 0 in H²(F_2)
         # for some α" test is exactly IsCoboundary2Mod2WithLift on d.
-        return IB_TableMod2WithLift(c_table_next, n, A_F2_T, hom_basis);
+        return IB_TableMod2WithLift(C, c_table_next, n);
     fi;
 
     # Inner level is modulus / 2 ≥ 4. Enumerate α and recurse.
+    # Note: this path is not exercised at m=5 (where modulus = 4 takes
+    # the IB_TableMod2WithLift fast path above) but remains for k >= 3.
     num_basis := Length(hom_basis);
     for mask in [0..(2^num_basis - 1)] do
         alpha := IB_AlphaFromMask(hom_basis, mask);
@@ -450,7 +448,7 @@ IB_RecCob := function(c_table, modulus, elts, n, idx, A_F2_T, hom_basis, mult)
         fi;
         c_table_shifted := List([1..n*n], i ->
             (c_table_next[i] - alpha_cup_alpha[i]) mod (modulus / 2));
-        if IB_RecCob(c_table_shifted, modulus / 2, elts, n, idx,
+        if IB_RecCob(C, c_table_shifted, modulus / 2, elts, n, idx,
                      A_F2_T, hom_basis, mult) then
             return true;
         fi;
@@ -493,6 +491,6 @@ IsCoboundary2Z2k := function(C, c, k)
     A_F2_T := _GetCachedAF2T(C);
     hom_basis := IB_F2HomBasis(C);
 
-    return IB_RecCob(c_table, modulus, elts, n, idx, A_F2_T, hom_basis,
+    return IB_RecCob(C, c_table, modulus, elts, n, idx, A_F2_T, hom_basis,
                      mult_rec.mult);
 end;;
