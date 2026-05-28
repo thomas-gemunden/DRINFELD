@@ -1290,28 +1290,29 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
         exp_axis_k := h3_torsion[fc];   # default: no k in ker, so axis kernel = 0
         for exp_axis_vec in [1..h3_torsion[fc] - 1] do
             # Test if `exp_axis_vec * e_fc` is in ker(Tr).
-            unit_e_i := List([1..k], jj -> 0);
-            unit_e_i[fc] := exp_axis_vec;
             exp_axis_in_ker_k := true;
             for j in [1..n_orbits] do
                 orb_info := reduced_matrices[j].orb_info;
                 cache_orbit := reduced_matrices[j].cache;
                 if cache_orbit = fail then continue; fi;   # identity class
-                rep := Representative(classes[orb_info.start_idx]);
-                C := Centralizer(G, rep);
+                # Issue #371: reuse cache_orbit.C captured at
+                # BuildReducedTransgressionMatrix time. Saves a few
+                # seconds of Centralizer(G, rep) over the sweep.
+                C := cache_orbit.C;
                 for fallback_target_idx in orb_info.orbit do
                     M_y_j_exp := H3MatrixForOrbitMember(
                         orb_info.start_idx, fallback_target_idx,
                         orb_info.parent, orb_info.gen_used,
                         h3_matrices, h3_torsion);
-                    vec_target_exp := List([1..k], jj -> 0);
-                    for jj in [1..k] do
-                        for l in [1..k] do
-                            vec_target_exp[jj] := vec_target_exp[jj]
-                                + M_y_j_exp[jj][l] * unit_e_i[l];
-                        od;
-                        vec_target_exp[jj] := vec_target_exp[jj] mod h3_torsion[jj];
-                    od;
+                    # Issue #371: unit_e_i = exp_axis_vec * e_fc has
+                    # exactly one non-zero entry, at index fc. The full
+                    # `vec_target_exp[jj] := Sum_l M_y_j_exp[jj][l] *
+                    # unit_e_i[l]` collapses to a single-column read.
+                    # Saves the k * k = 27,225 interpreted ops per
+                    # iteration that multiplied the 164 zero entries.
+                    vec_target_exp := List([1..k], jj ->
+                        (M_y_j_exp[jj][fc] * exp_axis_vec)
+                            mod h3_torsion[jj]);
                     # Issue #370: cache_orbit.table is in IsMatrixRep
                     # after ConvertToMatrixRep at load time, so the `*`
                     # dispatches to compiled PROD_MAT_VEC_INT
@@ -1365,28 +1366,22 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
         # k_min divides 2.
         # Re-derive k_min for exp_index from basis_orders / position.
         # Simpler: directly test 2*e_{exp_index} via the same fallback.
-        unit_e_i := List([1..k], jj -> 0);
-        unit_e_i[exp_index] := 2;
         half_in_ker := true;
         for j in [1..n_orbits] do
             orb_info := reduced_matrices[j].orb_info;
             cache_orbit := reduced_matrices[j].cache;
             if cache_orbit = fail then continue; fi;
-            rep := Representative(classes[orb_info.start_idx]);
-            C := Centralizer(G, rep);
+            # Issue #371: reuse captured cache_orbit.C (see axis_vec site).
+            C := cache_orbit.C;
             for fallback_target_idx in orb_info.orbit do
                 M_y_j_exp := H3MatrixForOrbitMember(
                     orb_info.start_idx, fallback_target_idx,
                     orb_info.parent, orb_info.gen_used,
                     h3_matrices, h3_torsion);
-                vec_target_exp := List([1..k], jj -> 0);
-                for jj in [1..k] do
-                    for l in [1..k] do
-                        vec_target_exp[jj] := vec_target_exp[jj]
-                            + M_y_j_exp[jj][l] * unit_e_i[l];
-                    od;
-                    vec_target_exp[jj] := vec_target_exp[jj] mod h3_torsion[jj];
-                od;
+                # Issue #371: unit_e_i = 2 * e_{exp_index} is sparse;
+                # collapse the k * k inner loop to a single-column read.
+                vec_target_exp := List([1..k], jj ->
+                    (M_y_j_exp[jj][exp_index] * 2) mod h3_torsion[jj]);
                 # Issue #370: compiled PROD_MAT_VEC_INT (see note above
                 # at the axis_vec site).
                 c_g_table_exp := cache_orbit.table * vec_target_exp;

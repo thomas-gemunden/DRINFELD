@@ -494,3 +494,40 @@ IsCoboundary2Z2k := function(C, c, k)
     return IB_RecCob(C, c_table, modulus, elts, n, idx, A_F2_T, hom_basis,
                      mult_rec.mult);
 end;;
+
+# IsCoboundary2Z2kVec(C, c_g_vec, k) — Vec API. Identical math to
+# IsCoboundary2Z2k but takes a precomputed length-n^2 integer vector
+# `c_g_vec` indexed by (i-1)*n+j with `elts := AsList(C)`, instead of
+# rebuilding c_table by calling a closure n^2 times.
+#
+# Issue #371: the function-API path's n^2 closure dispatch (each call
+# doing 2 dict lookups) dominates wall at m=5 — ~5 s per IsCoboundary2Z2k
+# call for |C|=1024 with the IsCoboundary2SplitVec closure. Production
+# callers (IsCoboundary2SplitVec, the fail-column orchestration) already
+# have c_g_vec in the right layout from compiled matvec, so passing it
+# directly is bit-identical and ~1000x faster on c_table assembly.
+IsCoboundary2Z2kVec := function(C, c_g_vec, k)
+    local mult_rec, elts, n, idx, c_table, modulus, A_F2_T, hom_basis;
+    if k < 1 then
+        Error("IsCoboundary2Z2kVec: k must be >= 1");
+    fi;
+    if k = 1 then
+        return IsCoboundary2Mod2Vec(C, c_g_vec);
+    fi;
+
+    mult_rec := _GetCachedMultTable(C);
+    elts := mult_rec.elts;
+    n := mult_rec.n;
+    idx := function(h) return LookupDictionary(mult_rec.idx_dict, h); end;
+
+    modulus := 2^k;
+    # Single compiled list comprehension replaces n^2 interpreted
+    # closure calls. c_g_vec is already in (i-1)*n+j layout.
+    c_table := List(c_g_vec, x -> x mod modulus);
+
+    A_F2_T := _GetCachedAF2T(C);
+    hom_basis := IB_F2HomBasis(C);
+
+    return IB_RecCob(C, c_table, modulus, elts, n, idx, A_F2_T, hom_basis,
+                     mult_rec.mult);
+end;;
