@@ -214,14 +214,16 @@ end;;
 
 # Action of an endomorphism matrix M on a coordinate vector v in
 # prod Z/d_i: the result is again in prod Z/d_i.
+#
+# Issue #372 (F2): the previous implementation was an interpreted k^2
+# loop with per-row mod. M and v are plain integer matrix/list, so
+# `M * v` dispatches to compiled PROD_MAT_VEC_INT (~100x faster at
+# k=165). Same shape as the wins in #370 / #371 / #373.
 ApplyH3Endomorphism := function(M, v, torsion)
-    local k, result, j, i;
+    local k, result, j;
     k := Length(torsion);
-    result := List([1..k], j -> 0);
+    result := M * v;
     for j in [1..k] do
-        for i in [1..k] do
-            result[j] := result[j] + M[j][i] * v[i];
-        od;
         result[j] := result[j] mod torsion[j];
     od;
     return result;
@@ -229,18 +231,17 @@ end;;
 
 # Composition of two endomorphisms: (M1 . M2)[j][i] = sum_l M1[j][l] * M2[l][i],
 # reduced mod torsion[j] for each j.
+#
+# Issue #372 (F4): compiled PROD_MAT_MAT_INT replaces the interpreted
+# k^3 triple loop. Per-row mod stays as a fast post-pass. Used by
+# `GeneratedH3Subgroup` / `GeneratedH3SubgroupFast` during BRW setup;
+# not on the m=5 fail-column hot path but saves seconds of setup wall.
 ComposeH3Endomorphism := function(M1, M2, torsion)
-    local k, result, j, i, s, l;
+    local k, result, j;
     k := Length(torsion);
-    result := NullMat(k, k);
+    result := M1 * M2;
     for j in [1..k] do
-        for i in [1..k] do
-            s := 0;
-            for l in [1..k] do
-                s := s + M1[j][l] * M2[l][i];
-            od;
-            result[j][i] := s mod torsion[j];
-        od;
+        result[j] := List(result[j], x -> x mod torsion[j]);
     od;
     return result;
 end;;
