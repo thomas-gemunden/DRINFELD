@@ -292,12 +292,14 @@ PerGeneratorTransgressionBRW := function(G, i)
                                          h3_matrices, torsion, e_i);
 
             # Build c_g_table = basis_cache.table . vec_target (Z-linear).
-            c_g_table := List(basis_cache.table,
-                              row -> Sum([1..k], idx ->
-                                  vec_target[idx] * row[idx]));
-            c_g_func := MakeCgFromCache(c_g_table, basis_cache);
+            # Issue #372 (F3): compiled matvec (#370 shape) + Vec API
+            # for IsCoboundary2Split (#371 shape) — skips both the
+            # interpreted List+Sum dot product AND the c_g_func closure
+            # whose n² dict lookups internally just rebuilt the same
+            # integer table.
+            c_g_table := basis_cache.table * vec_target;
             results[target_idx] :=
-                IsCoboundary2Split(C, c_g_func, vec_target, setup);
+                IsCoboundary2SplitVec(C, c_g_table, vec_target, setup);
         od;
     od;
 

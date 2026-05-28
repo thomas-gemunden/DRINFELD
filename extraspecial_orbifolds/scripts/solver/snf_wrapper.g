@@ -1058,8 +1058,9 @@ TransgressionKernelExact := function(G)
         all_zero := true;
         for j in [1..n_classes] do
             cache := caches[j];
-            c_g_table := List(cache.table,
-                              row -> Sum([1..k], i -> vec[i] * row[i]));
+            # Issue #372 (F3): compiled matvec + Vec API (#370/#371
+            # shape).
+            c_g_table := cache.table * vec;
             # Early-return: if c_g is identically zero mod exp, it is the
             # zero cocycle and trivially a coboundary. This always holds
             # for the identity class (where c_g(h, k) = omega(id, h, k) -
@@ -1069,8 +1070,7 @@ TransgressionKernelExact := function(G)
             if ForAll(c_g_table, x -> x mod setup.exponent = 0) then
                 continue;
             fi;
-            c_g_func := MakeCgFromCache(c_g_table, cache);
-            if not IsCoboundary2Split(cache.C, c_g_func, vec, setup) then
+            if not IsCoboundary2SplitVec(cache.C, c_g_table, vec, setup) then
                 all_zero := false;
                 break;
             fi;

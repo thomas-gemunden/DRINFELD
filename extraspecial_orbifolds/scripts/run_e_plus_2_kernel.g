@@ -151,8 +151,11 @@ if DO_BRUTE_FORCE then
         in_kernel := true;
         for j in [1..n_classes] do
             cache := brute_caches[j];
-            c_g_table := List(cache.table,
-                              row -> Sum([1..k], i -> vec[i] * row[i]));
+            # Issue #372 (F3): compiled matvec for c_g_table build (#370
+            # shape). The IsCoboundary2 call keeps the closure API since
+            # the brute-force m=2 path is a small unit-test harness, not
+            # production.
+            c_g_table := cache.table * vec;
             if ForAll(c_g_table, x -> x mod exp = 0) then
                 continue;
             fi;
