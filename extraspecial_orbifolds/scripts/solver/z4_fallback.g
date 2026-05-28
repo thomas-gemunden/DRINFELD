@@ -36,3 +36,13 @@ ChangeDirectoryCurrent(Filename(z4_fallback_orig_dir, ""));;
 IsCoboundary2Zexp := function(C, c, exp)
     return IsCoboundary2(C, c, exp);
 end;;
+
+# IsCoboundary2ZexpVec(C, c_g_vec, exp) — Vec API thin wrapper.
+# Same math as IsCoboundary2Zexp; takes c_g_vec directly to skip the
+# closure dispatch. Issue #372 (F5). Used by IsCoboundary2SplitVec's
+# non-power-of-2 exp branch (the m in {2, 3, 5, 7} runs never hit this
+# because exp in {2, 4} always; this fix is for future generality and
+# pattern consistency).
+IsCoboundary2ZexpVec := function(C, c_g_vec, exp)
+    return IsCoboundary2Vec(C, c_g_vec, exp);
+end;;

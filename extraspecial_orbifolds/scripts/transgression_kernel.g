@@ -197,6 +197,39 @@ IsCoboundary2 := function(H, c, m)
     return sol <> fail;
 end;;
 
+# IsCoboundary2Vec(H, c_g_vec, m) — Vec API. Identical math to
+# IsCoboundary2 but takes a precomputed length-n^2 integer vector
+# `c_g_vec` indexed by (i-1)*n+j with `elts := AsList(H)`, instead of
+# rebuilding the b vector by calling a closure n^2 times.
+#
+# Issue #372 (F5): the function-API path called a closure n^2 times,
+# each call doing 2 dict lookups to convert (h, k) back to indices the
+# caller already knew. The Vec API uses c_g_vec directly. Same shape
+# as the Z2k Vec API added in PR #371.
+IsCoboundary2Vec := function(H, c_g_vec, m)
+    local elts, n, idx_dict, i, j, ij, A, b, row, sol;
+    elts := AsList(H);
+    n := Length(elts);
+    idx_dict := NewDictionary(elts[1], true, elts);
+    for i in [1..n] do AddDictionary(idx_dict, elts[i], i); od;
+
+    A := NullMat(n*n, n);
+    b := List([1..n*n], i -> 0);
+    for i in [1..n] do
+        for j in [1..n] do
+            row := (i - 1) * n + j;
+            ij := LookupDictionary(idx_dict, elts[i] * elts[j]);
+            A[row][i] := A[row][i] + 1;
+            A[row][ij] := A[row][ij] - 1;
+            A[row][j] := A[row][j] + 1;
+            b[row] := c_g_vec[row] mod m;
+        od;
+    od;
+
+    sol := AugmentedSolve(A, b, m, n);
+    return sol <> fail;
+end;;
+
 # Solve A·beta ≡ b (mod m) for beta of length n, where A is n²×n.
 AugmentedSolve := function(A, b, m, n)
     local n_eq, M, i, j, MT, sol;

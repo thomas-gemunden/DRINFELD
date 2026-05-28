@@ -98,17 +98,18 @@ end;;
 # `basis_cache.table * vec_target`.
 #
 # For Path Z (order-exp generator non-zero) we route through the
-# Vec API (IsCoboundary2Z2kVec / IsCoboundary2ZexpVec where available)
-# to skip the n² closure dispatch. Issue #371: the legacy function API
-# rebuilt c_table inside IsCoboundary2Z2k by calling a closure n² times,
-# each call doing 2 dict lookups that returned an index we already knew.
+# Vec API (IsCoboundary2Z2kVec / IsCoboundary2ZexpVec) to skip the
+# n² closure dispatch. Issue #371: the legacy function API rebuilt
+# c_table inside IsCoboundary2Z2k by calling a closure n² times, each
+# call doing 2 dict lookups that returned an index we already knew.
 # At m=5 this c_table build was ~5 s per call across ~1000 fail-column
-# calls — the new dominant cost after PRs #368 + #370 cleared the prior
-# bottlenecks.
+# calls — the new dominant cost after PRs #368 + #370 cleared the
+# prior bottlenecks. Issue #372 (F5) extends the Vec-API to the
+# IsCoboundary2Zexp branch as well.
 #
 # For Path A (the bulk of A-5b's work) we go straight to the Vec API.
 IsCoboundary2SplitVec := function(C, c_g_vec, vec, setup)
-    local i, exp_index, r, c_g_func, k, n, idx, elts, c_prime_vec;
+    local i, exp_index, r, k, c_prime_vec;
     exp_index := Position(setup.torsion, setup.exponent);
 
     if exp_index <> fail and vec[exp_index] <> 0 then
@@ -120,19 +121,11 @@ IsCoboundary2SplitVec := function(C, c_g_vec, vec, setup)
             # same AsList(C) ordering).
             return IsCoboundary2Z2kVec(C, c_g_vec, k);
         else
-            # Z/exp fallback path (non-power-of-2 exponent). The
-            # IsCoboundary2Zexp API does not yet have a Vec variant;
-            # build the closure for backward compatibility. Not on
-            # the m=5 hot path (exp=4 always hits the Z2k branch above).
-            elts := AsList(C);
-            n := Length(elts);
-            idx := NewDictionary(elts[1], true, elts);
-            for i in [1..n] do AddDictionary(idx, elts[i], i); od;
-            c_g_func := function(h, kk)
-                return c_g_vec[(LookupDictionary(idx, h) - 1) * n
-                               + LookupDictionary(idx, kk)];
-            end;
-            return IsCoboundary2Zexp(C, c_g_func, setup.exponent);
+            # Z/exp fallback path (non-power-of-2 exponent). Vec API
+            # via #372 (F5). Not on the m ∈ {2, 3, 5, 7} hot path
+            # (exp ∈ {2, 4} always hits the Z2k branch above) but
+            # consistent with the rest of the Vec-API surface.
+            return IsCoboundary2ZexpVec(C, c_g_vec, setup.exponent);
         fi;
     fi;
 
