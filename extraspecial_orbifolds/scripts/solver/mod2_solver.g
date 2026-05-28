@@ -315,6 +315,62 @@ IsCoboundary2Mod2Vec := function(H, c_g_vec)
     return IsZero(b);
 end;;
 
+# IsCoboundary2Mod2VecWithWitness(H, c_g_vec) — like IsCoboundary2Mod2Vec
+# but also returns the witness β (the 1-cochain whose F_2 coboundary
+# equals c_g_vec mod 2).
+#
+# Returns rec(yes := bool, witness := length-n GF(2) vector when yes,
+# or fail when no). Uses the same cached SemiEchelon factorisation as
+# IsCoboundary2Mod2Vec, so per-call cost is O(rank * n^2 / 64) bit ops
+# (back-substitution only — the factorisation is built once per H).
+#
+# Added #367: the legacy `IB_StrictF2Witness` in iterated_bockstein.g
+# called `SolutionMat(A_F2_T, b)` directly, which does fresh Gaussian
+# elimination on every invocation and at m=5 dominates the fail-column
+# fallback wall (months of compute). Routing IB through this helper
+# reuses the cached factorisation.
+IsCoboundary2Mod2VecWithWitness := function(H, c_g_vec)
+    local n, A, entry, sem, nonzero_heads, b, i, one, z, sol_dim, sol, vno, x;
+    n := Length(AsList(H));
+    one := One(GF(2));
+    z := Zero(GF(2));
+
+    A := BoundaryMatrixGF2(H);                  # cached
+    entry := _GetCachedSemForAT(A);             # cached factorisation
+    sem := entry.sem;
+    nonzero_heads := entry.nonzero_heads;
+
+    b := List(c_g_vec, x -> (x mod 2) * one);
+    ConvertToVectorRep(b, GF(2));
+
+    if Length(sem.coeffs) = 0 then
+        # Rank 0: the only coboundary is the zero cocycle. Witness = 0.
+        if IsZero(b) then
+            return rec(yes := true,
+                       witness := ListWithIdenticalEntries(n, z));
+        else
+            return rec(yes := false, witness := fail);
+        fi;
+    fi;
+    sol_dim := Length(sem.coeffs[1]);
+    sol := ListWithIdenticalEntries(sol_dim, z);
+    ConvertToVectorRep(sol, GF(2));
+    b := ShallowCopy(b);
+    for i in nonzero_heads do
+        vno := sem.heads[i];
+        x := b[i];
+        if x <> z then
+            AddRowVector(b, sem.vectors[vno], -x);
+            AddRowVector(sol, sem.coeffs[vno], x);
+        fi;
+    od;
+    if IsZero(b) then
+        return rec(yes := true, witness := sol);
+    else
+        return rec(yes := false, witness := fail);
+    fi;
+end;;
+
 # BocksteinH1ToH2(C) — image of the connecting homomorphism
 #   β : H^1(C; F_2) -> H^2(C; F_2)
 # from the SES 0 -> F_2 -·²-> F_4 -> F_2 -> 0 (equivalently Sq^1).
