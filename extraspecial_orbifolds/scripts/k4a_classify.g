@@ -254,7 +254,14 @@ _K4A_DVAN_EA_FAMILIES.("3") := [4, 6, 7, 11, 16, 22];;
 # m=5: PR #320 minimum-detecting-family, indices into BuildRestrictionMatrices(5, "hap").H_EA_list.
 # Verified `final_ker = 1` at m=5 via streaming greedy + drop-one tightening.
 _K4A_DVAN_EA_FAMILIES.("5") := [33, 48, 54, 57, 70, 76, 88, 89, 109];;
-# m=7: TBD pending D-VAN m=7 production run completion (in flight).
+# m=7: D-VAN m=7 production landed via PR #361 with greedy_log
+# ea = [1, 3, 6, 12, 10, 122, 765, 2], final_ker = 1, locally_tight = true.
+# These indices are NOT directly usable here: they index into the
+# streaming-greedy 1000-Lagrangian sample (not the 9 845 550 eager
+# enumeration that `BuildRestrictionMatrices(7, "lhs")` would use, which
+# is explicitly errored OOM at detecting_family_restriction.g:1184).
+# Persisting the sampled EAs' generator data + adding a loader is the
+# blocker — tracked in a separate follow-up issue.
 
 _K4A_GetDVANEAFamily := function(m)
     local key;
