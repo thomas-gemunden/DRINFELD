@@ -1312,8 +1312,13 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
                         od;
                         vec_target_exp[jj] := vec_target_exp[jj] mod h3_torsion[jj];
                     od;
-                    c_g_table_exp := List(cache_orbit.table,
-                        rowx -> Sum([1..k], jj -> vec_target_exp[jj] * rowx[jj]));
+                    # Issue #370: cache_orbit.table is in IsMatrixRep
+                    # after ConvertToMatrixRep at load time, so the `*`
+                    # dispatches to compiled PROD_MAT_VEC_INT
+                    # (~100-1000x faster than the interpreted
+                    # `List(table, row -> Sum(jj, vec[jj]*row[jj]))`).
+                    # Result is bit-identical at the integer level.
+                    c_g_table_exp := cache_orbit.table * vec_target_exp;
                     if not IsCoboundary2SplitVec(C, c_g_table_exp,
                                                   vec_target_exp, setup) then
                         exp_axis_in_ker_k := false;
@@ -1382,8 +1387,9 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
                     od;
                     vec_target_exp[jj] := vec_target_exp[jj] mod h3_torsion[jj];
                 od;
-                c_g_table_exp := List(cache_orbit.table,
-                    rowx -> Sum([1..k], jj -> vec_target_exp[jj] * rowx[jj]));
+                # Issue #370: compiled PROD_MAT_VEC_INT (see note above
+                # at the axis_vec site).
+                c_g_table_exp := cache_orbit.table * vec_target_exp;
                 if not IsCoboundary2SplitVec(C, c_g_table_exp,
                                               vec_target_exp, setup) then
                     half_in_ker := false;
