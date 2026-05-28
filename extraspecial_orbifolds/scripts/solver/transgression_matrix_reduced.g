@@ -896,15 +896,16 @@ H3MatrixForOrbitMember := function(start_idx, target_idx, parent, gen_used,
         k_step := gen_used[pos];
         M_step := h3_matrices[k_step];
         # M_y_new = M_step . M_y, with each row mod h3_torsion[l].
-        prod := List([1..k_dim], l -> List([1..k_dim], i -> 0));
+        #
+        # Issue #372 (F1): replace the interpreted k^3 triple loop with
+        # compiled PROD_MAT_MAT_INT and a per-row mod pass. Same shape
+        # as the wins in #370 / #371. At k=165, the triple loop was
+        # ~4.5M interpreted ops per Schreier step times O(path_length *
+        # orbit_size * axis_vecs) — the next dominant fail-column cost
+        # after #371 cleared the IB closure dispatch.
+        prod := M_step * M_y;
         for l in [1..k_dim] do
-            for i in [1..k_dim] do
-                s := 0;
-                for j in [1..k_dim] do
-                    s := s + M_step[l][j] * M_y[j][i];
-                od;
-                prod[l][i] := s mod h3_torsion[l];
-            od;
+            prod[l] := List(prod[l], x -> x mod h3_torsion[l]);
         od;
         M_y := prod;
     od;
