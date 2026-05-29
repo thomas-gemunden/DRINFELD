@@ -1469,6 +1469,149 @@ end;;
 
 
 # =====================================================================
+# F_2-first greedy with incremental RREF state (issues #343 + #347).
+#
+# At m=7, H^3(E_+(7); U(1)) = (Z/2)^454 ⊕ Z/4 — overwhelmingly F_2
+# torsion. The old greedy in `_DETF_TrimmedFamily_m7_streaming`
+# ran 996 full integer SNF computations per step (~9 hrs total
+# wall, step 5 alone ~3h 15m at m=7), with GMP big-int arithmetic
+# dominating. Almost every kernel reduction along the way is an
+# F_2-rank reduction.
+#
+# The helpers below let the m=7 driver do greedy growth over GF(2)
+# with maintained RREF state — the F_2 analogue of incremental SNF
+# (#347) — bypassing integer arithmetic until a single end-of-pass
+# cleanup SNF (#343). When #343 and #347 are bundled, integer SNF
+# only runs ONCE at the end of Pass 1 (cleanup) plus inside a
+# Pass-3 fallback that only triggers if residual Z/4 ambiguity
+# survives the F_2 saturation.
+#
+# Math: each restriction matrix `res_EA_list[j]` is k_G × k_{H_j};
+# the F_2-rank of the joint matrix `[M_chosen | M_D8 | M_Q8]`
+# (concatenated column-wise) equals dim_F_2 of its COLUMN space
+# inside F_2^{k_G}. We track an echelon basis for that column
+# space as a list of vectors in F_2^{k_G}; columns of each new
+# block (i.e. rows of TransposedMat(block)) are reduced against
+# the basis to compute rank gain / extend the basis.
+#
+# State shape:
+#   rec(
+#     pivots : list of pivot column indices (one per basis row),
+#     basis  : list of GF(2) row vectors of length k_G,
+#     k_G    : ambient dimension (length of each basis vector)
+#   )
+#
+# All matrices are GF(2) packed via `ConvertToMatrixRep(M, GF(2))`;
+# GAP's native `+` on GF(2) row vectors dispatches to XOR over the
+# packed word representation. `AddRowVector(r, b)` mutates r := r
+# + b in place — much cheaper than `r := r + b`, which allocates a
+# new packed vector each call.
+
+# Add the columns of `M_block_F2` (a k_G × k_{H_new} GF(2) matrix)
+# to `state` as new basis vectors, performing incremental Gauss
+# elimination. Maintains true RREF (clears the new pivot column
+# in earlier basis rows too) so the basis stays canonical and the
+# reduction is order-independent.
+#
+# Internal helper for `_DETF_F2RrefState` and `_DETF_F2RrefStateAdd`.
+_DETF_F2RrefStateAddBlockMut := function(state, M_block_F2)
+    local M_T, r, i, pivot, j_clear;
+    # Columns of M_block_F2 are vectors in F_2^{k_G}; expose them
+    # as mutable rows via TransposedMat (which returns a fresh
+    # matrix in GAP — confirmed by experiment, but we
+    # MutableCopyMat to be defensive against any future packed-rep
+    # sharing).
+    M_T := MutableCopyMat(TransposedMat(M_block_F2));
+    for r in M_T do
+        # Reduce r against existing basis (echelon-form reduction).
+        for i in [1..Length(state.pivots)] do
+            if r[state.pivots[i]] = One(GF(2)) then
+                AddRowVector(r, state.basis[i]);
+            fi;
+        od;
+        pivot := PositionNonZero(r);
+        if pivot <= Length(r) then
+            # r is non-zero ⇒ it adds a new pivot column.
+            Add(state.basis, r);
+            Add(state.pivots, pivot);
+            # Maintain true RREF: clear `pivot` in all earlier
+            # basis rows. (Pure echelon would skip this; it is
+            # equivalent for rank counting, but RREF keeps the
+            # basis canonical so e.g. equality checks across two
+            # call orderings behave predictably.)
+            for j_clear in [1..Length(state.basis) - 1] do
+                if state.basis[j_clear][pivot] = One(GF(2)) then
+                    AddRowVector(state.basis[j_clear], r);
+                fi;
+            od;
+        fi;
+    od;
+end;;
+
+# Build an F_2 RREF state from the union of EA blocks (indexed by
+# `ea_indices`) plus D_8 (always, if include_D8) and Q_8 (if
+# include_Q8). Builds the lazy `data!.res_*_F2` caches if not
+# present.
+_DETF_F2RrefState := function(data, ea_indices, include_D8, include_Q8)
+    local state, j, k_G;
+    if not IsBound(data!.res_EA_list_F2) then
+        data!.res_EA_list_F2 := List(data.res_EA_list,
+                                     M -> M * One(GF(2)));
+        for j in [1..Length(data!.res_EA_list_F2)] do
+            ConvertToMatrixRep(data!.res_EA_list_F2[j], GF(2));
+        od;
+        data!.res_D8_F2 := data.res_D8 * One(GF(2));
+        ConvertToMatrixRep(data!.res_D8_F2, GF(2));
+        if data.res_Q8 <> fail then
+            data!.res_Q8_F2 := data.res_Q8 * One(GF(2));
+            ConvertToMatrixRep(data!.res_Q8_F2, GF(2));
+        else
+            data!.res_Q8_F2 := fail;
+        fi;
+    fi;
+    k_G := Length(data.torsion_G);
+    state := rec(pivots := [], basis := [], k_G := k_G);
+    for j in ea_indices do
+        _DETF_F2RrefStateAddBlockMut(state, data!.res_EA_list_F2[j]);
+    od;
+    if include_D8 then
+        _DETF_F2RrefStateAddBlockMut(state, data!.res_D8_F2);
+    fi;
+    if include_Q8 and data!.res_Q8_F2 <> fail then
+        _DETF_F2RrefStateAddBlockMut(state, data!.res_Q8_F2);
+    fi;
+    return state;
+end;;
+
+# F_2 rank gain from adding `M_block_F2` (a k_G × k_{H_new} GF(2)
+# matrix) to `state`. Does NOT mutate `state`. Returns an integer
+# in `[0, state.k_G - Length(state.pivots)]`.
+#
+# Implementation: deep-copy the (small) basis + pivots into a
+# scratch state, then run `_DETF_F2RrefStateAddBlockMut` and read
+# off the new basis length. Clean and safe; the basis grows by at
+# most k_G - len(state.basis) entries, so the copy is bounded by
+# `O(k_G^2)` in the worst case (cheap for k_G ~ 91-1000).
+_DETF_F2RankGain := function(state, M_block_F2)
+    local scratch, b;
+    scratch := rec(
+        pivots := ShallowCopy(state.pivots),
+        basis  := List(state.basis, b -> ShallowCopy(b)),
+        k_G    := state.k_G
+    );
+    _DETF_F2RrefStateAddBlockMut(scratch, M_block_F2);
+    return Length(scratch.pivots) - Length(state.pivots);
+end;;
+
+# Add `M_block_F2` to `state`, mutating it in place. After this
+# call, `state.pivots` and `state.basis` reflect the union of all
+# prior blocks plus this block.
+_DETF_F2RrefStateAdd := function(state, M_block_F2)
+    _DETF_F2RrefStateAddBlockMut(state, M_block_F2);
+end;;
+
+
+# =====================================================================
 # Public alias for the LHS-resolution-aware restriction-matrix builder
 # (issue #322). Thin wrapper around BuildRestrictionMatrices(m, "lhs")
 # that documents intent: build the same record as the HAP path but
@@ -1532,7 +1675,9 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
           seed, rs,
           cluster_info,
           ranks, K_TOP, top_K_indices,
-          K_ADD_PER_STEP, candidate_kers, additions, entry, new_ker;
+          K_ADD_PER_STEP, candidate_kers, additions, entry, new_ker,
+          f2_state, eligible, gains, best_gain, pass1_steps,
+          pass1_post_ker;
 
     # Allow opts.m override for testing the streaming path at smaller m.
     # Default = 7 (the production case).
@@ -1747,6 +1892,83 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
               "only; not used as filter): ", cluster_info.total,
               " candidates -> ", cluster_info.n_clusters, " clusters\n");
     fi;
+
+    # ----- Pass 1: F_2-first greedy with incremental RREF state -----
+    # Issues #343 + #347. The F_2 column-space of the joint
+    # restriction is the dominant invariant at m=7 (where H^3(E_+(7);
+    # U(1)) = (Z/2)^454 ⊕ Z/4). Pass 1 grows the F_2 row-space
+    # incrementally — at each step pick the EA with the largest F_2
+    # rank gain (ties broken by lowest index for determinism). When
+    # no candidate adds rank, the F_2 plateau is saturated; jump to
+    # Pass 2.
+    if verbose then
+        Print("[_DETF_TrimmedFamily_m7]   Pass 1: F_2-first greedy ",
+              "(incremental RREF state) ...\n");
+    fi;
+    f2_state := _DETF_F2RrefState(data, [], true, include_Q8);
+    if verbose then
+        Print("[_DETF_TrimmedFamily_m7]   Pass 1: anchor F_2 basis ",
+              "size (D_8 + Q_8) = ", Length(f2_state.pivots),
+              " / k_G = ", f2_state.k_G, "\n");
+    fi;
+    pass1_steps := 0;
+    while true do
+        # Score every unchosen candidate by its F_2 rank gain.
+        eligible := Filtered([1..n_EA], j -> not (j in ea_chosen));
+        if IsEmpty(eligible) then break; fi;
+        gains := List(eligible, j -> [j,
+                      _DETF_F2RankGain(f2_state,
+                                       data!.res_EA_list_F2[j])]);
+        # Sort: largest gain first, ties by lowest index. SortBy is
+        # stable; sort by [-gain, j] ascending.
+        SortBy(gains, x -> [-x[2], x[1]]);
+        best_j := gains[1][1];
+        best_gain := gains[1][2];
+        if best_gain = 0 then
+            if verbose then
+                Print("[_DETF_TrimmedFamily_m7]   Pass 1 saturated: ",
+                      "F_2 basis size = ", Length(f2_state.pivots),
+                      ", chose ", Length(ea_chosen),
+                      " EAs in Pass 1\n");
+            fi;
+            break;
+        fi;
+        # Commit: add best_j to f2_state and ea_chosen.
+        _DETF_F2RrefStateAdd(f2_state, data!.res_EA_list_F2[best_j]);
+        Add(ea_chosen, best_j);
+        pass1_steps := pass1_steps + 1;
+        # Log: post-Pass-1 we don't have an integer-kernel value, so
+        # stamp the entry with `fail` for the ker field. Pass 2 emits
+        # a separate entry with the post-Pass-1 ker.
+        Add(greedy_log, rec(ea := best_j, ker := fail,
+                            pass := 1, gain := best_gain));
+        if verbose and pass1_steps mod 5 = 0 then
+            Print("[_DETF_TrimmedFamily_m7]   Pass 1 step ",
+                  pass1_steps, ": added EA ", best_j,
+                  " (gain ", best_gain, ", F_2 basis ",
+                  Length(f2_state.pivots), "/", f2_state.k_G,
+                  ")\n");
+        fi;
+    od;
+
+    # ----- Pass 2: integer SNF cleanup -----
+    # One SNF call on the entire chosen stack to capture residual
+    # Z/4 (or higher) torsion that F_2 missed.
+    pass1_post_ker := _DETF_KernelOrderSNF(data, ea_chosen, true,
+                                           include_Q8);
+    curr_ker := pass1_post_ker;
+    if verbose then
+        Print("[_DETF_TrimmedFamily_m7]   Pass 2: post-Pass-1 ",
+              "integer SNF ker = ", curr_ker,
+              " (after ", pass1_steps, " EAs)\n");
+    fi;
+    Add(greedy_log, rec(ea := fail, ker := curr_ker,
+                        pass := 2, gain := fail));
+
+    # ----- Pass 3: top-K integer-SNF fallback for residual Z/4 -----
+    # Mirrors the original greedy (#345 + #349). Only executes if
+    # Pass 1's F_2 saturation didn't reach ker = 1 — typically when
+    # the Z/4 component of H^3(G; U(1)) is not yet killed.
     # Combined strategy from #345 (F_2 prescreen) + #349 (top-K batch):
     #   Phase 1: cheap F_2 augmented-rank screen → top K_TOP=10 candidates.
     #   Phase 2: integer SNF on those K_TOP only.
@@ -1757,6 +1979,10 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
     #            candidate early-termination (incompatible with batch:
     #            every Phase-2 candidate's k_try must be scored to rank).
     K_ADD_PER_STEP := 5;
+    if curr_ker > 1 and verbose then
+        Print("[_DETF_TrimmedFamily_m7]   Pass 3: integer-SNF ",
+              "fallback (curr_ker = ", curr_ker, " > 1) ...\n");
+    fi;
     while curr_ker > 1 do
         candidate_kers := [];
         # --- Phase 1: F_2 prescreen ---
@@ -1773,9 +1999,9 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
         top_K_indices := List(ranks{[1..Minimum(K_TOP, Length(ranks))]},
                               x -> x[1]);
         if verbose then
-            Print("[_DETF_TrimmedFamily_m7]   F_2 prescreen: top-",
-                  Length(top_K_indices), " candidates by F_2 rank: ",
-                  top_K_indices, "\n");
+            Print("[_DETF_TrimmedFamily_m7]   Pass 3: F_2 prescreen ",
+                  "top-", Length(top_K_indices),
+                  " candidates by F_2 rank: ", top_K_indices, "\n");
         fi;
         # --- Phase 2: integer SNF on top-K only ---
         for j in top_K_indices do
@@ -1796,8 +2022,8 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
             # The sample is insufficient. Caller should rerun with a
             # larger sample_size.
             if verbose then
-                Print("[_DETF_TrimmedFamily_m7]   greedy stuck at ker = ",
-                      curr_ker, " (sample insufficient; ",
+                Print("[_DETF_TrimmedFamily_m7]   Pass 3 stuck at ",
+                      "ker = ", curr_ker, " (sample insufficient; ",
                       "try larger sample_size).\n");
             fi;
             break;
@@ -1808,8 +2034,7 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
         od;
         new_ker := _DETF_KernelOrderSNF(data, ea_chosen, true, include_Q8);
         if verbose then
-            Print("[_DETF_TrimmedFamily_m7]   super-step ",
-                  Length(greedy_log) / K_ADD_PER_STEP + 1,
+            Print("[_DETF_TrimmedFamily_m7]   Pass 3 super-step ",
                   ": added ", Length(additions), " candidates ",
                   List(additions, x -> x[1]),
                   ", joint ker = ", new_ker, "\n");
@@ -1818,7 +2043,8 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
         # kernel (downstream consumers only need ea_chosen + ker stamps;
         # the join-kernel value is the correct post-state).
         for entry in additions do
-            Add(greedy_log, rec(ea := entry[1], ker := new_ker));
+            Add(greedy_log, rec(ea := entry[1], ker := new_ker,
+                                pass := 3, gain := fail));
         od;
         curr_ker := new_ker;
     od;
