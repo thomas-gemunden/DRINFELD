@@ -400,7 +400,8 @@ end;;
 IB_DivBy2 := function(c_table, subtrahend, modulus)
     local n_eq, result, i, diff;
     n_eq := Length(c_table);
-    result := List([1..n_eq], i -> 0);
+    # Issue #387 audit-tier3 rank 8: ListWithIdenticalEntries avoids n^2 closures.
+    result := ListWithIdenticalEntries(n_eq, 0);
     for i in [1..n_eq] do
         diff := (c_table[i] - subtrahend[i]) mod (2 * modulus);
         result[i] := (diff / 2) mod modulus;
