@@ -291,8 +291,17 @@ IsCoboundary2Mod2Vec := function(H, c_g_vec)
     sem := entry.sem;
     nonzero_heads := entry.nonzero_heads;
 
-    b := List(c_g_vec, x -> (x mod 2) * one);
-    ConvertToVectorRep(b, GF(2));
+    # Issue #396 A-2 fix: if caller already supplies a packed GF(2) vector
+    # (Path Z bit-pack route), skip the redundant int→GF(2) reduction.
+    # At m=5 with n²=4M the closure-based `List(...)` is ~30 ms wasted per
+    # call; the GF(2) input is already in the form `b` would compute.
+    # ShallowCopy is needed because the back-sub below mutates b in place.
+    if IsGF2VectorRep(c_g_vec) then
+        b := ShallowCopy(c_g_vec);
+    else
+        b := List(c_g_vec, x -> (x mod 2) * one);
+        ConvertToVectorRep(b, GF(2));
+    fi;
 
     if Length(sem.coeffs) = 0 then
         return IsZero(b);
@@ -340,8 +349,16 @@ IsCoboundary2Mod2VecWithWitness := function(H, c_g_vec)
     sem := entry.sem;
     nonzero_heads := entry.nonzero_heads;
 
-    b := List(c_g_vec, x -> (x mod 2) * one);
-    ConvertToVectorRep(b, GF(2));
+    # Issue #396 A-2 fix: GF(2) fast path — see IsCoboundary2Mod2Vec for
+    # rationale. Path Z bit-pack callers (IsCoboundary2Z4VecBits post-A-2)
+    # pass c_bot (a packed GF(2) bit slice) directly; the conversion below
+    # would round-trip GF(2) -> int -> GF(2) for ~4M entries at m=5.
+    if IsGF2VectorRep(c_g_vec) then
+        b := ShallowCopy(c_g_vec);
+    else
+        b := List(c_g_vec, x -> (x mod 2) * one);
+        ConvertToVectorRep(b, GF(2));
+    fi;
 
     if Length(sem.coeffs) = 0 then
         # Rank 0: the only coboundary is the zero cocycle. Witness = 0.
@@ -501,8 +518,15 @@ IsCoboundary2Mod2WithLiftVec := function(C, c_g_vec)
 
     one := One(GF(2));
     z := Zero(GF(2));
-    b := List(c_g_vec, x -> (x mod 2) * one);
-    ConvertToVectorRep(b, GF(2));
+    # Issue #396 A-2 fix: GF(2) fast path — see IsCoboundary2Mod2Vec for
+    # rationale. Path Z bit-pack callers (IsCoboundary2Z4VecBits post-A-2)
+    # pass c_table_next_bot (a packed GF(2) XOR result) directly.
+    if IsGF2VectorRep(c_g_vec) then
+        b := ShallowCopy(c_g_vec);
+    else
+        b := List(c_g_vec, x -> (x mod 2) * one);
+        ConvertToVectorRep(b, GF(2));
+    fi;
 
     entry := _GetLiftSemForC(C);
     sem := entry.sem;
