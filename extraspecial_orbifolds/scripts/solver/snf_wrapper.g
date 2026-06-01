@@ -728,9 +728,16 @@ BuildPerClassCocycleBasis := function(setup, gRep, C)
     table_gf2_bot := List(table, row ->
         List(row, x -> (x mod 2) * one_gf2));
     ConvertToMatrixRep(table_gf2_bot, GF(2));
+    # Issue #391 (Approach A+B combine): column-major view of
+    # table_gf2_top, used for sparsity-aware GF(2) column-XOR in the
+    # Path Z bit-pack hot path. table_gf2_top_T[j] is the j-th column
+    # as a packed-bit GF(2) vector.
+    table_gf2_top_T := TransposedMat(table_gf2);
+    ConvertToMatrixRep(table_gf2_top_T, GF(2));
     result := rec(C := C, table := table,
                   table_gf2 := table_gf2,           # back-compat alias = top bit
                   table_gf2_top := table_gf2,       # bit_{log2(r_half)} = bit_1 at exp=4
+                  table_gf2_top_T := table_gf2_top_T,  # column-major view
                   table_gf2_bot := table_gf2_bot,   # bit_0
                   elts := elts, n := n, idx_map := idx_map);
     _basis_cache_by_class.(key) := result;
@@ -984,10 +991,14 @@ function(setup, rep_cache, conj_action, target_idx, phi_path, M_path)
     table_gf2_bot_sib := List(table_sib, row ->
         List(row, x -> (x mod 2) * one_gf2));
     ConvertToMatrixRep(table_gf2_bot_sib, GF(2));
+    # Column-major view for sparsity-aware column-XOR (issue #391 A+B combine).
+    table_gf2_top_T_sib := TransposedMat(table_gf2_sib);
+    ConvertToMatrixRep(table_gf2_top_T_sib, GF(2));
 
     return rec(C := sib_C, table := table_sib,
                table_gf2 := table_gf2_sib,         # back-compat alias
                table_gf2_top := table_gf2_sib,
+               table_gf2_top_T := table_gf2_top_T_sib,
                table_gf2_bot := table_gf2_bot_sib,
                elts := elts_sib, n := n_sib, idx_map := idx_map_sib);
 end;;

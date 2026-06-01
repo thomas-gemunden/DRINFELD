@@ -564,7 +564,7 @@ PerVecTransgressionShared := function(vec)
           c_g_table, exp_index, r, exp_local, batch_inputs, batch_targets,
           c_prime_bits, batch_results, j, ti, one_gf2, u_gf2,
           col_bot_exp, v_bot_exp, v_top_exp, slice_top, slice_bot,
-          use_pathz_gf2pack;
+          use_pathz_gf2pack, supp, k_nz, k_thr, j_supp;
     results := List([1..n_classes], j -> "?");
     # Precondition: every torsion[i] in {2, exponent}.
     for ti in [1..Length(setup.torsion)] do
@@ -604,28 +604,38 @@ PerVecTransgressionShared := function(vec)
                                          orb_info.parent, orb_info.gen_used,
                                          h3_matrices, torsion, vec);
             if exp_local > 2 and exp_index <> fail and vec_target[exp_index] <> 0 then
-                # Path Z dispatch combining Approach A (sparsity-aware,
-                # #391 / PR #392) and Approach B (GF(2) bit-pack, #391
-                # / this PR). The two are orthogonal:
-                #   A reduces operation count via vec_target sparsity.
-                #   B reduces per-op cost via PROD_GF2MAT_GF2VEC.
-                # Priority: B first when bit-pack is wired (exp=4 with
-                # col_bot_exp cached); A's sparsity-aware dispatcher
-                # handles the remainder (exp=2 path doesn't enter Path
-                # Z; other exp routes through SplitVecAware's regimes).
-                #
-                # B's math (exp=4): see
-                # docs/superpowers/specs/2026-06-02-path-z-gf2pack-design.md.
-                #   slice_top[i] = (table_gf2_top * u_bot)[i]
-                #                  + col_bot_exp[i] * v_top_exp     [GF(2)]
-                #   slice_bot[i] = col_bot_exp[i] * v_bot_exp        [GF(2)]
-                # where u_bot = (vec_target mod 2) * one_gf2, and
-                # v_bot_exp, v_top_exp are the two bits of
-                # vec_target[exp_index].
+                # Path Z dispatch combining A (sparsity, #391/PR #392) and
+                # B (GF(2) bit-pack, #391/PR #393). The two are orthogonal:
+                # A reduces operation count via vec_target sparsity; B
+                # reduces per-op cost via PROD_GF2MAT_GF2VEC. This PR
+                # composes them: when bit-pack is wired (exp=4 with
+                # col_bot_exp cached), branch on |supp(vec_target mod 2)|:
+                #   k_nz = 0    -> matrix contribution is zero
+                #   k_nz <= k/3 -> column-XOR via table_gf2_top_T[j]
+                #   k_nz >  k/3 -> full GF(2) matvec (B's dense path)
+                # Then add the exp_idx column scaled by v_top_exp (B's
+                # exp-column handling, unchanged). When bit-pack is NOT
+                # wired (exp != 4 or fallback), route through A's
+                # integer-arithmetic sparsity-aware dispatcher.
                 if use_pathz_gf2pack and col_bot_exp <> fail then
-                    u_gf2 := (vec_target mod 2) * one_gf2;
-                    ConvertToVectorRep(u_gf2, GF(2));
-                    slice_top := basis_cache.table_gf2_top * u_gf2;
+                    supp := PositionsProperty(vec_target,
+                                              x -> x mod 2 <> 0);
+                    k_nz := Length(supp);
+                    k_thr := QuoInt(Length(vec_target), 3);
+                    if k_nz = 0 then
+                        slice_top := 0 * col_bot_exp;
+                    elif k_nz <= k_thr
+                         and IsBound(basis_cache.table_gf2_top_T) then
+                        slice_top := 0 * col_bot_exp;
+                        for j_supp in supp do
+                            AddRowVector(slice_top,
+                                basis_cache.table_gf2_top_T[j_supp]);
+                        od;
+                    else
+                        u_gf2 := (vec_target mod 2) * one_gf2;
+                        ConvertToVectorRep(u_gf2, GF(2));
+                        slice_top := basis_cache.table_gf2_top * u_gf2;
+                    fi;
                     v_bot_exp := (vec_target[exp_index] mod 2) * one_gf2;
                     v_top_exp := (QuoInt(vec_target[exp_index], 2)
                                    mod 2) * one_gf2;
