@@ -562,7 +562,9 @@ Print("\nAlready completed (resume): ", Length(completed_idx), " / ", k,
 PerVecTransgressionShared := function(vec)
     local results, oi, orb_info, basis_cache, target_idx, vec_target,
           c_g_table, exp_index, r, exp_local, batch_inputs, batch_targets,
-          c_prime_bits, batch_results, j, ti, one_gf2, u_gf2;
+          c_prime_bits, batch_results, j, ti, one_gf2, u_gf2,
+          col_bot_exp, v_bot_exp, v_top_exp, slice_top, slice_bot,
+          use_pathz_gf2pack;
     results := List([1..n_classes], j -> "?");
     # Precondition: every torsion[i] in {2, exponent}.
     for ti in [1..Length(setup.torsion)] do
@@ -576,28 +578,75 @@ PerVecTransgressionShared := function(vec)
     exp_local := setup.exponent;
     r := exp_local / 2;
     one_gf2 := One(GF(2));
+    # Issue #391 (Approach B): the bit-slice Path Z route is implemented
+    # for the exp=4 case (m=5). For other exponents we fall back to the
+    # integer matvec. The function IsCoboundary2Z4VecBits is defined in
+    # solver/iterated_bockstein.g.
+    use_pathz_gf2pack := (exp_local = 4)
+        and IsBoundGlobal("IsCoboundary2Z4VecBits");
     for oi in [1..Length(orbits_data)] do
         orb_info := orbits_data[oi];
         basis_cache := orbit_caches[oi];
         batch_inputs := [];
         batch_targets := [];
+        # Hoist the exp_index column of table_gf2_bot once per orbit
+        # (when the bit-slice route is active). The column is a length-n²
+        # GF(2) vector representing bit_0(table[:, exp_index]).
+        if use_pathz_gf2pack and IsBound(basis_cache.table_gf2_bot) then
+            col_bot_exp := List(basis_cache.table_gf2_bot,
+                                row -> row[exp_index]);
+            ConvertToVectorRep(col_bot_exp, GF(2));
+        else
+            col_bot_exp := fail;
+        fi;
         for target_idx in orb_info.orbit do
             vec_target := H3VecAtTarget(orb_info.start_idx, target_idx,
                                          orb_info.parent, orb_info.gen_used,
                                          h3_matrices, torsion, vec);
             if exp_local > 2 and exp_index <> fail and vec_target[exp_index] <> 0 then
-                # Path Z: route through the sparsity-aware dispatcher
-                # (issue #391 Approach A). Internally:
-                #   - |supp(vec_target)|=1   -> column-read fast path
-                #   - |supp|<=k/3            -> AddRowVector accumulation
-                #   - |supp|>k/3             -> existing dense matvec
-                # The n² × k matvec is no longer materialised at the call
-                # site — the dispatcher only builds c_g_vec when its
-                # internal sparse heuristics route to the dense fallback.
-                # See docs/superpowers/specs/2026-06-02-path-z-sparsity-design.md.
-                results[target_idx] :=
-                    IsCoboundary2SplitVecAware(basis_cache.C, basis_cache,
-                                                vec_target, setup);
+                # Path Z dispatch combining Approach A (sparsity-aware,
+                # #391 / PR #392) and Approach B (GF(2) bit-pack, #391
+                # / this PR). The two are orthogonal:
+                #   A reduces operation count via vec_target sparsity.
+                #   B reduces per-op cost via PROD_GF2MAT_GF2VEC.
+                # Priority: B first when bit-pack is wired (exp=4 with
+                # col_bot_exp cached); A's sparsity-aware dispatcher
+                # handles the remainder (exp=2 path doesn't enter Path
+                # Z; other exp routes through SplitVecAware's regimes).
+                #
+                # B's math (exp=4): see
+                # docs/superpowers/specs/2026-06-02-path-z-gf2pack-design.md.
+                #   slice_top[i] = (table_gf2_top * u_bot)[i]
+                #                  + col_bot_exp[i] * v_top_exp     [GF(2)]
+                #   slice_bot[i] = col_bot_exp[i] * v_bot_exp        [GF(2)]
+                # where u_bot = (vec_target mod 2) * one_gf2, and
+                # v_bot_exp, v_top_exp are the two bits of
+                # vec_target[exp_index].
+                if use_pathz_gf2pack and col_bot_exp <> fail then
+                    u_gf2 := (vec_target mod 2) * one_gf2;
+                    ConvertToVectorRep(u_gf2, GF(2));
+                    slice_top := basis_cache.table_gf2_top * u_gf2;
+                    v_bot_exp := (vec_target[exp_index] mod 2) * one_gf2;
+                    v_top_exp := (QuoInt(vec_target[exp_index], 2)
+                                   mod 2) * one_gf2;
+                    slice_top := slice_top + col_bot_exp * v_top_exp;
+                    slice_bot := col_bot_exp * v_bot_exp;
+                    ConvertToVectorRep(slice_top, GF(2));
+                    ConvertToVectorRep(slice_bot, GF(2));
+                    results[target_idx] :=
+                        IsCoboundary2Z4VecBits(basis_cache.C,
+                                                slice_bot, slice_top,
+                                                basis_cache.n);
+                else
+                    # Bit-pack not available -> route through A's
+                    # sparsity-aware dispatcher (unit-support fast
+                    # path, sparse AddRowVector, dense fallback).
+                    # See docs/superpowers/specs/2026-06-02-path-z-sparsity-design.md.
+                    results[target_idx] :=
+                        IsCoboundary2SplitVecAware(basis_cache.C,
+                                                    basis_cache,
+                                                    vec_target, setup);
+                fi;
             else
                 # Path A: A-5b R2-8 (#258 / #266 follow-up). Single
                 # compiled GF(2) matvec replaces the 1M-int matmul

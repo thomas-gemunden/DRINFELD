@@ -545,3 +545,44 @@ IsCoboundary2Z2kVec := function(C, c_g_vec, k)
     return IB_RecCob(C, c_table, modulus, elts, n, idx, A_F2_T, hom_basis,
                      mult_rec.mult);
 end;;
+
+# IsCoboundary2Z4VecBits(C, c_bot, c_top, n) — modulus = 4 specialisation
+# of IsCoboundary2Z2kVec consuming bit slices directly (issue #391
+# Approach B).
+#
+# Tests whether [c] = 0 in H²(C; Z/4) where c is given by two bit slices:
+#   c_bot[i] = bit_0(c[i]),  c_top[i] = bit_1(c[i])
+# both as packed-GF(2) length-n² vectors.
+#
+# Implementation strategy (Design 2 from the spec, simplest variant):
+# we reconstruct the integer c_g_vec = 2 * top + bot from the bit slices
+# at the API boundary and delegate to IsCoboundary2Z2kVec(C, c_g_vec, 2).
+# This keeps the IB internal arithmetic unchanged (still operating on
+# Z/4 integer tables) while moving the *matvec* — which is where the
+# m=5 wall lives — out to the dispatch site, where the caller produces
+# the bit slices via packed GF(2) ops.
+#
+# Reconstruction cost: ~10-30 ms at n²=4M (two IntVecFFE conversions
+# plus one length-n² scalar*vec multiply + vec add). Compared to the
+# 700 ms integer matvec we're replacing at the dispatch site, this is
+# negligible.
+#
+# Future work (Design 1, post-PR): refactor IB internals to consume the
+# bit slices directly, avoiding even the reconstruction. Math is in
+# docs/superpowers/specs/2026-06-02-path-z-gf2pack-design.md §"IB
+# refactor". Not in this PR; the dispatch-site replacement captures
+# ~95% of the per-call gain on its own.
+#
+# Returns: bool. Same semantics as IsCoboundary2Z2kVec(C, c_g_vec, 2)
+# where c_g_vec is the integer reconstruction `2*c_top + c_bot`.
+IsCoboundary2Z4VecBits := function(C, c_bot, c_top, n)
+    local c_bot_int, c_top_int, c_g_vec;
+    # Convert packed GF(2) bit slices back to length-n² integer vectors.
+    # IntVecFFE on a compressed GF(2) vec returns a plist of 0/1 ints.
+    c_bot_int := IntVecFFE(c_bot);
+    c_top_int := IntVecFFE(c_top);
+    # Reconstruct the Z/4 integer table. Both ops are compiled list-int
+    # arithmetic; no per-element closure.
+    c_g_vec := 2 * c_top_int + c_bot_int;
+    return IsCoboundary2Z2kVec(C, c_g_vec, 2);
+end;;
