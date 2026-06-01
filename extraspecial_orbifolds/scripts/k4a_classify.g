@@ -896,4 +896,8 @@ K4aClassify := function(arg)
     );
 end;;
 
-Print("Loaded k4a_classify.g (K-4a-T6, issue #200).\n");
+if IsBoundGlobal("_LogStamped") then
+    _LogStamped("Loaded k4a_classify.g (K-4a-T6, issue #200).");
+else
+    Print("Loaded k4a_classify.g (K-4a-T6, issue #200).\n");
+fi;

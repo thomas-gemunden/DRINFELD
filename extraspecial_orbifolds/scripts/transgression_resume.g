@@ -254,7 +254,13 @@ TransgressionKernelResumable := function(arg)
 
     completed_idx := Set(LoadResumeState(state_file), r -> r.generator);
 
-    Print("\n=== TransgressionKernelResumable ===\n");
+    Print("\n");
+    if IsBoundGlobal("_LogPhase") then
+        _LogPhase("transgression-resume",
+                  "=== TransgressionKernelResumable ===");
+    else
+        Print("=== TransgressionKernelResumable ===\n");
+    fi;
     Print("Group: ", StructureDescription(G), " (|G| = ", Order(G), ")\n");
     Print("State file: ", state_file, "\n");
     Print("k = ", k, " H^3 generators (torsion = ", setup.torsion, ")\n");

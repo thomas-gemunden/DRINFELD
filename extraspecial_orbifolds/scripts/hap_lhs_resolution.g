@@ -365,5 +365,10 @@ LHSResolutionEPlusDetailed := function(arg)
     return entry;
 end;;
 
-Print("Loaded hap_lhs_resolution.g (LHSResolutionEPlus, ",
-      "LHSResolutionEPlusDetailed).\n");
+if IsBoundGlobal("_LogStamped") then
+    _LogStamped("Loaded hap_lhs_resolution.g (LHSResolutionEPlus, ",
+                "LHSResolutionEPlusDetailed).");
+else
+    Print("Loaded hap_lhs_resolution.g (LHSResolutionEPlus, ",
+          "LHSResolutionEPlusDetailed).\n");
+fi;
