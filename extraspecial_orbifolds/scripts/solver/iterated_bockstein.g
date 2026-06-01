@@ -548,41 +548,113 @@ end;;
 
 # IsCoboundary2Z4VecBits(C, c_bot, c_top, n) — modulus = 4 specialisation
 # of IsCoboundary2Z2kVec consuming bit slices directly (issue #391
-# Approach B).
+# Approach B + #396 A-2 refinement).
 #
 # Tests whether [c] = 0 in H²(C; Z/4) where c is given by two bit slices:
 #   c_bot[i] = bit_0(c[i]),  c_top[i] = bit_1(c[i])
 # both as packed-GF(2) length-n² vectors.
 #
-# Implementation strategy (Design 2 from the spec, simplest variant):
-# we reconstruct the integer c_g_vec = 2 * top + bot from the bit slices
-# at the API boundary and delegate to IsCoboundary2Z2kVec(C, c_g_vec, 2).
-# This keeps the IB internal arithmetic unchanged (still operating on
-# Z/4 integer tables) while moving the *matvec* — which is where the
-# m=5 wall lives — out to the dispatch site, where the caller produces
-# the bit slices via packed GF(2) ops.
+# Implementation strategy (Design 1, issue #396 A-2): wire the bit slices
+# end-to-end through the IB modulus=4 base case, avoiding the previous
+# `bits -> ints -> bits` round-trip:
 #
-# Reconstruction cost: ~10-30 ms at n²=4M (two IntVecFFE conversions
-# plus one length-n² scalar*vec multiply + vec add). Compared to the
-# 700 ms integer matvec we're replacing at the dispatch site, this is
-# negligible.
+#   Old path (PR #393, before A-2):
+#     c_bot, c_top (GF(2))
+#       -> IntVecFFE round-trip + scalar reconstruction (4 wasted n² ops)
+#       -> c_g_vec (int)
+#       -> IsCoboundary2Z2kVec
+#       -> c_table = c_g_vec mod 4         (1 wasted n² list-mod-int)
+#       -> IB_RecCob (modulus = 4)
+#            -> IB_StrictF2Witness:
+#                 c_table mod 2            (1 wasted n² list-mod-int)
+#                 -> IsCoboundary2Mod2VecWithWitness:
+#                      List(c_g_vec, x -> (x mod 2)*one)   (4M-call closure)
+#                      then ConvertToVectorRep              (re-pack)
+#            -> IB_TableMod2WithLift:
+#                 c_table_next mod 2       (1 wasted n² list-mod-int)
+#                 -> IsCoboundary2Mod2WithLiftVec:
+#                      List(c_g_vec, x -> (x mod 2)*one)   (4M-call closure)
+#                      then ConvertToVectorRep              (re-pack)
 #
-# Future work (Design 1, post-PR): refactor IB internals to consume the
-# bit slices directly, avoiding even the reconstruction. Math is in
-# docs/superpowers/specs/2026-06-02-path-z-gf2pack-design.md §"IB
-# refactor". Not in this PR; the dispatch-site replacement captures
-# ~95% of the per-call gain on its own.
+#   New path (A-2):
+#     c_bot, c_top (GF(2)) stay GF(2) at the F_2 boundaries (strict test
+#     + lift test), with integer arithmetic confined to the witness β
+#     (length-n) and δβ mod 4 (length-n² ints, intrinsic to IB_DeltaBetaMult).
+#
+# Math derivation (modulus = 4 base case of IB_RecCob).
+#   Notation: β denotes IB_StrictF2Witness's F_2 witness, lifted to
+#   {0, 1}-valued ints; δβ := IB_DeltaBetaMult(β, n, mult, 4) is the
+#   length-n² Z/4 cochain (β_i + β_j - β_{i·j}) mod 4.
+#
+#   Step 1 (strict F_2 test). β satisfies δβ ≡ c_bot (mod 2) over F_2,
+#   because c_table mod 2 = c_bot and IsCoboundary2Mod2VecWithWitness
+#   solves δβ = c_bot exactly. Hence bit_0(δβ) = c_bot (as packed GF(2)).
+#
+#   Step 2 (c_table_next derivation). IB_DivBy2 computes
+#     c_table_next[i] := ((c_table[i] - δβ[i]) mod 4) / 2 mod 2
+#                      = bit_1((c_table[i] - δβ[i]) mod 4).
+#   Write c_table[i] = 2·c_top[i] + c_bot[i] and δβ[i] = 2·db_top[i] + c_bot[i]
+#   (since bit_0(δβ) = c_bot by Step 1). Then
+#     (c_table[i] - δβ[i]) mod 4 = (2·c_top[i] - 2·db_top[i]) mod 4
+#                                = 2·((c_top[i] - db_top[i]) mod 2)
+#                                = 2·((c_top[i] + db_top[i]) mod 2)     (F_2)
+#   so c_table_next[i] mod 2 = c_top[i] XOR db_top[i] in F_2, where
+#   db_top := bit_1(δβ). This is a single packed-GF(2) XOR of c_top
+#   with the extracted top-bit slice of δβ — no n² int->bit round-trip.
+#
+#   Step 3 (lift test). IsCoboundary2Mod2WithLiftVec accepts c_table_next_bot
+#   as a packed GF(2) vector directly (PR #396 GF(2)-fast-path).
+#
+# Per-call wall budget (n²=4M, m=5):
+#   Removed: 2× IntVecFFE (~60 ms) + 2× int list arithmetic (~40 ms)
+#            + 2× c_table mod 2 (~60 ms) + 2× (x mod 2)*one closures
+#            inside the F_2 entry points (~150 ms).
+#   Added:   1× bit-extract db_top from δβ ints (~30 ms; same n² scale)
+#            + 1× compiled GF(2) AddRowVector c_top XOR db_top (<1 ms).
+#   Expected per-call wall reduction: ~250 ms at n²=4M, scaling linearly
+#   with n².
 #
 # Returns: bool. Same semantics as IsCoboundary2Z2kVec(C, c_g_vec, 2)
-# where c_g_vec is the integer reconstruction `2*c_top + c_bot`.
+# where c_g_vec = 2*c_top + c_bot. Verified bit-for-bit against
+# IsCoboundary2Z2kVec by test_iscoboundary2_z4_vec_bits.g and
+# test_pathz_a2_bit_no_roundtrip.g.
 IsCoboundary2Z4VecBits := function(C, c_bot, c_top, n)
-    local c_bot_int, c_top_int, c_g_vec;
-    # Convert packed GF(2) bit slices back to length-n² integer vectors.
-    # IntVecFFE on a compressed GF(2) vec returns a plist of 0/1 ints.
-    c_bot_int := IntVecFFE(c_bot);
-    c_top_int := IntVecFFE(c_top);
-    # Reconstruct the Z/4 integer table. Both ops are compiled list-int
-    # arithmetic; no per-element closure.
-    c_g_vec := 2 * c_top_int + c_bot_int;
-    return IsCoboundary2Z2kVec(C, c_g_vec, 2);
+    local witness_result, beta_int, mult_rec, delta_beta, db_top_gf2,
+          c_table_next_bot, one_gf2, x;
+    one_gf2 := One(GF(2));
+
+    # Step 1: strict F_2 test on c_bot. c_bot IS the F_2 reduction of
+    # the Z/4 c_table, so it feeds IsCoboundary2Mod2VecWithWitness directly.
+    # The PR #396 GF(2)-fast-path in mod2_solver.g skips the (x mod 2)*one
+    # n²-closure round-trip when the input is already packed GF(2).
+    witness_result := IsCoboundary2Mod2VecWithWitness(C, c_bot);
+    if not witness_result.yes then return false; fi;
+
+    # β as length-n {0,1} ints — fed to IB_DeltaBetaMult for the δβ mod 4
+    # computation. The witness is a length-n GF(2) vector; this conversion
+    # is O(n), not O(n²), so it's negligible.
+    beta_int := List(witness_result.witness, x -> If_(IsZero(x), 0, 1));
+
+    # Step 2: build δβ mod 4 (length-n² Z/4 ints). Uses the cached mult
+    # table — same code path as IB_RecCob at modulus = 4 in the integer
+    # API. We KEEP delta_beta as Z/4 ints (not F_2) because the bit-1
+    # extraction below needs the modular Z/4 representative.
+    mult_rec := _GetCachedMultTable(C);
+    delta_beta := IB_DeltaBetaMult(beta_int, n, mult_rec.mult, 4);
+
+    # Step 3: extract db_top := bit_1(δβ) as a packed GF(2) vector and
+    # XOR with c_top to get c_table_next_bot (the F_2 reduction of
+    # IB_DivBy2(c_table, delta_beta, 2)). See banner math for the derivation.
+    # IB_DeltaBetaMult returns Z/4 ints (entries in {0,1,2,3}), so
+    # QuoInt(x, 2) ∈ {0,1} directly — no extra `mod 2` needed.
+    db_top_gf2 := List(delta_beta, x -> QuoInt(x, 2) * one_gf2);
+    ConvertToVectorRep(db_top_gf2, GF(2));
+    # Compiled GF(2) sum (XOR over GF(2)) — same n² packed bits, single
+    # SUM_GF2VEC_GF2VEC dispatch.
+    c_table_next_bot := c_top + db_top_gf2;
+
+    # Step 4: lift test. c_table_next_bot is packed GF(2) — the PR #396
+    # GF(2)-fast-path in IsCoboundary2Mod2WithLiftVec skips the redundant
+    # int->GF(2) conversion.
+    return IsCoboundary2Mod2WithLiftVec(C, c_table_next_bot);
 end;;
