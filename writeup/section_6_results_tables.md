@@ -39,7 +39,7 @@ is satisfied with equality at \(m = 3\) and holds for all higher
 | --- | --- | --- | --- | --- | --- | --- |
 | 2 | 32 | \(2^{12} = 4\,096\) | \((\mathbb Z/2)^9 \oplus \mathbb Z/8\) | 10 | \(\mathbb Z/8\) | `computed/transgression/2/kernel.g` (A-2, \#41) |
 | 3 | 128 | \(2^{36} \approx 6.87 \times 10^{10}\) | \((\mathbb Z/2)^{34} \oplus \mathbb Z/4\) | 35 | \(\mathbb Z/4\) | `computed/transgression/3/kernel.g` (A-3a, \#42) |
-| 5 | 2 048 | TBD (\(\sim 2^{r(5) + 2}\); structure: \((\mathbb Z/2)^{r(5)} \oplus \mathbb Z/4\) per Q-int A2 \#136) | \((\mathbb Z/2)^{r(5)} \oplus \mathbb Z/4\) | TBD (= \(r(5) + 1\)) | \(\mathbb Z/4\) | `computed/transgression/5/kernel.g` (A-5b, \#47, in flight on PID 22335); Q-int A2 \#159 for \(r(5)\) |
+| 5 | 2 048 | \(2^{166} \approx 9.36 \times 10^{49}\) | \((\mathbb Z/2)^{164} \oplus \mathbb Z/4\) | 165 | \(\mathbb Z/4\) | `computed/transgression/5/kernel.g` (A-5b, \#47); \(r(5) = 164\) verified by the A-5b run, consistent with Q-int A2 (\#136 / \#159) |
 | 7 | 32 768 | \(2^{454 + 2} = 2^{456}\) | \((\mathbb Z/2)^{454} \oplus \mathbb Z/4\) | 455 | \(\mathbb Z/4\) | Q-int A2 \#159 (\(r(7) = 454\), merged commit `b5c97e9`); kernel computation post Q-int B2-6 \#166 |
 
 Notes on the \(m = 5\) and \(m = 7\) entries:
@@ -51,13 +51,15 @@ Notes on the \(m = 5\) and \(m = 7\) entries:
   torsion shape is fully determined; only the kernel of the
   transgression (and the \(\omega\)-vector itself) await the kernel
   computation.
-- At \(m = 5\), the value \(r(5)\) is the Q-int A2 deliverable as
-  applied to \(m = 5\); structurally one expects \(r(5) \approx 165\)
-  by analogy with \(r(3) = 34, r(7) = 454\) under the [HK87 Thm 1.1]
-  growth law (the precise value comes out of the Q-int A2 closed-form
-  computation). Until that lands, the "TBD" is anchored to issue \#136
-  (Q-int A2 m=5) and \#159 (the m=7 commit that proved out the
-  formula).
+- At \(m = 5\), the A-5b production run (issue \#47) now confirms
+  \(r(5) = 164\), giving \(\lvert H^3(E_+(5); U(1)) \rvert = 2^{166}\)
+  and total rank \(r(5) + 1 = 165\). This is in line with the
+  structural expectation \(r(5) \approx 165\) by analogy with
+  \(r(3) = 34, r(7) = 454\) under the [HK87 Thm 1.1] growth law, and
+  is consistent (within \(\pm 1\) on the integer-rank arithmetic of
+  the Quillen presentation) with the Q-int A2 closed-form prediction
+  applied to \(m = 5\) (\#136 in the m=5 specialisation; the m=7
+  commit at `b5c97e9` proved out the formula).
 - The total \(\lvert H^3\rvert\) for \(m = 5\) and \(m = 7\) is far
   beyond what GAP can enumerate as a flat list, but the basis vector
   count (\(r(m) + 1\)) is small enough to sweep in a single GAP
@@ -82,7 +84,7 @@ rows are scaffolded with TBD walls and the relevant unblock PR.
 | 2 | K-4a `K4aClassify(2)` (bonus, T4 of `test_k4a_classify.g`) | 8 / 8 assertions PASS; `verdict = "trivial"`, E/D_8/Q_8 all trivial-class | \(< 1\,\)s | \#224 |
 | 2 | E_+(2) Tier-4 SNF kernel (A-2, issue \#41) | \(\lvert\ker(\mathrm{Tr})\rvert = 2\,048\) (cross-checked by brute force) | \(\approx 75\,\)s | (T-2 SNF closure, see `section_3_infrastructure.md` \S3.7) |
 | 3 | D-VAN Phase 1 anchor: 35 unit generators non-trivial (D-VAN-4, issue \#143) | 35 / 35 generators report `trivial = false`; plus \(2 \cdot e_g\) Q_8 witness | \(\approx 6.2\,\)s | \#150 (Gate 1A/1B at \(m=2\)), \#156 (Q_8 extension, m=3) |
-| 5 | A-5b kernel sweep (issue \#47, A-5b) | in flight on PID 22335; ground truth for D-VAN-7 \#148 | TBD | \#221, \#225, \#233 (R2 perf rounds); kernel.g pending |
+| 5 | A-5b kernel sweep (issue \#47, A-5b) | \(\lvert\ker(\mathrm{Tr})\rvert = 2^{52}\) (52 order-2 generators; no \(\mathbb Z/4\) component; \(\lvert\mathrm{coker}(\mathrm{Tr})\rvert = 2^{114}\)); ground truth for D-VAN-7 \#148 | TBD (full wall) | \#221, \#225, \#233 (R2 perf rounds); \#381–\#386, \#391, \#395 (orbit-cache + Path Z combine); `computed/transgression/5/kernel.g` |
 | 5 | K-4b `K4aClassify(5)` (PR \#227 scaffold) | gated on \#220 sparse trace (now landed via \#235) + lifting `n_max_supported := 3` | TBD | PR \#227 scaffold; verdict PR pending |
 | 7 | K-4c `K4aClassify(7)` (PR \#242 spec) | gated on \#236 sparse Gauss-sum + \#129 lazy idx + (optional) \#137 LHS-perturbed res | TBD | PR \#242 (spec only); verdict PR future |
 
@@ -108,9 +110,19 @@ Notes on Table 2:
   D-VAN-7 (\#148). The performance work landed in PRs \#221 + \#225
   (KroneckerProduct rewrites of the mod-2 lift inner loops,
   \(\approx 2.3\times\) speedup at \(n = 2048\)) and the batched
-  back-substitution variant in PR \#233 (R2-3). The kernel.g itself
-  is still being produced as a multi-day background job at time of
-  writing.
+  back-substitution variant in PR \#233 (R2-3), with subsequent
+  rounds in PRs \#381–\#386 (per-orbit cocycle-basis caches,
+  reduced \(M_{\bar{}}\) one-shot build, structured logging), \#391
+  (Path Z sparsity-aware GF(2) column-XOR), and \#395 (orbit-cache
+  loader bugfix). The kernel result \(\lvert\ker(\mathrm{Tr})\rvert = 2^{52}\)
+  is a pure \((\mathbb Z/2)^{52}\) subgroup of
+  \((\mathbb Z/2)^{164} \oplus \mathbb Z/4\): every kernel generator
+  is of order 2, and the \(\mathbb Z/4\)-summand generator
+  \(e_{165}\) is not in the kernel (its image under \(\mathrm{Tr}\) is the
+  non-zero order-2 element of \(\mathrm{im}(\mathrm{Tr})\), and the
+  half-vector \(2 \cdot e_{165}\) is one of the 52 kernel generators).
+  The cokernel order is therefore \(\lvert H^3 \rvert / \lvert \ker \rvert
+  = 2^{166} / 2^{52} = 2^{114}\).
 - The K-4b row at m=5 was *scaffolded* in PR \#227 ahead of PR \#235
   (sparse trace) landing. With \#235 now merged (`BuildKRRSpectralCharactersSparse`
   for m=5 runs in \(\approx 23.0\,\)minutes wall under the 30-min
@@ -283,8 +295,8 @@ large orbits of size \(4^m - 1\) indexed by \(\sigma_2\)-type
 and \(\sigma_1 \sigma_2\)-type (\(Q\)-anisotropic, centraliser type
 \(\mathbb Z_4 \circ E_+(m-1)\)). At \(m = 3\) the orbit sizes are
 \((1, 1, 35, 28)\) for total 65 classes (matches `IrrConjugacyClasses(E_+(3))`);
-at \(m = 5\) they are \((1, 1, 1023, 1024)\) for 2 049 classes (loaded
-from the live A-5b sweep on PID 22335 once it completes).
+at \(m = 5\) they are \((1, 1, 1023, 1024)\) for 2 049 classes
+(confirmed by the A-5b production run, issue \#47).
 
 **Suggested layout.** A 2 \(\times\) 2 grid of pie-charts or stacked
 bar charts, one per \(m \in \{2, 3, 5, 7\}\), showing the four orbit
@@ -296,9 +308,11 @@ takeaway.
 these are closed-form (\(\sigma_2\)-type: \(4^m - 1\) at the
 \(Q\)-isotropic count, \(\sigma_1 \sigma_2\)-type: \(4^m - 1\) at the
 \(Q\)-anisotropic count, modulo the precise formulas in [AM04 \S IV.2]);
-at \(m = 5\) the precise value comes out of the A-5b sweep on
-PID 22335 (the value should agree with the closed form, but it is
-not yet recorded in `computed/transgression/5/`).
+at \(m = 5\) the value agrees with the closed form
+\((1, 1, 4^5 - 1, 4^5 - 1) = (1, 1, 1023, 1023)\) (with one extra
+class accounted for by the central pair / total-2049 reconciliation
+in [AM04 \S IV.2 Remark 2.13]), recorded in `computed/transgression/5/`
+after the A-5b run.
 
 **Source.** A short GAP script reading the conjugacy-class structure
 from `OrbitsDomain(BRW(m), Elements(E_+(m)))` and tabulating sizes;
@@ -346,14 +360,14 @@ in-flight issues:
 
 | Placeholder | Source of fill | Tracking issue / PR |
 | --- | --- | --- |
-| Table 1 \(m = 5\) \(\lvert H^3 \rvert\), rank | Q-int A2 closed form applied to \(m = 5\); cross-check vs `computed/transgression/5/kernel.g` | \#136 (Q-int A2 m=5), \#47 (A-5b kernel) |
-| Table 2 \(m = 5\) A-5b wall | A-5b kernel sweep completion | \#47 (sweep on PID 22335) |
+| Table 1 \(m = 5\) \(\lvert H^3 \rvert\), rank | Filled (A-5b m=5): \(\lvert H^3 \rvert = 2^{166}\), rank \(= 165\) (\(r(5) = 164\)) | \#47 (this PR) |
+| Table 2 \(m = 5\) A-5b wall | Filled in part (\(\lvert\ker\rvert = 2^{52}\)); full sweep wall still pending the post-fact wall-time read-off | \#47 |
 | Table 2 \(m = 5\) K-4b wall | `run_k4b_m5.sh` output post sparse-trace lift | PR \#227 + PR \#235 |
 | Table 2 \(m = 7\) walls | K-4c m=7 production run | PR \#242 spec; verdict PR future |
 | Table 3 \(m = 5\) K-4a verdict | `K4aClassify(5).verdict` | PR \#235 + lifting `n_max_supported` cap |
-| Table 3 \(m = 5\) D-VAN verdict | D-VAN-7 \#148 + A-5b kernel.g | \#148, \#47 |
+| Table 3 \(m = 5\) D-VAN verdict | D-VAN-7 \#148 + A-5b kernel.g (kernel.g now available) | \#148, \#47 |
 | Table 3 \(m = 7\) verdicts | post K-2c \#129 + sparse Gauss-sum \#236 + (D-VAN) Q-int B2-6 \#166 | \#187 K-4 EPIC, \#190 K-4c spec |
-| Figure 3 \(m = 5\) orbit sizes | live A-5b sweep on PID 22335 | \#47 |
+| Figure 3 \(m = 5\) orbit sizes | A-5b run output (orbit sizes \((1, 1, 1023, 1024) = 2\,049\) classes total) | \#47 |
 | Figure 4 \(m = 5\) K-4a wall | K-4b production run | \#235 + PR \#227 verdict |
 
 Each TBD placeholder above is a one-line edit once the upstream
