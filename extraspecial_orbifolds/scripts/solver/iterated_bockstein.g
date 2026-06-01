@@ -124,7 +124,8 @@ _GetCachedMultTable := function(C)
     n := Length(elts);
     idx_dict := NewDictionary(elts[1], true, elts);
     for i in [1..n] do AddDictionary(idx_dict, elts[i], i); od;
-    mult := List([1..n], i -> List([1..n], j -> 0));
+    # Issue #385 (audit-2 fix): NullMat avoids n*n closure dispatch.
+    mult := NullMat(n, n);
     for i in [1..n] do
         for j in [1..n] do
             prod_ij := elts[i] * elts[j];
@@ -170,7 +171,9 @@ IsCoboundary2Mod2WithLiftWitness := function(C, c)
 
     # Build c mod 2 as an F_2 cochain on C×C, linearised as a length-n²
     # vector (row-major: index (i, j) -> (i-1)*n + j).
-    c_F2 := List([1..n*n], i -> zero);
+    # Issue #385 (audit-2 fix): ListWithIdenticalEntries avoids
+    # n^2 closure dispatches; at m=5 n^2 = 4M.
+    c_F2 := ListWithIdenticalEntries(n * n, zero);
     for i in [1..n] do
         for j in [1..n] do
             c_F2[(i-1)*n + j] := (c(elts[i], elts[j]) mod 2) * one;
@@ -271,10 +274,16 @@ IB_AlphaFromMask := function(hom_basis, mask)
     num_basis := Length(hom_basis);
     if num_basis = 0 then return []; fi;
     n := Length(hom_basis[1]);
-    alpha := List([1..n], i -> 0);
+    # Issue #385 (audit-2 fix): closure-free zero-init + vector add.
+    # Previous `List([1..n], i -> 0)` was an n-element closure dispatch;
+    # ListWithIdenticalEntries hits the compiled fast path.
+    # Previous `List([1..n], i -> (alpha[i] + hom_basis[k][i]) mod 2)`
+    # was n closure calls; `(alpha + hom_basis[k]) mod 2` is compiled
+    # list-add + list-mod-int (~10-100x faster at n=2048).
+    alpha := ListWithIdenticalEntries(n, 0);
     for k in [1..num_basis] do
         if (mask mod (2^k)) >= 2^(k-1) then
-            alpha := List([1..n], i -> (alpha[i] + hom_basis[k][i]) mod 2);
+            alpha := (alpha + hom_basis[k]) mod 2;
         fi;
     od;
     return alpha;
@@ -293,7 +302,7 @@ end;;
 # Path A bottlenecks.
 IB_AlphaCupAlpha := function(alpha, n)
     if Length(alpha) = 0 then
-        return List([1..n*n], i -> 0);
+        return ListWithIdenticalEntries(n * n, 0);
     fi;
     # GAP's KroneckerProduct on two 1xn matrices [alpha], [alpha] returns
     # a 1x(n*n) matrix whose only row is the outer product alpha ⊗ alpha,
@@ -315,7 +324,7 @@ end;;
 # IsCoboundary2Mod2WithLift, which we delegate to as a fast path.
 IB_DeltaBeta := function(beta_int, elts, n, idx, modulus)
     local delta_beta, i, j, ij;
-    delta_beta := List([1..n*n], i -> 0);
+    delta_beta := ListWithIdenticalEntries(n * n, 0);
     for i in [1..n] do
         for j in [1..n] do
             ij := idx(elts[i] * elts[j]);
@@ -330,7 +339,7 @@ end;;
 # Pure O(n²) integer arithmetic; no Position lookups.
 IB_DeltaBetaMult := function(beta_int, n, mult, modulus)
     local delta_beta, i, j, mult_i, beta_i, b;
-    delta_beta := List([1..n*n], i -> 0);
+    delta_beta := ListWithIdenticalEntries(n * n, 0);
     for i in [1..n] do
         mult_i := mult[i];
         beta_i := beta_int[i];
@@ -355,8 +364,10 @@ end;;
 # reuses the cached factorisation; per-call cost drops to back-sub only.
 IB_StrictF2Witness := function(C, c_table, n)
     local result;
-    result := IsCoboundary2Mod2VecWithWitness(C,
-                  List([1..n*n], i -> c_table[i] mod 2));
+    # Issue #385 (audit-2 fix): closure-free `mod 2` on length-n^2 list.
+    # At m=5 n=2048 so n*n=4194304 entries; the closure dispatched
+    # ~4M times per call. Compiled list-mod-int dispatches once.
+    result := IsCoboundary2Mod2VecWithWitness(C, c_table mod 2);
     if not result.yes then return fail; fi;
     return List(result.witness, x -> If_(IsZero(x), 0, 1));
 end;;
@@ -379,8 +390,8 @@ end;;
 # cost by `2^num_basis * <speedup from cached RREF>` — about 10^4x
 # at m=5.
 IB_TableMod2WithLift := function(C, c_table, n)
-    return IsCoboundary2Mod2WithLiftVec(C,
-               List([1..n*n], i -> c_table[i] mod 2));
+    # Issue #385 (audit-2 fix): closure-free `mod 2`; see IB_StrictF2Witness.
+    return IsCoboundary2Mod2WithLiftVec(C, c_table mod 2);
 end;;
 
 # IB_DivBy2 — utility: subtract subtrahend (length-n² integers) from
@@ -442,7 +453,7 @@ IB_RecCob := function(C, c_table, modulus, elts, n, idx, A_F2_T, hom_basis, mult
     for mask in [0..(2^num_basis - 1)] do
         alpha := IB_AlphaFromMask(hom_basis, mask);
         if Length(alpha) = 0 then
-            alpha_cup_alpha := List([1..n*n], i -> 0);
+            alpha_cup_alpha := ListWithIdenticalEntries(n * n, 0);
         else
             alpha_cup_alpha := IB_AlphaCupAlpha(alpha, n);
         fi;
@@ -477,7 +488,7 @@ IsCoboundary2Z2k := function(C, c, k)
     idx := function(h) return LookupDictionary(mult_rec.idx_dict, h); end;
 
     modulus := 2^k;
-    c_table := List([1..n*n], i -> 0);
+    c_table := ListWithIdenticalEntries(n * n, 0);
     for i in [1..n] do
         for j in [1..n] do
             c_table[(i-1)*n + j] := c(elts[i], elts[j]) mod modulus;
@@ -521,9 +532,11 @@ IsCoboundary2Z2kVec := function(C, c_g_vec, k)
     idx := function(h) return LookupDictionary(mult_rec.idx_dict, h); end;
 
     modulus := 2^k;
-    # Single compiled list comprehension replaces n^2 interpreted
-    # closure calls. c_g_vec is already in (i-1)*n+j layout.
-    c_table := List(c_g_vec, x -> x mod modulus);
+    # Issue #385 (audit-2 fix): the comment above claimed "Single
+    # compiled list comprehension" but `List(L, x -> x mod modulus)`
+    # is the CLOSURE form — n^2 lambda calls. Compiled list-mod-int
+    # dispatches once at the C level.
+    c_table := c_g_vec mod modulus;
 
     A_F2_T := _GetCachedAF2T(C);
     hom_basis := IB_F2HomBasis(C);
