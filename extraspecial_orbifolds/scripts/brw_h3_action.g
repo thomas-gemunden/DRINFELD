@@ -153,6 +153,13 @@ H3MatrixOfAutomorphism := function(setup, phi)
     for j in [1..k] do
         M_y[j] := List(M_y[j], Int);
     od;
+    # Issue #381 followup: tag matrix as IsMatrixRep so downstream
+    # `M * v` dispatches to compiled PROD_MAT_VEC_INT instead of the
+    # interpreted ProdListScl + ProdVectorVector path. The Int cast
+    # above gets `mod` onto MOD_INT, but matvec stayed interpreted
+    # (~28% of CPU in the post-#381 sample). Same idiom as the orbit
+    # cache table conversion in solver/orbit_cache_persist.g:430.
+    ConvertToMatrixRep(M_y);
     return M_y;
 end;;
 

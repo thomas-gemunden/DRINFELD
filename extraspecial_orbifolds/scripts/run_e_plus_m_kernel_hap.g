@@ -575,7 +575,13 @@ PerVecTransgressionShared := function(vec)
                 # centraliser in BuildPerClassCocycleBasis
                 # (solver/snf_wrapper.g). Generalises across exp = 2
                 # (r = 1, bit_0) and exp = 4 (r = 2, bit_1).
-                u_gf2 := List(vec_target, x -> (x mod 2) * one_gf2);
+                # Issue #381 followup: closure-free Path A bit-extract.
+                # Original `List(vec_target, x -> (x mod 2) * one_gf2)`
+                # invoked a lambda per element (165 closures * 1024
+                # targets per vec); sample showed ~13% of CPU in the
+                # closure dispatch + ProdIntFFE. The two-step form
+                # below uses compiled list-mod-int + list-times-FFE.
+                u_gf2 := (vec_target mod 2) * one_gf2;
                 ConvertToVectorRep(u_gf2, GF(2));
                 c_prime_bits := basis_cache.table_gf2 * u_gf2;
                 Add(batch_inputs, c_prime_bits);
