@@ -322,7 +322,8 @@ end;;
 # matching the shape produced by BuildPerClassCocycleBasis.
 LoadOrbitCache := function(path, expected_fp, G)
     local catch, data, n, k, rep_exps, rep, C, pcgs, elts, idx_map,
-          table, exp_val, r_half, one_gf2, table_gf2, a, t_phase;
+          table, exp_val, r_half, one_gf2, table_gf2, table_gf2_bot,
+          a, t_phase;
     if not IsExistingFile(path) then
         return fail;
     fi;
@@ -473,15 +474,26 @@ LoadOrbitCache := function(path, expected_fp, G)
     table_gf2 := List(table, row ->
         List(row, x -> (QuoInt(x, r_half) mod 2) * one_gf2));
     ConvertToMatrixRep(table_gf2, GF(2));
+    # Issue #391 (Approach B): also derive bit_0(table) packed-GF(2) view.
+    # On-disk format is unchanged (table_rows holds the integer entries);
+    # table_gf2_bot is derived on load, same as table_gf2_top.
+    table_gf2_bot := List(table, row ->
+        List(row, x -> (x mod 2) * one_gf2));
+    ConvertToMatrixRep(table_gf2_bot, GF(2));
     if IsBoundGlobal("_LogPhase") then
-        _LogPhase("load-cache", "table promotion + table_gf2 rebuild ",
-                  "done in ", (Runtime() - t_phase) / 1000., " s");
+        _LogPhase("load-cache", "table promotion + table_gf2 / ",
+                  "table_gf2_bot rebuild done in ",
+                  (Runtime() - t_phase) / 1000., " s");
     else
-        Print("      LoadOrbitCache: table promotion + table_gf2 ",
-              "rebuild done in ", (Runtime() - t_phase) / 1000., " s\n");
+        Print("      LoadOrbitCache: table promotion + table_gf2 / ",
+              "table_gf2_bot rebuild done in ",
+              (Runtime() - t_phase) / 1000., " s\n");
     fi;
 
-    return rec(C := C, table := table, table_gf2 := table_gf2,
+    return rec(C := C, table := table,
+               table_gf2 := table_gf2,           # back-compat alias
+               table_gf2_top := table_gf2,
+               table_gf2_bot := table_gf2_bot,
                elts := elts, n := n, idx_map := idx_map);
 end;;
 

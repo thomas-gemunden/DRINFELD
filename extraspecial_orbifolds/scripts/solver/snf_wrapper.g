@@ -499,7 +499,7 @@ end;;
 BuildPerClassCocycleBasis := function(setup, gRep, C)
     local key, elts, n, basis, basis_T, k, exp, R, ncells, table, idx_map,
           a, b, x, result,
-          r_half, table_gf2, row, one_gf2, table_rows,
+          r_half, table_gf2, table_gf2_bot, row, one_gf2, table_rows,
           contrib_row, contrib_b, S, chunk,
           a_elt, b_elt, ab_elt, gRep_a, a_gRep, b_gRep, gRep_b,
           S_gRep_a, S_a_gRep, S_a_b, S_gRep_b, S_b_gRep,
@@ -719,7 +719,19 @@ BuildPerClassCocycleBasis := function(setup, gRep, C)
     table_gf2 := List(table, row ->
         List(row, x -> (QuoInt(x, r_half) mod 2) * one_gf2));
     ConvertToMatrixRep(table_gf2, GF(2));
-    result := rec(C := C, table := table, table_gf2 := table_gf2,
+    # Issue #391 (Approach B): also materialise bit_0(table) as a packed
+    # GF(2) matrix. At exp=2 this coincides with table_gf2 (bit_0 = bit_r).
+    # At exp=4 it's the bottom bit, identically zero on order-2 columns
+    # and nontrivial on the exp_idx column. Used by IsCoboundary2Z4VecBits
+    # in the Path Z bit-slice route. See
+    # docs/superpowers/specs/2026-06-02-path-z-gf2pack-design.md.
+    table_gf2_bot := List(table, row ->
+        List(row, x -> (x mod 2) * one_gf2));
+    ConvertToMatrixRep(table_gf2_bot, GF(2));
+    result := rec(C := C, table := table,
+                  table_gf2 := table_gf2,           # back-compat alias = top bit
+                  table_gf2_top := table_gf2,       # bit_{log2(r_half)} = bit_1 at exp=4
+                  table_gf2_bot := table_gf2_bot,   # bit_0
                   elts := elts, n := n, idx_map := idx_map);
     _basis_cache_by_class.(key) := result;
     return result;
@@ -898,6 +910,7 @@ function(setup, rep_cache, conj_action, target_idx, phi_path, M_path)
     local reps, G, sib_rep, sib_C, elts_sib, n_sib,
           k, exp, sigma, b, h_sib, table_sib,
           a, r_idx, r_rep_idx, s, idx_map_sib, r_half, table_gf2_sib,
+          table_gf2_bot_sib,
           row, one_gf2;
     reps := conj_action.reps;
     G := setup.group;
@@ -967,8 +980,15 @@ function(setup, rep_cache, conj_action, target_idx, phi_path, M_path)
     table_gf2_sib := List(table_sib, row ->
         List(row, x -> (QuoInt(x, r_half) mod 2) * one_gf2));
     ConvertToMatrixRep(table_gf2_sib, GF(2));
+    # Issue #391 (Approach B): bit_0 view.
+    table_gf2_bot_sib := List(table_sib, row ->
+        List(row, x -> (x mod 2) * one_gf2));
+    ConvertToMatrixRep(table_gf2_bot_sib, GF(2));
 
-    return rec(C := sib_C, table := table_sib, table_gf2 := table_gf2_sib,
+    return rec(C := sib_C, table := table_sib,
+               table_gf2 := table_gf2_sib,         # back-compat alias
+               table_gf2_top := table_gf2_sib,
+               table_gf2_bot := table_gf2_bot_sib,
                elts := elts_sib, n := n_sib, idx_map := idx_map_sib);
 end;;
 
