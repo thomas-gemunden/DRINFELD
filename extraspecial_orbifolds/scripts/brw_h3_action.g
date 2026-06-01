@@ -140,6 +140,19 @@ H3MatrixOfAutomorphism := function(setup, phi)
         od;
     od;
 
+    # Issue #381: cast each row to a plain integer list (not Rationals)
+    # before returning. Without this the matrix entries are tagged as
+    # IsRat (even when numerically integer, because they flowed through
+    # SolutionMat over the rationals at line 95 / 124), and downstream
+    # `ApplyH3Endomorphism`'s per-row `result[j] mod torsion[j]` loop
+    # dispatches to GAP's generic `EvalMod -> QuoRat -> GcdInt` path
+    # (with GMP `__gmpz_gcd_ui` / `FAKEMPZ` conversion) instead of the
+    # compiled `MOD_INT`. Diagnosed via `sample` of the running A-5b
+    # at m=5 Step 4: ~11% of CPU in QuoRat + GcdInt + GMP; the cast
+    # is expected to drop that path to ~1% of CPU.
+    for j in [1..k] do
+        M_y[j] := List(M_y[j], Int);
+    od;
     return M_y;
 end;;
 

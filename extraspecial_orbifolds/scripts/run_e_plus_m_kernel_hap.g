@@ -849,12 +849,25 @@ if m <= 5 then
     t_check_k := Runtime();;
     kernel_ok := true;;
     kernel_failures := [];;
+    # Issue #381: per-vec progress logging. Without this the loop is
+    # silent for the entire wall, making mid-run diagnostics impossible
+    # — which is what masked the QuoRat slowdown on the previous m=5
+    # run (Step 4 stuck for ~60 hours with no per-vec output).
+    s4_kernel_idx := 0;;
+    s4_kernel_total := Length(random_kernel_sample);;
+    s4_t_vec_prev := Runtime();;
     for v in random_kernel_sample do
+        s4_kernel_idx := s4_kernel_idx + 1;
         r_ := TestVecAllClasses(v);
         if not r_.in_kernel then
             kernel_ok := false;
             Add(kernel_failures, rec(vec := v, witness := r_.witness_class));
         fi;
+        Print("  [Step 4] kernel vec ", s4_kernel_idx, "/", s4_kernel_total,
+              ": in_kernel=", r_.in_kernel,
+              " (vec ", (Runtime() - s4_t_vec_prev) / 1000., " s, ",
+              "cum ", (Runtime() - t_check_k) / 1000., " s)\n");
+        s4_t_vec_prev := Runtime();
     od;
     Print("Kernel-sample cross-check: ", sample_size, " vecs, all in ker: ",
           kernel_ok, " (", (Runtime() - t_check_k) / 1000., " s)\n");
@@ -870,6 +883,8 @@ if m <= 5 then
         t_check_nk := Runtime();;
         stride_k := Maximum(1, QuoInt(kernel_size, sample_size_nk));;
         non_ker_failures := [];;
+        # Issue #381: per-vec progress logging (mirror of kernel-vec loop).
+        s4_nk_t_vec_prev := Runtime();;
         for s in [0..sample_size_nk - 1] do
             encoded := (s * stride_k) mod kernel_size;
             if Length(basis_vecs) = 0 then
@@ -885,6 +900,11 @@ if m <= 5 then
                 non_ker_ok := false;
                 Add(non_ker_failures, rec(vec := v));
             fi;
+            Print("  [Step 4] non-ker vec ", s + 1, "/", sample_size_nk,
+                  ": in_kernel=", r_.in_kernel,
+                  " (vec ", (Runtime() - s4_nk_t_vec_prev) / 1000., " s, ",
+                  "cum ", (Runtime() - t_check_nk) / 1000., " s)\n");
+            s4_nk_t_vec_prev := Runtime();
         od;
         Print("Non-ker sample cross-check: ", sample_size_nk,
               " vecs, none in ker: ", non_ker_ok,
