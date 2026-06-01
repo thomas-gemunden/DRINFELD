@@ -71,22 +71,27 @@
 driver_orig_cwd := DirectoryCurrent();;
 ChangeDirectoryCurrent("solver");
 Read("snf_wrapper.g");
+# Issue #384: timestamped logging helpers.
+Read("logging_util.g");
 ChangeDirectoryCurrent(Filename(driver_orig_cwd, ""));;
 
 t_start := Runtime();;
 G := SmallGroup(32, 49);;            # E_+(2)
-Print("\n=== A-2 driver: ker(Tr) for E_+(2) = SmallGroup(32, 49) ===\n");
-Print("|G| = ", Order(G), "\n");
+Print("\n");
+_LogPhase("driver",
+          "=== A-2 driver: ker(Tr) for E_+(2) = SmallGroup(32, 49) ===");
+_LogStamped("|G| = ", Order(G));
 
 # ----------------------------------------------------------------------
 # Step 1: fast computation via TransgressionKernelExact
 # ----------------------------------------------------------------------
 
-Print("\n--- Step 1: TransgressionKernelExact ---\n");
+Print("\n");
+_LogPhase("step-1", "Step 1: TransgressionKernelExact");
 t_exact := Runtime();;
 exact := TransgressionKernelExact(G);;
 exact_wall := (Runtime() - t_exact) / 1000.;;
-Print("TransgressionKernelExact wall: ", exact_wall, " s\n");
+_LogStamped("TransgressionKernelExact wall: ", exact_wall, " s");
 Print("  kernel_size (includes zero vec): ", exact.kernel_size, "\n");
 Print("  Length(kernel) (non-zero only):  ", Length(exact.kernel), "\n");
 
@@ -122,7 +127,8 @@ Print("  k = ", k, " generators, ", n_classes, " conjugacy classes\n");
 # IsCoboundary2Split.
 # ----------------------------------------------------------------------
 
-Print("\n--- Step 2: brute-force cross-check with Z/exp baseline ---\n");
+Print("\n");
+_LogPhase("step-2", "Step 2: brute-force cross-check with Z/exp baseline");
 # The Z/exp baseline (IsCoboundary2 from transgression_kernel.g) is
 # pathologically slow on Path Z (vec[10] != 0) for E_+(2): ~1.2 s per
 # call x 7/8 * 4096 vec x 17 classes ~ 23 hours. We disable it here by
@@ -174,7 +180,7 @@ if DO_BRUTE_FORCE then
         fi;
     od;
     brute_wall := (Runtime() - t_brute) / 1000.;;
-    Print("Brute-force loop wall: ", brute_wall, " s\n");
+    _LogStamped("Brute-force loop wall: ", brute_wall, " s");
     Print("  brute |ker Tr| = ", Length(brute_kernel_vecs), "\n");
 else
     Print("Brute-force step DISABLED (DO_BRUTE_FORCE = false).\n");
@@ -185,7 +191,8 @@ fi;
 # Step 3: cross-check exact vs brute
 # ----------------------------------------------------------------------
 
-Print("\n--- Step 3: cross-check ---\n");
+Print("\n");
+_LogPhase("step-3", "Step 3: cross-check");
 
 # Check 1: kernel counts agree.
 Assert(0, Length(brute_kernel_vecs) = exact.kernel_size,
@@ -223,7 +230,8 @@ Assert(0, all_kernel_vecs = brute_full,
 # the explicit path from issue #41.
 OutDir := "../../computed/transgression/2";;
 OutPath := Concatenation(OutDir, "/kernel.g");;
-Print("\n--- Step 4: persist to ", OutPath, " ---\n");
+Print("\n");
+_LogPhase("step-4", "Step 4: persist to ", OutPath);
 
 # Create the output directory if it doesn't exist.
 Exec(Concatenation("mkdir -p ", OutDir));
