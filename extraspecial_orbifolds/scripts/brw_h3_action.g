@@ -120,7 +120,10 @@ H3MatrixOfAutomorphism := function(setup, phi)
     for i in [1..k] do
         # phi^*(hombasis[i]) viewed as a length-hb_len vector mod exp.
         # Use row * matrix: hombasis[i] is a row vector of length |ZZ|.
-        image_vec := List(hombasis[i] * autmat, x -> x mod exp);
+        # Issue #381+#382 audit-followup (P3): closure-free list mod.
+        # Original `List(hombasis[i] * autmat, x -> x mod exp)` was a
+        # k-element closure dispatch; replaced with compiled list-mod.
+        image_vec := (hombasis[i] * autmat) mod exp;
         sol := SolutionMat(aug_matrix, image_vec);
         if sol = fail then
             Error("H3MatrixOfAutomorphism: could not project image of ",
@@ -260,9 +263,17 @@ ComposeH3Endomorphism := function(M1, M2, torsion)
     local k, result, j;
     k := Length(torsion);
     result := M1 * M2;
+    # Issue #381+#382 audit-followup (P3): closure-free list-mod-int.
+    # Replaces 165 per-element closure dispatches with one compiled
+    # list-mod-int per row.
     for j in [1..k] do
-        result[j] := List(result[j], x -> x mod torsion[j]);
+        result[j] := result[j] mod torsion[j];
     od;
+    # Issue #381+#382 audit-followup (P2): tag result as IsMatrixRep so
+    # downstream `result * v` (via ApplyH3Endomorphism or another
+    # Compose) dispatches to compiled PROD_MAT_VEC_INT /
+    # PROD_MAT_MAT_INT instead of generic ProdListScl.
+    ConvertToMatrixRep(result);
     return result;
 end;;
 
@@ -272,6 +283,10 @@ IdH3Endomorphism := function(torsion)
     k := Length(torsion);
     M := NullMat(k, k);
     for i in [1..k] do M[i][i] := 1; od;
+    # Issue #381+#382 audit-followup (P2): tag identity matrix as
+    # IsMatrixRep for consistency with H3MatrixOfAutomorphism +
+    # ComposeH3Endomorphism. Cheap; called once per BRW setup.
+    ConvertToMatrixRep(M);
     return M;
 end;;
 

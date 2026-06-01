@@ -322,13 +322,16 @@ end;;
 # matching the shape produced by BuildPerClassCocycleBasis.
 LoadOrbitCache := function(path, expected_fp, G)
     local catch, data, n, k, rep_exps, rep, C, pcgs, elts, idx_map,
-          table, exp_val, r_half, one_gf2, table_gf2, a;
+          table, exp_val, r_half, one_gf2, table_gf2, a, t_phase;
     if not IsExistingFile(path) then
         return fail;
     fi;
     if not IsPcGroup(G) then
         Error("LoadOrbitCache: G must be a PcGroup");
     fi;
+    # Issue #383: per-phase logging so the on-disk codepath is visible.
+    t_phase := Runtime();
+    Print("      LoadOrbitCache: Read() ", path, " ...\n");
 
     # Issue #365: prefer Read() on the new top-level-assignment file
     # format. ReadAsFunction wraps the file in a function whose
@@ -404,6 +407,9 @@ LoadOrbitCache := function(path, expected_fp, G)
         return fail;
     fi;
 
+    Print("      LoadOrbitCache: Read() done in ",
+          (Runtime() - t_phase) / 1000., " s; reconstructing live record ...\n");
+    t_phase := Runtime();
     # Reconstruct the live record.
     pcgs := FamilyPcgs(G);
     rep_exps := data.rep_exps;
@@ -423,6 +429,10 @@ LoadOrbitCache := function(path, expected_fp, G)
         AddDictionary(idx_map, elts[a], a);
     od;
 
+    Print("      LoadOrbitCache: live record done in ",
+          (Runtime() - t_phase) / 1000., " s; promoting table to ",
+          "IsMatrixRep + rebuilding table_gf2 ...\n");
+    t_phase := Runtime();
     # Promote table to GAP's matrix rep (matches the live builder's
     # ConvertToMatrixRep call so downstream `table * vec_target` hits the
     # compiled integer matvec path).
@@ -437,6 +447,8 @@ LoadOrbitCache := function(path, expected_fp, G)
     table_gf2 := List(table, row ->
         List(row, x -> (QuoInt(x, r_half) mod 2) * one_gf2));
     ConvertToMatrixRep(table_gf2, GF(2));
+    Print("      LoadOrbitCache: table promotion + table_gf2 rebuild ",
+          "done in ", (Runtime() - t_phase) / 1000., " s\n");
 
     return rec(C := C, table := table, table_gf2 := table_gf2,
                elts := elts, n := n, idx_map := idx_map);

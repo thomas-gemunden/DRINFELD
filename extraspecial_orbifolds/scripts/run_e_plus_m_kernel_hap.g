@@ -446,13 +446,24 @@ for orb_info in orbits_data do
     Print("  orbit start ", orb_info.start_idx, " (|C| = ", Order(C),
           ", n*n*k = ", Order(C)^2 * k,
           ", rep order = ", Order(rep),
-          ", orbit size ", Length(orb_info.orbit), ") ... ");
+          ", orbit size ", Length(orb_info.orbit), ")\n");
     t_one := Runtime();
 
     # Try to load from disk first.
     cache_path := Concatenation(OutDir, "/orbit_",
                                  String(orb_info.start_idx),
                                  "_cache.g");
+    # Issue #383: distinct phase logs so the on-disk codepath
+    # (LOAD vs BUILD) is visible while the phase runs. Without this
+    # the orbit header line above was buffered without trailing \n
+    # until load-or-build completed, hiding which path was taken.
+    if IsExistingFile(cache_path) then
+        Print("    cache file present at ", cache_path,
+              "; attempting LoadOrbitCache ...\n");
+    else
+        Print("    cache file ABSENT at ", cache_path,
+              "; will build fresh.\n");
+    fi;
     expected_fp := _OrbitCacheFingerprint(setup, rep, m);
     loaded_cache := LoadOrbitCache(cache_path, expected_fp, G);
 
@@ -463,7 +474,8 @@ for orb_info in orbits_data do
         # sibling-transport path) hits the loaded result.
         PopulateBasisCacheFromLoaded(setup, rep, loaded_cache);
         n_loaded_from_disk := n_loaded_from_disk + 1;
-        Print((Runtime() - t_one) / 1000., " s (LOADED from ", cache_path, ")\n");
+        Print("    LOADED in ", (Runtime() - t_one) / 1000.,
+              " s from ", cache_path, "\n");
     else
         if IsOne(rep) then
             # Identity class: c_g(h, k) = omega(id, h, k) - omega(h, id, k)
@@ -490,15 +502,19 @@ for orb_info in orbits_data do
                                idx_map := cache_idx_map);
             Add(orbit_caches, fresh_cache);
             n_built_fresh := n_built_fresh + 1;
-            Print((Runtime() - t_one) / 1000., " s (degenerate, identity class)");
+            Print("    BUILT (degenerate, identity class) in ",
+                  (Runtime() - t_one) / 1000., " s");
         else
             # Non-identity orbit: build the rep cache only. Sibling transport
             # is not consumed by PerVecTransgressionShared (see header comment
             # above this block).
+            Print("    building rep-only cache via ",
+                  "BuildPerClassCocycleBasis ...\n");
             fresh_cache := BuildPerClassCocycleBasis(setup, rep, C);
             Add(orbit_caches, fresh_cache);
             n_built_fresh := n_built_fresh + 1;
-            Print((Runtime() - t_one) / 1000., " s (rep-only)");
+            Print("    BUILT (rep-only) in ",
+                  (Runtime() - t_one) / 1000., " s");
         fi;
         # Persist the freshly-built cache to disk (issue #336). We do
         # this even for the identity orbit so the on-disk state covers
