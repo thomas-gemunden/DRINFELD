@@ -168,7 +168,7 @@ If_ := function(cond, a, b) if cond then return a; else return b; fi; end;;
 BuildPCWithBockstein := function(C, exp)
     local base, n, elts, img_rows, k, r_base, r_bockstein, r_full,
           torsion_full, basis_cocycles_full, M_aug_T_full, project_full,
-          basis_check, exp_int, one_gf2, k_b, row_int, x, b_F2;
+          basis_check, exp_int, one_gf2, k_b, b_F2;
     base := SetupCentraliserH2(C, exp);
     n := base.n;
     elts := base.elts;
@@ -240,14 +240,11 @@ BuildPCWithBockstein := function(C, exp)
         Add(M_aug_T_full, ShallowCopy(base.M_aug_T[k_b]));
     od;
     # Next r_bockstein rows: Bockstein image as integer rows (values in {0, exp/2}).
+    # Per audit C-8 (PR #396): IntVecFFE converts the packed GF(2) row to a plist
+    # of 0/1 ints in a single compiled call; the subsequent list-scalar mul is
+    # also compiled. Replaces the previous closure (P5) + per-cell loop.
     for k_b in [1..r_bockstein] do
-        row_int := List([1..n*n], i -> 0);
-        for x in [1..n*n] do
-            if not IsZero(img_rows[k_b][x]) then
-                row_int[x] := exp_int / 2;
-            fi;
-        od;
-        Add(M_aug_T_full, row_int);
+        Add(M_aug_T_full, IntVecFFE(img_rows[k_b]) * (exp_int / 2));
     od;
     # Next n rows: coboundary contributions (same as base).
     for k_b in [1..n] do
