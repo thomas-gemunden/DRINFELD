@@ -260,16 +260,78 @@ _K4A_DVAN_EA_FAMILIES.("5") := [33, 48, 54, 57, 70, 76, 88, 89, 109];;
 # streaming-greedy 1000-Lagrangian sample (not the 9 845 550 eager
 # enumeration that `BuildRestrictionMatrices(7, "lhs")` would use, which
 # is explicitly errored OOM at detecting_family_restriction.g:1184).
-# Persisting the sampled EAs' generator data + adding a loader is the
-# blocker — tracked in a separate follow-up issue.
+# Issue #377 resolves this by persisting the chosen EAs' generator
+# tuples in result.g and providing a loader (LoadDVANEAFamily below)
+# that returns reconstructed subgroups instead of indices.
 
-_K4A_GetDVANEAFamily := function(m)
-    local key;
-    key := String(m);
-    if not IsBound(_K4A_DVAN_EA_FAMILIES.(key)) then
+# Issue #377: load D-VAN's per-m minimum detecting family from disk by
+# reconstructing the EA subgroups from `result.ea_generators`. The
+# result file is `computed/dvan_min_family/m<m>/result.g` and is
+# produced by `_DETF_TrimmedFamily_m7_streaming` (for m=7) or by the
+# eager `_DETF_TrimmedFamily` driver (for m <= 5).
+#
+# Returns: list of EA subgroups of `_DETF_BuildSetupG_LHS(m).group`,
+# or `fail` if (a) the file does not exist, (b) the file lacks
+# `ea_generators`, or (c) the LHS setup helper is unavailable.
+#
+# Note: the loader requires the SAME `EPlusGroup` presentation that
+# produced the file. `_DETF_BuildSetupG_LHS(m)` is deterministic given
+# `m`, so a fresh call reconstructs a compatible parent group.
+LoadDVANEAFamily := function(m)
+    local result_path, dvan_result, setup_G, G, subgroups;
+    if _k4a_dir = fail then
         return fail;
     fi;
-    return _K4A_DVAN_EA_FAMILIES.(key);
+    result_path := Concatenation(
+        _k4a_dir,
+        "/../computed/dvan_min_family/m", String(m), "/result.g");
+    if not IsExistingFile(result_path) then
+        return fail;
+    fi;
+    # The file binds a top-level `dvan_m<m>_result` global (e.g.
+    # `dvan_m7_result`) when Read; for forward compat we also check
+    # the generic `dvan_result` name.
+    Read(result_path);
+    dvan_result := fail;
+    if IsBoundGlobal(Concatenation("dvan_m", String(m), "_result")) then
+        dvan_result := ValueGlobal(
+            Concatenation("dvan_m", String(m), "_result"));
+    elif IsBoundGlobal("dvan_result") then
+        dvan_result := ValueGlobal("dvan_result");
+    fi;
+    if dvan_result = fail then
+        return fail;
+    fi;
+    if not IsRecord(dvan_result)
+       or not IsBound(dvan_result.ea_generators) then
+        return fail;
+    fi;
+    # Lazy-load the LHS setup helper.
+    if not _K4A_LoadSibling("_DETF_BuildSetupG_LHS",
+                             "detecting_family_restriction.g") then
+        return fail;
+    fi;
+    setup_G := _DETF_BuildSetupG_LHS(m);
+    G := setup_G.group;
+    subgroups := List(dvan_result.ea_generators,
+                      gen_tuple -> Subgroup(G, gen_tuple));
+    return subgroups;
+end;;
+
+_K4A_GetDVANEAFamily := function(m)
+    local key, loaded;
+    key := String(m);
+    if IsBound(_K4A_DVAN_EA_FAMILIES.(key)) then
+        return _K4A_DVAN_EA_FAMILIES.(key);
+    fi;
+    # No hardcoded index family for this m — try the loader. The loader
+    # returns a list of subgroups (not indices). `_K4A_ClassifyEBranchMulti`
+    # dispatches on the input shape (integer indices vs subgroups).
+    loaded := LoadDVANEAFamily(m);
+    if loaded <> fail then
+        return loaded;
+    fi;
+    return fail;
 end;;
 
 # Given an `H` (abelian subgroup) and a restricted intertwiner_data,
@@ -344,37 +406,67 @@ end;;
 # minimum family has trivial kernel (D-VAN at m <= 5 has `final_ker = 1`).
 #
 # Inputs:
-#   opts          : the K4aClassify opts record (must have lattice_source +
-#                   omega_vec set and non-zero for this path to trigger).
-#   m             : positive integer.
-#   ea_indices    : list of integers, D-VAN EA indices into
-#                   `BuildRestrictionMatrices(m, "hap").H_EA_list`.
+#   opts       : the K4aClassify opts record (must have lattice_source +
+#                omega_vec set and non-zero for this path to trigger).
+#   m          : positive integer.
+#   ea_family  : either
+#                  (a) a list of integers — D-VAN EA indices into
+#                      `BuildRestrictionMatrices(m, "hap").H_EA_list`.
+#                      This is the m <= 5 path: BuildRestrictionMatrices
+#                      is feasible and indexes into a hardcoded family.
+#                  (b) a list of Group objects — D-VAN EA subgroups loaded
+#                      via `LoadDVANEAFamily(m)` (issue #377). This is
+#                      the m=7 path: BuildRestrictionMatrices(7, *) OOMs,
+#                      so we build setup_G via `_DETF_BuildSetupG_LHS(m)`
+#                      and use the supplied subgroups directly.
+#                Dispatch is by checking whether the first element is
+#                an integer or a group.
 #
 # Returns: rec(is_abelian := true, is_coboundary := AND over all EAs,
 # per_ea_results := [list of {ea_idx, is_coboundary} recs], wall_seconds,
 # family_source := "dvan-min-family").
-_K4A_ClassifyEBranchMulti := function(opts, m, ea_indices)
+_K4A_ClassifyEBranchMulti := function(opts, m, ea_family)
     local t0, restmats, setup_G, omega_G, omega_H_fn, val, expon,
-          per_ea, is_coboundary_all, ea_idx, H_EA, modular_ct,
-          modular_untwisted, match;
+          per_ea, is_coboundary_all, ea_entry, H_EA, modular_ct,
+          modular_untwisted, match, ea_idx, is_index_input;
     t0 := Runtime();
-    restmats := BuildRestrictionMatrices(m, "hap");
-    setup_G := restmats.setup_G;
+    # Detect input shape. The two paths differ only in (i) how setup_G is
+    # obtained and (ii) how H_EA is extracted from each ea_family entry.
+    is_index_input := not IsEmpty(ea_family) and IsInt(ea_family[1]);
+    if is_index_input then
+        restmats := BuildRestrictionMatrices(m, "hap");
+        setup_G := restmats.setup_G;
+    else
+        # Subgroup-input path (m=7). Lazy-load _DETF_BuildSetupG_LHS.
+        if not _K4A_LoadSibling("_DETF_BuildSetupG_LHS",
+                                 "detecting_family_restriction.g") then
+            Error("_K4A_ClassifyEBranchMulti: cannot locate ",
+                  "detecting_family_restriction.g for subgroup-input path");
+        fi;
+        setup_G := _DETF_BuildSetupG_LHS(m);
+        restmats := fail;
+    fi;
     omega_G := StandardCocycleOf(setup_G, opts.omega_vec);
     omega_H_fn := function(x, y, z) return omega_G(x, y, z); end;
     val := Gcd(Gcd(opts.omega_vec), setup_G.exponent);
     expon := setup_G.exponent / val;
     per_ea := [];
     is_coboundary_all := true;
-    for ea_idx in ea_indices do
-        H_EA := restmats.H_EA_list[ea_idx];
+    ea_idx := 0;
+    for ea_entry in ea_family do
+        ea_idx := ea_idx + 1;
+        if is_index_input then
+            H_EA := restmats.H_EA_list[ea_entry];
+        else
+            H_EA := ea_entry;
+        fi;
         modular_ct := ComputeModularData(H_EA, omega_H_fn, val, expon);
         modular_untwisted := ComputeUntwistedModularData(H_EA);
         match := JointPermutationMatcher(
             modular_untwisted.S, modular_untwisted.T,
             modular_ct.S, modular_ct.T);
         Add(per_ea, rec(
-            ea_idx        := ea_idx,
+            ea_idx        := If_(is_index_input, ea_entry, ea_idx),
             ea_order      := Order(H_EA),
             is_coboundary := match.ok
         ));
@@ -382,7 +474,8 @@ _K4A_ClassifyEBranchMulti := function(opts, m, ea_indices)
             is_coboundary_all := false;
         fi;
         if opts.verbose then
-            Print("  [_K4A_ClassifyEBranchMulti] EA #", ea_idx,
+            Print("  [_K4A_ClassifyEBranchMulti] EA #",
+                  If_(is_index_input, ea_entry, ea_idx),
                   " (|EA| = ", Order(H_EA),
                   "): is_coboundary = ", match.ok, "\n");
         fi;
