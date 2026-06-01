@@ -184,6 +184,15 @@ _FastGroupCohomologyFunctor := function(UCT1, UCT2, phi, n)
         fi;
         Add(F, row);
     od;
+    # Issue #381+#382 audit-followup: SolutionMat returns IsRat-tagged
+    # rows even when numerically integer (the defensive ForAll(IsInt)
+    # check above passes but the type tag persists). Downstream
+    # consumers (RestrictionMatrixViaHAP::autmat, then matvec
+    # `hom_G_rescaled * autmat`) hit the slow rational dispatch. Cast
+    # to plain Int rows here so the matvec stays on the compiled path.
+    for x in [1..Length(F)] do
+        F[x] := List(F[x], Int);
+    od;
     return rec(matrix := F,
                m1 := UCT1!.exponent,
                m2 := UCT2!.exponent);
@@ -240,8 +249,8 @@ RestrictionMatrixViaHAP := function(setup_G, ctx_H, phi_HG)
     autmat := TransposedMat(F);
 
     # Rescale hombasis_H to Z/L; build augmented matrix with slack L * I.
-    hombasis_H_rescaled := List(hombasis_H,
-        h -> List(h, x -> x * rescale_H));
+    # Issue #381+#382 audit-followup: closure-free list-times-scalar.
+    hombasis_H_rescaled := List(hombasis_H, h -> h * rescale_H);
     aug_matrix := Concatenation(
         hombasis_H_rescaled,
         List([1..hb_len_H], r -> List([1..hb_len_H], c ->
@@ -251,8 +260,11 @@ RestrictionMatrixViaHAP := function(setup_G, ctx_H, phi_HG)
     for i in [1..k_G] do
         # Rescale G-side hom from Z/exp_G to Z/L, restrict via autmat,
         # reduce mod L, project onto hombasis_H_rescaled.
-        hom_G_rescaled := List(hombasis_G[i], x -> x * rescale_G);
-        image_modL := List(hom_G_rescaled * autmat, x -> x mod L);
+        # Issue #381+#382 audit-followup: closure-free list * scalar
+        # and list mod scalar; was `List(L, x -> x * rescale_G)` /
+        # `List(L, x -> x mod L)` (per-element closure dispatch).
+        hom_G_rescaled := hombasis_G[i] * rescale_G;
+        image_modL := (hom_G_rescaled * autmat) mod L;
         # Issue #329: use SolutionMat (rational) instead of SolutionIntMat.
         # aug_matrix has integer rows (hombasis rescaled + L * I slack); the
         # RHS is integer; the unique solution (in span_Q of aug_matrix's

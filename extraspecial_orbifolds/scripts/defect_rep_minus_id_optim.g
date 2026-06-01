@@ -226,9 +226,8 @@ Xefcd := function(h, e, f, c, d, m)
     n := 2^m;
     k := n / 2;
     Pi := BigPi(h, m);
-    target := Concatenation(
-        List([1..k], i -> (c[i] + e[i]) mod 2),
-        List([1..k], i -> (d[i] + f[i]) mod 2));
+    # Issue #381+#382 audit-followup (P3): closure-free vector add+mod.
+    target := Concatenation((c + e) mod 2, (d + f) mod 2);
     x := F2_SolveOneRow(Pi, target);
     return x;
 end;;
@@ -255,8 +254,9 @@ EfCoeff2 := function(h, e, f, c, d, m)
     H := HinSympBasis(h, m);
     x := Xefcd(h, e, f, c, d, m);
     if x = fail then return fail; fi;
-    MhhSym := List([1..n], i ->
-        List([1..n], j -> (Mhh[i][j] + Mhh[j][i]) mod 2));
+    # Issue #381+#382 audit-followup (P3): O(n^2) closure replaced by
+    # one matrix add + mod via TransposedMat.
+    MhhSym := (Mhh + TransposedMat(Mhh)) mod 2;
     AT := F2_Trans(A);
     RT := F2_Trans(R);
     term1 := F2_VMul(F2_VMul(x, MhhSym), AT);
@@ -264,8 +264,8 @@ EfCoeff2 := function(h, e, f, c, d, m)
     ifv := EfInsertc(f);
     term2 := F2_VMul(F2_VMul(F2_VMul(ic, RT), F2_Trans(H)), AT);
     term3 := F2_VMul(F2_VMul(ifv, RT), AT);
-    return List([1..Length(term1)],
-                i -> (term1[i] + term2[i] + term3[i]) mod 2);
+    # Issue #381+#382 audit-followup (P3): closure-free vector sum+mod.
+    return (term1 + term2 + term3) mod 2;
 end;;
 
 # EfCoeff3(h, e, f, c, d, m): constant coefficient (Magma's efCoeff3,
@@ -383,8 +383,9 @@ HardCodeFinder := function(h, s, mhh, A, B, m)
     sp := sd[2];   # isotropic radical (q=0)
     Sh := Concatenation(sp, an);    # b first, then a (Magma order)
     D := RealB(h, m);
-    mhhSym := List([1..n], i ->
-        List([1..n], j -> (mhh[i][j] + mhh[j][i]) mod 2));
+    # Issue #381+#382 audit-followup (P3): O(n^2) closure replaced by
+    # one matrix add + mod via TransposedMat.
+    mhhSym := (mhh + TransposedMat(mhh)) mod 2;
     AT := F2_Trans(A);
     ShT := F2_Trans(Sh);
     x1 := F2_Mul(F2_Mul(F2_Mul(D, mhhSym), AT), ShT);
@@ -487,7 +488,8 @@ HardCodeFinalFinder := function(h, s, mhh, A, B, m)
     # c and f from the system are length 2^m; we take RightHalf to land
     # in F_2^k as elementary-matrix indices (matching Magma's
     # FinalFinder, which also takes RightHalf).
-    sum := List([1..n], i -> (x[i] + fn.c[i] + fn.f[i]) mod 2);
+    # Issue #381+#382 audit-followup (P3): vectorise.
+    sum := (x + fn.c + fn.f) mod 2;
     e := F2_LeftHalfVec(sum);
     d := F2_RightHalfVec(sum);
     fOut := F2_RightHalfVec(fn.f);
@@ -630,7 +632,8 @@ HardCodeShortComputeInterTwineref := function(h, e, f, c, d, s, mhh, A, B, R, m)
     AT := F2_Trans(A);
     beta := EfCoeff2(h, e, f, c, d, m);
     sAT := F2_VMul(s, AT);
-    beta := List([1..kerLen], i -> (beta[i] + sAT[i]) mod 2);
+    # Issue #381+#382 audit-followup (P3): vectorise.
+    beta := (beta + sAT) mod 2;
     # Bring to standard basis: beta_tilde = beta * Sh^T.
     sht := _efShAndTarget(h, m);
     betaTilde := F2_VMul(beta, sht.ShT);
@@ -681,8 +684,8 @@ HardCodeShortComputeInterTwinerefWithX := function(h, H, e, f, c, d, s, mhh,
     # beta = x*(Mhh+Mhh^T)*A^T + Insertc(c)*R^T*H^T*A^T
     #        + Insertc(f)*R^T*A^T + s*A^T
     AT := F2_Trans(A);
-    mhhSym := List([1..n], k1 ->
-        List([1..n], j -> (mhh[k1][j] + mhh[j][k1]) mod 2));
+    # Issue #381+#382 audit-followup (P3): vectorise.
+    mhhSym := (mhh + TransposedMat(mhh)) mod 2;
     xMhhSym := F2_VMul(x, mhhSym);
     term1 := F2_VMul(xMhhSym, AT);
     icRT := F2_VMul(ic, F2_Trans(R));
@@ -691,8 +694,8 @@ HardCodeShortComputeInterTwinerefWithX := function(h, H, e, f, c, d, s, mhh,
     ifvRT := F2_VMul(ifv, F2_Trans(R));
     term3 := F2_VMul(ifvRT, AT);
     term4 := F2_VMul(s, AT);
-    beta := List([1..kerLen], i ->
-        (term1[i] + term2[i] + term3[i] + term4[i]) mod 2);
+    # Issue #381+#382 audit-followup (P3): vectorise.
+    beta := (term1 + term2 + term3 + term4) mod 2;
     sht := _efShAndTarget(h, m);
     betaTilde := F2_VMul(beta, sht.ShT);
     dimAn := sht.nDimAn;
@@ -760,10 +763,9 @@ HardCodeProductFinder := function(h1, e1, f1, c1, s1, mhh1, A1, B1,
     BPi2 := hd2.BPi; H2 := hd2.H; p2 := hd2.p1; nrD2 := hd2.nrD;
     A1T := F2_Trans(A1);
     A2T := F2_Trans(A2);
-    mhh1Sym := List([1..n], i ->
-        List([1..n], j -> (mhh1[i][j] + mhh1[j][i]) mod 2));
-    mhh2Sym := List([1..n], i ->
-        List([1..n], j -> (mhh2[i][j] + mhh2[j][i]) mod 2));
+    # Issue #381+#382 audit-followup (P3): vectorise.
+    mhh1Sym := (mhh1 + TransposedMat(mhh1)) mod 2;
+    mhh2Sym := (mhh2 + TransposedMat(mhh2)) mod 2;
     # b1 = D1 * Mh1 * A1^T   (rows nrD1, cols Nrows(A1))
     b1 := F2_Mul(F2_Mul(D1, mhh1Sym), A1T);
     # P = D2*BigPi(h2) (rows nrD2, cols n) but with each row replaced by
