@@ -1851,6 +1851,14 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
         source                   := "lhs",
         ea_indices_chosen        := ea_chosen,
         ea_indices_chosen_sorted := ea_sorted,
+        # Issue #377: persist the actual generator tuples for each
+        # chosen EA so the family is reproducible across reruns
+        # without needing the random sample. Indices into the
+        # random 1000-Lagrangian sample are not stable across runs.
+        ea_generators            := List(ea_chosen,
+                                         j -> sample_basis_tuples[j]),
+        ea_generators_sorted     := List(ea_sorted,
+                                         j -> sample_basis_tuples[j]),
         include_D8               := true,
         include_Q8               := include_Q8,
         final_ker                := curr_ker,

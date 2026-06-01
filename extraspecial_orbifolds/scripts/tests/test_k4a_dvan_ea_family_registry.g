@@ -123,7 +123,13 @@ K4ARegAssertEqual("get m=5",
 Print("\nT4. _K4A_GetDVANEAFamily(m) returns fail for unhardcoded m\n");
 K4ARegAssertEqual("get m=4 (out-of-scope)",
                    _K4A_GetDVANEAFamily(4), fail);
-K4ARegAssertEqual("get m=7 (prerequisite issue blocked)",
+# Issue #377: m=7 falls through to LoadDVANEAFamily(7). Until a
+# regenerated result.g containing `ea_generators` lands, the loader
+# returns fail, which propagates as the `_K4A_GetDVANEAFamily(7)`
+# return value. After the next D-VAN m=7 production rerun (with
+# `ea_generators` persisted), this assertion changes — the registry
+# will return a list of subgroups instead.
+K4ARegAssertEqual("get m=7 (loader returns fail when ea_generators absent)",
                    _K4A_GetDVANEAFamily(7), fail);
 
 # ---- T5: _K4A_OmegaIsZero ----------------------------------------------
