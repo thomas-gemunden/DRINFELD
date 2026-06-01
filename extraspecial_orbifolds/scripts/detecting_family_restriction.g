@@ -282,6 +282,16 @@ RestrictionMatrixViaHAP := function(setup_G, ctx_H, phi_HG)
         od;
     od;
 
+    # Issue #381+#382 audit-followup: SolutionMat returns rational
+    # entries that propagate IsRat tags into res_mat. Downstream uses
+    # of res_mat — joint kernel SNF, `M * One(GF(2))` conversion in
+    # _DETF_FpRankF2, and the F_2 RREF helpers from PR #379 — all
+    # benefit from int-cast + IsMatrixRep tagging. Same idiom as
+    # brw_h3_action.g::H3MatrixOfAutomorphism (PR #381 + #382).
+    for i in [1..k_G] do
+        res_mat[i] := List(res_mat[i], Int);
+    od;
+    ConvertToMatrixRep(res_mat);
     return res_mat;
 end;;
 
