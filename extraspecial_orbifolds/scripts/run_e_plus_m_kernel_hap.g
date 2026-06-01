@@ -586,11 +586,18 @@ PerVecTransgressionShared := function(vec)
                                          orb_info.parent, orb_info.gen_used,
                                          h3_matrices, torsion, vec);
             if exp_local > 2 and exp_index <> fail and vec_target[exp_index] <> 0 then
-                # Path Z: per-call. Needs the full integer c_g_table.
-                c_g_table := basis_cache.table * vec_target;
+                # Path Z: route through the sparsity-aware dispatcher
+                # (issue #391 Approach A). Internally:
+                #   - |supp(vec_target)|=1   -> column-read fast path
+                #   - |supp|<=k/3            -> AddRowVector accumulation
+                #   - |supp|>k/3             -> existing dense matvec
+                # The n² × k matvec is no longer materialised at the call
+                # site — the dispatcher only builds c_g_vec when its
+                # internal sparse heuristics route to the dense fallback.
+                # See docs/superpowers/specs/2026-06-02-path-z-sparsity-design.md.
                 results[target_idx] :=
-                    IsCoboundary2SplitVec(basis_cache.C, c_g_table, vec_target,
-                                           setup);
+                    IsCoboundary2SplitVecAware(basis_cache.C, basis_cache,
+                                                vec_target, setup);
             else
                 # Path A: A-5b R2-8 (#258 / #266 follow-up). Single
                 # compiled GF(2) matvec replaces the 1M-int matmul
