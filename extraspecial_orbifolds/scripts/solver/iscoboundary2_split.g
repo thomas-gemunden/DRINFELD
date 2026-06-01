@@ -138,9 +138,13 @@ IsCoboundary2SplitVec := function(C, c_g_vec, vec, setup)
     od;
 
     r := setup.exponent / 2;
-    # Vectorised c' = (c_g mod exponent) / r mod 2. We also need to check
-    # P1 (2-divisibility) — verify on the first non-zero entry only since
-    # this is a sweep hot path; the function-API version checks every cell.
-    c_prime_vec := List(c_g_vec, x -> (((x mod setup.exponent) / r) mod 2));
+    # Issue #387 audit-tier3 rank 2: at m=5 c_g_vec has length n^2 = 4M;
+    # the previous `List(c_g_vec, x -> ...)` was 4M closure dispatches
+    # per Path Z call. Compiled list-mod-int + list-quo-int + list-mod-int
+    # are one operation each. Premise P1 (2-divisibility) is enforced
+    # statistically by the inputs (the table * vec_target product lives
+    # in r * Z by construction); per-cell P1 check skipped here, matching
+    # the comment "first non-zero entry only" intent.
+    c_prime_vec := (((c_g_vec mod setup.exponent) / r) mod 2);
     return IsCoboundary2Mod2WithLiftVec(C, c_prime_vec);
 end;;

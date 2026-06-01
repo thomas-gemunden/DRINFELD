@@ -156,12 +156,17 @@ H3MatrixOfAutomorphism := function(setup, phi)
     for j in [1..k] do
         M_y[j] := List(M_y[j], Int);
     od;
-    # Issue #381 followup: tag matrix as IsMatrixRep so downstream
-    # `M * v` dispatches to compiled PROD_MAT_VEC_INT instead of the
-    # interpreted ProdListScl + ProdVectorVector path. The Int cast
-    # above gets `mod` onto MOD_INT, but matvec stayed interpreted
-    # (~28% of CPU in the post-#381 sample). Same idiom as the orbit
-    # cache table conversion in solver/orbit_cache_persist.g:430.
+    # Issue #381 followup (#382) + #387 audit-tier3 P16 finding: the
+    # call below was intended to engage compiled PROD_MAT_VEC_INT but
+    # the probe in `docs/superpowers/research/2026-06-02-perf-audit-
+    # full.md` shows ConvertToMatrixRep(M) WITHOUT a field arg is a
+    # silent no-op on integer matrices (TNUM stays at T_PLIST_HOM, the
+    # 1000-iteration matvec wall is unchanged). M_y * v in downstream
+    # ApplyH3Endomorphism therefore stays on the interpreted
+    # ProdListScl + ProdVectorVector path. Left in place as a marker
+    # for the structural fix (ImmutableMatrix(Integers, M) gives ~16%
+    # at n=165 but is insufficient; the real cure is batched GF(2)
+    # or pre-transposed convention — see #387 followup).
     ConvertToMatrixRep(M_y);
     return M_y;
 end;;

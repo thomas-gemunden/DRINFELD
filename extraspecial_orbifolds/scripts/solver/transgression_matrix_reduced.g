@@ -298,7 +298,8 @@ end;;
 ProjectVectorViaP_C := function(P_C_rec, c_g_vec)
     local sol, a_coords, k_b, c_vec_mod, exp_local;
     exp_local := P_C_rec.exp;
-    c_vec_mod := List(c_g_vec, x -> x mod exp_local);
+    # Issue #387 audit-tier3 rank 4: compiled list-mod-int instead of n^2 closures.
+    c_vec_mod := c_g_vec mod exp_local;
     sol := SolutionIntMat(P_C_rec.M_aug_T, c_vec_mod);
     if sol = fail then return fail; fi;
     a_coords := List([1..P_C_rec.r_full],
@@ -355,7 +356,8 @@ FastProjectionMatrixSetup := function(C, exp)
     basis_funcs := List(basis_cocycles, v -> StandardCocycle(R, v, 2, exp));
 
     # Build B_T: (n*n) x r as in SetupCentraliserH2.
-    B_T := List([1..n*n], i -> List([1..r], k_b -> 0));
+    # Issue #387 audit-tier3 rank 6: NullMat avoids n^2 * r closures.
+    B_T := NullMat(n*n, r);
     for k_b in [1..r] do
         f_k := basis_funcs[k_b];
         for i in [1..n] do
@@ -369,7 +371,8 @@ FastProjectionMatrixSetup := function(C, exp)
     # as a length-n² row. Row r+i in [r+1..r+n] = δ(1_{elts[i]}) as
     # length-n² (= sign-contributions to (i', j') cells where elts[i']
     # ∈ {elts[i], elts[j], elts[i']*elts[j']}).
-    M_small := List([1..r + n], rowidx -> List([1..n*n], colidx -> 0));
+    # Issue #387 audit-tier3 rank 6: NullMat avoids (r+n) * n^2 closures.
+    M_small := NullMat(r + n, n*n);
     for k_b in [1..r] do
         for i in [1..n*n] do
             M_small[k_b][i] := B_T[i][k_b];
@@ -432,7 +435,8 @@ FastProjectVector := function(fproj, c_g_vec)
         od;
         fproj.M_aug_T_cached := M_aug_T;
     fi;
-    c_vec_mod := List(c_g_vec, x -> x mod exp_local);
+    # Issue #387 audit-tier3 rank 4: compiled list-mod-int instead of n^2 closures.
+    c_vec_mod := c_g_vec mod exp_local;
     sol := SolutionIntMat(fproj.M_aug_T_cached, c_vec_mod);
     if sol = fail then return fail; fi;
     a_coords := List([1..r], k_b -> sol[k_b] mod torsion[k_b]);
@@ -904,8 +908,11 @@ H3MatrixForOrbitMember := function(start_idx, target_idx, parent, gen_used,
         # orbit_size * axis_vecs) — the next dominant fail-column cost
         # after #371 cleared the IB closure dispatch.
         prod := M_step * M_y;
+        # Issue #387 audit-tier3 rank 3: per-row closure dispatched k
+        # times per Schreier step; compiled list-mod-int is a single C
+        # call per row.
         for l in [1..k_dim] do
-            prod[l] := List(prod[l], x -> x mod h3_torsion[l]);
+            prod[l] := prod[l] mod h3_torsion[l];
         od;
         M_y := prod;
     od;
@@ -959,7 +966,7 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
           fallback_in_ker, c_g_func, fallback_target_idx,
           fallback_vec_target, exp_axis_in_ker, t_test, c_g_table_exp,
           t_axis, exp_axis_k, exp_axis_vec, exp_axis_in_ker_k,
-          M_y_j_exp, vec_target_exp, all_orbit_ok, basis_orders, jj,
+          M_y_j_exp, M_y_j_exp_T, vec_target_exp, all_orbit_ok, basis_orders, jj,
           col_has_constraint, total_rows, orbit_ckpt_path,
           completed_orbit_starts, ckpt_data, ckpt_stream, t_orbit_prop,
           M_bar_gf2_val, r_quot_val, cache_val, fail_columns_val;
@@ -1317,15 +1324,18 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
                         orb_info.start_idx, fallback_target_idx,
                         orb_info.parent, orb_info.gen_used,
                         h3_matrices, h3_torsion);
-                    # Issue #371: unit_e_i = exp_axis_vec * e_fc has
-                    # exactly one non-zero entry, at index fc. The full
-                    # `vec_target_exp[jj] := Sum_l M_y_j_exp[jj][l] *
-                    # unit_e_i[l]` collapses to a single-column read.
-                    # Saves the k * k = 27,225 interpreted ops per
-                    # iteration that multiplied the 164 zero entries.
-                    vec_target_exp := List([1..k], jj ->
-                        (M_y_j_exp[jj][fc] * exp_axis_vec)
-                            mod h3_torsion[jj]);
+                    # Issue #371 + #387 audit-tier3 rank 1: unit_e_i =
+                    # exp_axis_vec * e_fc has exactly one non-zero entry
+                    # at index fc, so vec_target_exp[jj] is just
+                    # M_y_j_exp[jj][fc] * exp_axis_vec mod h3_torsion[jj].
+                    # Original `List([1..k], jj -> ...)` was k=165
+                    # closures per iteration multiplied by axis_vec ×
+                    # orbit × target depth. Pre-transpose once per
+                    # target so column-fc becomes O(1) and the rest is
+                    # compiled list-scalar mul + list-mod-list (#387).
+                    M_y_j_exp_T := TransposedMat(M_y_j_exp);
+                    vec_target_exp := (M_y_j_exp_T[fc] * exp_axis_vec)
+                                          mod h3_torsion;
                     # Issue #370: cache_orbit.table is in IsMatrixRep
                     # after ConvertToMatrixRep at load time, so the `*`
                     # dispatches to compiled PROD_MAT_VEC_INT
@@ -1391,10 +1401,11 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
                     orb_info.start_idx, fallback_target_idx,
                     orb_info.parent, orb_info.gen_used,
                     h3_matrices, h3_torsion);
-                # Issue #371: unit_e_i = 2 * e_{exp_index} is sparse;
-                # collapse the k * k inner loop to a single-column read.
-                vec_target_exp := List([1..k], jj ->
-                    (M_y_j_exp[jj][exp_index] * 2) mod h3_torsion[jj]);
+                # Issue #371 + #387 audit-tier3 rank 1 (half-vec branch):
+                # same pre-transpose vectorisation as the main fail-column
+                # path above. exp_axis_vec = 2 for the half-vec test.
+                M_y_j_exp_T := TransposedMat(M_y_j_exp);
+                vec_target_exp := (M_y_j_exp_T[exp_index] * 2) mod h3_torsion;
                 # Issue #370: compiled PROD_MAT_VEC_INT (see note above
                 # at the axis_vec site).
                 c_g_table_exp := cache_orbit.table * vec_target_exp;

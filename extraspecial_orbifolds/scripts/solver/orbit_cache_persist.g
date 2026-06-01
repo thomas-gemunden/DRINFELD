@@ -454,9 +454,14 @@ LoadOrbitCache := function(path, expected_fp, G)
               "rebuilding table_gf2 ...\n");
     fi;
     t_phase := Runtime();
-    # Promote table to GAP's matrix rep (matches the live builder's
-    # ConvertToMatrixRep call so downstream `table * vec_target` hits the
-    # compiled integer matvec path).
+    # Issue #387 audit-tier3 P16: the comment below was the original
+    # intent but the call IS a no-op for integer matrices (see
+    # `docs/superpowers/research/2026-06-02-perf-audit-full.md` — TNUM
+    # unchanged, matvec wall unchanged). Left as a marker; the
+    # downstream `table * vec_target` stays on the interpreted path
+    # until a structural fix (e.g. batched GF(2)) lands.
+    # Original intent: promote table to GAP's matrix rep so downstream
+    # `table * vec_target` would hit the compiled integer matvec.
     table := List(data.table_rows, ShallowCopy);
     ConvertToMatrixRep(table);
 
