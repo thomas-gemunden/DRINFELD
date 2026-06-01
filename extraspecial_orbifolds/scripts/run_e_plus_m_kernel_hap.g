@@ -85,6 +85,13 @@ driver_orig_cwd := DirectoryCurrent();;
 # transgression_per_generator_brw.g pulls in transgression_kernel.g (UCT
 # setup) and snf_wrapper.g (cocycle-basis cache + dispatcher). Both rely
 # on CWD = scripts/ at Read-time.
+# Load timestamped logging helpers (issue #384). _LogStamped /
+# _LogPhase prefix each line with `[YYYY-MM-DDTHH:MM:SSZ]` (and
+# optionally a `[phase-name]` tag) so multi-hour runs can correlate
+# log lines with wall-clock time, and tail -f shows codepath choices
+# (LOADED vs BUILT, Path A vs Path Z) inline. Tight-loop prints (per-
+# vec / per-target) stay as plain Print() to avoid timestamp overhead.
+Read("solver/logging_util.g");
 Read("transgression_per_generator_brw.g");
 # transgression_resume.g defines PersistGenerator / LoadResumeState /
 # TransgressionKernelResumable. Lives in scripts/.
@@ -106,7 +113,8 @@ ChangeDirectoryCurrent(Filename(driver_orig_cwd, ""));;
 
 t_start := Runtime();;
 
-Print("\n=== A-7a driver: ker(Tr) for E_+(", m, ") ===\n");
+Print("\n");
+_LogPhase("driver", "=== A-7a driver: ker(Tr) for E_+(", m, ") — START ===");
 
 # ----------------------------------------------------------------------
 # Step 0a (m=7 only): build LHS resolution and pre-populate the
@@ -205,7 +213,8 @@ _BuildSetupFromResolution := function(em, R_E)
 end;;
 
 if m = 7 then
-    Print("\n--- Step 0a (m=7): build LHS resolution + setup ---\n");
+    Print("\n");
+    _LogPhase("step-0a", "build LHS resolution + setup (m=7)");
     Print("\n");
     Print("WARNING: at m=7, BRWConjugacyAction(7) is estimated 6-8h wall\n");
     Print("         (16386 classes x 28 BRW outer gens x O(n) ClassIndexOf).\n");
@@ -219,7 +228,8 @@ if m = 7 then
     Print("Building BRWConjugacyAction(7) (no resolution needed)...\n");
     t_conj := Runtime();;
     conj_action_m7 := BRWConjugacyAction(7);;
-    Print("BRWConjugacyAction(7) wall: ", (Runtime() - t_conj) / 1000., " s\n");
+    _LogStamped("BRWConjugacyAction(7) wall: ",
+                (Runtime() - t_conj) / 1000., " s");
     em_m7 := conj_action_m7.em;;
     iso_em_m7 := conj_action_m7.iso_em;;
     Print("|em| = ", Order(em_m7), " (pc-form of EmGroup(7))\n");
@@ -228,14 +238,14 @@ if m = 7 then
     Print("Building LHS resolution R_E on em (m=7, max_n=5)...\n");
     lhs_data := _LHSResolutionForGroup(em_m7, 7, 5);;
     R_E_m7 := lhs_data.R_E;;
-    Print("LHS wall: V = ", lhs_data.build_time_V, " s, R_E = ",
-          lhs_data.build_time_LHS, " s\n");
+    _LogStamped("LHS wall: V = ", lhs_data.build_time_V, " s, R_E = ",
+                lhs_data.build_time_LHS, " s");
 
     # Step 3: manually build setup record.
     Print("Building setup record from R_E...\n");
     t_uct := Runtime();;
     setup_m7 := _BuildSetupFromResolution(em_m7, R_E_m7);;
-    Print("UCT wall: ", (Runtime() - t_uct) / 1000., " s\n");
+    _LogStamped("UCT wall: ", (Runtime() - t_uct) / 1000., " s");
     Print("setup.torsion = ", setup_m7.torsion, "\n");
     Print("setup.exponent = ", setup_m7.exponent, "\n");
     Print("setup.num_generators (k) = ", setup_m7.num_generators, "\n");
@@ -266,7 +276,8 @@ if m = 7 then
               (Runtime() - t_one) / 1000., " s, valid = ",
               valid_endos_m7[Length(valid_endos_m7)], ")\n");
     od;
-    Print("H^3 matrices total wall: ", (Runtime() - t_h3mat) / 1000., " s\n");
+    _LogStamped("H^3 matrices total wall: ",
+                (Runtime() - t_h3mat) / 1000., " s");
     Print("All valid endomorphisms: ", ForAll(valid_endos_m7, x -> x = true), "\n");
 
     # Step 5: pre-populate the BRWH3Action cache so any downstream call
@@ -286,8 +297,8 @@ if m = 7 then
     );;
     _brw_h3_action_cache.("m7") := h3_action_m7;;
     Print("Pre-populated _brw_h3_action_cache.m7.\n");
-    Print("Step 0a (m=7 LHS setup) wall: ",
-          (Runtime() - t_lhs_setup) / 1000., " s\n");
+    _LogStamped("Step 0a (m=7 LHS setup) wall: ",
+                (Runtime() - t_lhs_setup) / 1000., " s");
 fi;
 
 # ----------------------------------------------------------------------
@@ -295,7 +306,8 @@ fi;
 # Follows A-5b's run_e_plus_5_kernel.g pattern.
 # ----------------------------------------------------------------------
 
-Print("\n--- Step 1: amortised BRW sweep (resumable) ---\n");
+Print("\n");
+_LogPhase("step-1", "Step 1: amortised BRW sweep (resumable)");
 
 OutDir := Concatenation("../../computed/transgression/", String(m));;
 Exec(Concatenation("mkdir -p ", OutDir));
@@ -317,7 +329,8 @@ Print("State file: ", StateFile, "\n");
 Print("Building BRW conjugacy action for m = ", m, "...\n");
 t_brw := Runtime();;
 conj_action := BRWConjugacyAction(m);;
-Print("BRWConjugacyAction wall: ", (Runtime() - t_brw) / 1000., " s\n");
+_LogStamped("BRWConjugacyAction wall: ",
+            (Runtime() - t_brw) / 1000., " s");
 
 G := conj_action.em;;
 Print("|G| = ", Order(G), "\n");
@@ -336,7 +349,8 @@ else
     Print("Building setup := SetupCohomology3(conj_action.em)...\n");
     t_setup := Runtime();;
     setup := SetupCohomology3(G);;
-    Print("SetupCohomology3 wall: ", (Runtime() - t_setup) / 1000., " s\n");
+    _LogStamped("SetupCohomology3 wall: ",
+                (Runtime() - t_setup) / 1000., " s");
     # Now build BRW H^3 matrices using THIS setup. We cannot reuse
     # BRWH3Action(m) because its internal setup is built on a DIFFERENT
     # IsomorphismPcGroup(EmGroup(m)) call. Build inline here.
@@ -351,7 +365,7 @@ else
         M_y := H3MatrixOfAutomorphism(setup, phi_i);
         Add(h3_matrices_consistent, M_y);
     od;
-    Print("BRW H^3 matrices wall: ", (Runtime() - t_h3) / 1000., " s\n");
+    _LogStamped("BRW H^3 matrices wall: ", (Runtime() - t_h3) / 1000., " s");
 fi;
 
 # Keep h3_action reference for code that expects it (legacy).
@@ -531,9 +545,9 @@ for orb_info in orbits_data do
         Print("\n");
     fi;
 od;
-Print("Per-orbit caches wall: ", (Runtime() - t_caches) / 1000.,
-      " s total (loaded ", n_loaded_from_disk, ", built ",
-      n_built_fresh, ")\n");
+_LogStamped("Per-orbit caches wall: ", (Runtime() - t_caches) / 1000.,
+            " s total (loaded ", n_loaded_from_disk, ", built ",
+            n_built_fresh, ")");
 
 # ----------------------------------------------------------------------
 # Per-generator sweep using shared caches.
@@ -626,7 +640,8 @@ if use_reduced_tr_matrix then
     # sweep entirely; the result populates in_kernel_gens / half_in_kernel
     # in a format compatible with the subsequent assembly steps.
     # ----------------------------------------------------------------------
-    Print("\n--- USE_REDUCED_TR_MATRIX path (perf-4'): one-shot ker(Tr) ---\n");
+    Print("\n");
+    _LogPhase("step-1-perf4", "USE_REDUCED_TR_MATRIX path: one-shot ker(Tr)");
     perf4_orig_cwd := DirectoryCurrent();;
     ChangeDirectoryCurrent("solver");
     Read("transgression_matrix_reduced.g");
@@ -655,7 +670,7 @@ if use_reduced_tr_matrix then
     reduced_result := KernelOfTransgressionViaMBar(setup, orbits_data, classes,
                                                     G, h3_matrices);;
     reduced_wall := (Runtime() - t_reduced) / 1000.;;
-    Print("KernelOfTransgressionViaMBar wall: ", reduced_wall, " s\n");
+    _LogStamped("KernelOfTransgressionViaMBar wall: ", reduced_wall, " s");
     Print("ker Tr size (reduced path): ", reduced_result.kernel_size, "\n");
     Print("in_kernel_gens (reduced path): ", reduced_result.in_kernel_gens, "\n");
 
@@ -730,10 +745,13 @@ Print("Order-", exp, " generator index: ", exp_index, "\n");
 # ----------------------------------------------------------------------
 
 if exp = 2 then
-    Print("\n--- Step 2: half-vec check skipped (exp = 2, all gens order 2) ---\n");
+    Print("\n");
+    _LogPhase("step-2-skip", "Step 2: half-vec check SKIPPED (exp = 2)");
     half_in_ker := fail;;
 else
-    Print("\n--- Step 2: half-vector check (2 * e_", exp_index, ") ---\n");
+    Print("\n");
+    _LogPhase("step-2", "Step 2: half-vector check (2 * e_",
+              exp_index, ")");
     half_in_ker := fail;;
     if exp_index in in_kernel_gens then
         half_in_ker := true;
@@ -746,7 +764,7 @@ else
         t_half := Runtime();
         half_per_class := PerVecTransgressionShared(half_vec);
         half_wall := (Runtime() - t_half) / 1000.;
-        Print("Half-vector test wall: ", half_wall, " s\n");
+        _LogStamped("Half-vector test wall: ", half_wall, " s");
         half_in_ker := ForAll(half_per_class, x -> x = true);
         Print("2 * e_", exp_index, " in ker: ", half_in_ker, "\n");
         if not half_in_ker then
@@ -761,7 +779,8 @@ fi;
 # Step 3: assemble the kernel.
 # ----------------------------------------------------------------------
 
-Print("\n--- Step 3: assemble kernel ---\n");
+Print("\n");
+_LogPhase("step-3", "Step 3: assemble kernel");
 
 zero_vec := List(torsion, t -> 0);;
 
@@ -835,7 +854,8 @@ fi;
 
 non_ker_ok := true;;
 if m <= 5 then
-    Print("\n--- Step 4: deterministic-stride cross-check ---\n");
+    Print("\n");
+    _LogPhase("step-4", "Step 4: deterministic-stride cross-check");
     TestVecAllClasses := function(vec)
         local per_class, j;
         per_class := PerVecTransgressionShared(vec);
@@ -937,8 +957,9 @@ if m <= 5 then
         fi;
     fi;
 else
-    Print("\n--- Step 4: cross-check SKIPPED (m=", m,
-          ", saved for separate test run) ---\n");
+    Print("\n");
+    _LogPhase("step-4-skip", "Step 4: cross-check SKIPPED (m=", m,
+              ", saved for separate test run)");
 fi;
 
 # ----------------------------------------------------------------------
@@ -946,7 +967,8 @@ fi;
 # ----------------------------------------------------------------------
 
 OutPath := Concatenation(OutDir, "/kernel.g");;
-Print("\n--- Step 5: persist to ", OutPath, " ---\n");
+Print("\n");
+_LogPhase("step-5", "Step 5: persist to ", OutPath);
 
 basis_summary := [];;
 for i in in_kernel_gens do
@@ -1013,8 +1035,9 @@ Print("Wrote ", OutPath, "\n");
 # ----------------------------------------------------------------------
 
 total_wall := (Runtime() - t_start) / 1000.;;
-Print("\n=== A-7a driver: DONE (m=", m, ") ===\n");
-Print("Total wall: ", total_wall, " s\n");
+Print("\n");
+_LogPhase("driver", "=== A-7a driver: DONE (m=", m, ") ===");
+_LogStamped("Total wall: ", total_wall, " s");
 Print("|ker Tr|     = ", kernel_size, "\n");
 Print("|H^3|        = ", Product(torsion), "\n");
 Print("|coker Tr|   = ", Product(torsion) / kernel_size, "\n");
