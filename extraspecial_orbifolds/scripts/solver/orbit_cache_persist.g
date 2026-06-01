@@ -323,7 +323,7 @@ end;;
 LoadOrbitCache := function(path, expected_fp, G)
     local catch, data, n, k, rep_exps, rep, C, pcgs, elts, idx_map,
           table, exp_val, r_half, one_gf2, table_gf2, table_gf2_bot,
-          a, t_phase;
+          table_gf2_top_T, a, t_phase;
     if not IsExistingFile(path) then
         return fail;
     fi;
