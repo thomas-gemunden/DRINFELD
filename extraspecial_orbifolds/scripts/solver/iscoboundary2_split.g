@@ -148,3 +148,81 @@ IsCoboundary2SplitVec := function(C, c_g_vec, vec, setup)
     c_prime_vec := (((c_g_vec mod setup.exponent) / r) mod 2);
     return IsCoboundary2Mod2WithLiftVec(C, c_prime_vec);
 end;;
+
+# ---------------------------------------------------------------------------
+# IsCoboundary2SplitVecAware — sparsity-aware Path Z dispatcher (issue #391
+# Approach A). Public entry point for the A-5b m=5 production hot path.
+#
+# Math: when vec_target has small support, the n²×k matvec
+#     c_g_vec := basis_cache.table * vec_target
+# collapses. With supp := {j : vec_target[j] != 0} and k_nz = |supp|:
+#     c_g_vec[i] = sum_{j ∈ supp} basis_cache.table[i][j] * vec_target[j]
+# costs n²·k_nz scalar ops instead of n²·k.
+#
+# Three regimes:
+#   * k_nz = 0 — vec_target is zero. c_g_vec is zero, so trivially a
+#                coboundary. Short-circuit return true.
+#   * k_nz = 1 — single column read, scaled by vec_target[j_nz].
+#   * k_nz ≤ k/3 — sparse column-accumulation via AddRowVector.
+#   * k_nz > k/3 — fall through to the existing dense matvec.
+#
+# This entry point ASSUMES the caller has already determined that Path Z
+# applies (i.e. vec_target[exp_index] != 0). It is the responsibility of
+# the caller (e.g. run_e_plus_m_kernel_hap.g:590) to gate on this; the
+# function still works for Path A inputs (the dense fallback calls the
+# existing IsCoboundary2SplitVec, which itself routes Path A/Path Z), but
+# the sparse short-cuts only buy speedup for Path Z calls because Path A
+# already has its own GF(2)-matvec fast path at the call site.
+#
+# Empirical basis (issue #391 probe, m=3):
+#   * Path Z hits / total calls: 42%.
+#   * |supp(vec_target)| median over Path Z hits: 14 / k=35.
+#   * 22% of Path Z hits are unit-support (the fast-fast path).
+#
+# Expected wall reduction at m=5 (extrapolation; see design doc):
+#   ~50-80 s/vec off the ~270 s/vec Step-4 baseline.
+# ---------------------------------------------------------------------------
+IsCoboundary2SplitVecAware := function(C, basis_cache, vec_target, setup)
+    local supp, k_nz, k_threshold, j_nz, col_j, c_g_vec, j, n2;
+
+    supp := PositionsProperty(vec_target, x -> x <> 0);
+    k_nz := Length(supp);
+
+    # Zero-support: c_g_vec ≡ 0, so the cohomology class is trivially a
+    # coboundary. (This case is rare at the call site — vec_target[exp_index]
+    # != 0 is asserted by the caller — but we guard against future use.)
+    if k_nz = 0 then
+        return true;
+    fi;
+
+    k_threshold := QuoInt(Length(vec_target), 3);
+
+    if k_nz = 1 then
+        # ---- Unit-support fast path. ----
+        # c_g_vec = basis_cache.table[*][j_nz] * vec_target[j_nz].
+        # Column extract via `List(table, row -> row[j_nz])` is one compiled
+        # list-element-pick per row; the outer `List` itself is a closure
+        # but the per-iteration body is a single ELM_LIST call, so this is
+        # ~3x faster than the dense matvec at the n=165 column-extract scale
+        # (each column is touched once vs all 165 columns).
+        j_nz := supp[1];
+        col_j := List(basis_cache.table, row -> row[j_nz]);
+        c_g_vec := col_j * vec_target[j_nz];      # compiled list-times-int
+        return IsCoboundary2SplitVec(C, c_g_vec, vec_target, setup);
+    elif k_nz <= k_threshold then
+        # ---- General sparse path. ----
+        # Accumulate c_g_vec = sum_{j in supp} table[*][j] * vec_target[j]
+        # via AddRowVector (compiled scaled-add).
+        n2 := Length(basis_cache.table);
+        c_g_vec := ListWithIdenticalEntries(n2, 0);
+        for j in supp do
+            col_j := List(basis_cache.table, row -> row[j]);
+            AddRowVector(c_g_vec, col_j, vec_target[j]);
+        od;
+        return IsCoboundary2SplitVec(C, c_g_vec, vec_target, setup);
+    else
+        # ---- Dense fallback (existing path). ----
+        c_g_vec := basis_cache.table * vec_target;
+        return IsCoboundary2SplitVec(C, c_g_vec, vec_target, setup);
+    fi;
+end;;
