@@ -1002,5 +1002,10 @@ BuildKRRIntertwinerData := function(arg)
 end;;
 
 
-Print("Loaded build_krr_intertwiner_data.g ",
-      "(K-4a-T4b #188 + projective trace #323).\n");
+if IsBoundGlobal("_LogStamped") then
+    _LogStamped("Loaded build_krr_intertwiner_data.g ",
+                "(K-4a-T4b #188 + projective trace #323).");
+else
+    Print("Loaded build_krr_intertwiner_data.g ",
+          "(K-4a-T4b #188 + projective trace #323).\n");
+fi;

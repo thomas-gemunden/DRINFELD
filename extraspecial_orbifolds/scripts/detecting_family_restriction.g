@@ -1589,7 +1589,13 @@ _DETF_TrimmedFamily_m7_streaming := function(opts)
     fi;
 
     if verbose then
-        Print("[_DETF_TrimmedFamily_m7] sample_size = ", sample_size, "\n");
+        if IsBoundGlobal("_LogPhase") then
+            _LogPhase("dvan-m7", "_DETF_TrimmedFamily_m7_streaming entry, ",
+                      "sample_size = ", sample_size);
+        else
+            Print("[_DETF_TrimmedFamily_m7] sample_size = ",
+                  sample_size, "\n");
+        fi;
     fi;
 
     # --- Step 1: LHS G-side setup. Slow at m=7 (~14 min cold).

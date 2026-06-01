@@ -1050,7 +1050,13 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
             fail_columns := fail_columns_val,
             orb_info    := orb_info));
     od;
-    Print("Per-orbit M_bar build wall: ", (Runtime() - t_red) / 1000., " s\n");
+    if IsBoundGlobal("_LogStamped") then
+        _LogStamped("Per-orbit M_bar build wall: ",
+                    (Runtime() - t_red) / 1000., " s");
+    else
+        Print("Per-orbit M_bar build wall: ",
+              (Runtime() - t_red) / 1000., " s\n");
+    fi;
 
     # Collect the UNION of fail_columns across orbits — these are H^3
     # generator indices whose c_g projection failed on at least one
@@ -1201,7 +1207,13 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
         reduced_matrices[j].M_bar := fail;
         reduced_matrices[j].M_bar_gf2 := fail;
     od;
-    Print("Propagation wall: ", (Runtime() - t_propagate) / 1000., " s\n");
+    if IsBoundGlobal("_LogStamped") then
+        _LogStamped("Propagation wall: ",
+                    (Runtime() - t_propagate) / 1000., " s");
+    else
+        Print("Propagation wall: ",
+              (Runtime() - t_propagate) / 1000., " s\n");
+    fi;
     Print("Total propagated rows (M_stack height): ", total_rows, "\n");
     Print("Columns with constraints: ",
           Length(Filtered([1..k], i -> col_has_constraint[i])), " / ", k, "\n");

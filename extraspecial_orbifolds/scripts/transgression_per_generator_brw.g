@@ -322,8 +322,15 @@ TestAllGeneratorsBRW := function(G)
     local setup, k, i, r, count_in_kernel, results, witness_set, p;
     setup := SetupCohomology3(G);
     k := setup.num_generators;
-    Print("\n=== Per-generator transgression test (BRW-amortised) for ",
-          StructureDescription(G), " ===\n");
+    Print("\n");
+    if IsBoundGlobal("_LogPhase") then
+        _LogPhase("pergen-brw",
+                  "=== Per-generator transgression test (BRW-amortised) ",
+                  "for ", StructureDescription(G), " ===");
+    else
+        Print("=== Per-generator transgression test (BRW-amortised) for ",
+              StructureDescription(G), " ===\n");
+    fi;
     Print("|G| = ", Order(G), "\n");
     Print("|H^3(G; U(1))| = ", setup.num_h3_classes, "\n");
     Print("torsion = ", setup.torsion, "\n");

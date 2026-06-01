@@ -257,7 +257,15 @@ TransgressionKernel := function(G)
     m := setup.exponent;
     k := setup.num_generators;
 
-    Print("\n=== Transgression kernel for G = ", StructureDescription(G), " ===\n");
+    Print("\n");
+    if IsBoundGlobal("_LogPhase") then
+        _LogPhase("trkernel",
+                  "=== Transgression kernel for G = ",
+                  StructureDescription(G), " ===");
+    else
+        Print("=== Transgression kernel for G = ",
+              StructureDescription(G), " ===\n");
+    fi;
     Print("|G| = ", Order(G), "\n");
     Print("UCT.exponent (m) = ", m, "\n");
     Print("UCT.torsion = ", setup.UCT.torsion, "\n");

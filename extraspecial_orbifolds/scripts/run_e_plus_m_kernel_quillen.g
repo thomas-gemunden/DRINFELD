@@ -71,6 +71,9 @@
 
 driver_orig_cwd_qb35 := DirectoryCurrent();;
 
+# Issue #384: timestamped logging helpers (must be Read before the
+# first phase-boundary _LogStamped / _LogPhase call below).
+Read("solver/logging_util.g");
 # Cohomology + per-class basis helpers (HAP route on R_A — we'll override
 # the setup below with QuillenSetupOnR but reuse BuildPerClassCocycleBasis).
 Read("transgression_per_generator_brw.g");
@@ -134,7 +137,7 @@ Print("State file: ", StateFile, "\n");
 t_brw := Runtime();;
 Print("Building BRW conjugacy action for m = ", m, "...\n");
 conj_action := BRWConjugacyAction(m);;
-Print("BRW conjugacy wall: ", (Runtime() - t_brw) / 1000., " s\n");
+_LogStamped("BRW conjugacy wall: ", (Runtime() - t_brw) / 1000., " s");
 
 G := conj_action.em;;
 Print("|G| = ", Order(G), "  (expected 2^", 2*m+1, " = ", 2^(2*m+1), ")\n");
@@ -147,7 +150,8 @@ Print("  (this calls ResolutionFiniteGroup(em, 6) + UCT — the expensive step)\
 # ensures Centralizer(quil_setup.group, Representative(conj_action.classes[i]))
 # works without parent-object mismatch.
 quil_setup := QuillenSetupOnR(m, G);;
-Print("Quillen-route setup wall: ", (Runtime() - t_quil) / 1000., " s\n");
+_LogStamped("Quillen-route setup wall: ",
+            (Runtime() - t_quil) / 1000., " s");
 
 # Belt-and-braces: assert quil_setup.group IS conj_action.em (object id).
 Assert(0, IsIdenticalObj(quil_setup.group, G),
@@ -294,7 +298,8 @@ for orb_info in orbits_data do
         Print((Runtime() - t_one) / 1000., " s\n");
     fi;
 od;
-Print("Per-orbit caches wall: ", (Runtime() - t_caches) / 1000., " s total\n");
+_LogStamped("Per-orbit caches wall: ",
+            (Runtime() - t_caches) / 1000., " s total");
 
 # ----------------------------------------------------------------------
 # Step 2: per-generator sweep using shared caches.
@@ -411,7 +416,7 @@ else
     t_half := Runtime();
     half_per_class := PerVecTransgressionShared(half_vec);
     half_wall := (Runtime() - t_half) / 1000.;
-    Print("Half-vector test wall: ", half_wall, " s\n");
+    _LogStamped("Half-vector test wall: ", half_wall, " s");
     half_in_ker := ForAll(half_per_class, x -> x = true);
     Print("2 * e_", exp_index, " in ker: ", half_in_ker, "\n");
     if not half_in_ker then
@@ -678,7 +683,7 @@ Print("Wrote ", OutPath, "\n");
 
 total_wall_qb35 := (Runtime() - t_start_qb35) / 1000.;;
 Print("\n=== Q-int B3-5 driver: DONE ===\n");
-Print("Total wall: ", total_wall_qb35, " s\n");
+_LogStamped("Total wall: ", total_wall_qb35, " s");
 Print("|ker Tr|     = ", kernel_size, "\n");
 Print("|H^3|        = ", Product(torsion), "\n");
 Print("|coker Tr|   = ", Product(torsion) / kernel_size, "\n");

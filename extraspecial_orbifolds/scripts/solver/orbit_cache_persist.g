@@ -330,8 +330,14 @@ LoadOrbitCache := function(path, expected_fp, G)
         Error("LoadOrbitCache: G must be a PcGroup");
     fi;
     # Issue #383: per-phase logging so the on-disk codepath is visible.
+    # Issue #384: switch to _LogPhase (timestamped) if available so each
+    # phase line shows wall-clock time and a `[load-cache]` tag.
     t_phase := Runtime();
-    Print("      LoadOrbitCache: Read() ", path, " ...\n");
+    if IsBoundGlobal("_LogPhase") then
+        _LogPhase("load-cache", "Read() ", path, " ...");
+    else
+        Print("      LoadOrbitCache: Read() ", path, " ...\n");
+    fi;
 
     # Issue #365: prefer Read() on the new top-level-assignment file
     # format. ReadAsFunction wraps the file in a function whose
@@ -407,8 +413,15 @@ LoadOrbitCache := function(path, expected_fp, G)
         return fail;
     fi;
 
-    Print("      LoadOrbitCache: Read() done in ",
-          (Runtime() - t_phase) / 1000., " s; reconstructing live record ...\n");
+    if IsBoundGlobal("_LogPhase") then
+        _LogPhase("load-cache", "Read() done in ",
+                  (Runtime() - t_phase) / 1000.,
+                  " s; reconstructing live record ...");
+    else
+        Print("      LoadOrbitCache: Read() done in ",
+              (Runtime() - t_phase) / 1000.,
+              " s; reconstructing live record ...\n");
+    fi;
     t_phase := Runtime();
     # Reconstruct the live record.
     pcgs := FamilyPcgs(G);
@@ -429,9 +442,17 @@ LoadOrbitCache := function(path, expected_fp, G)
         AddDictionary(idx_map, elts[a], a);
     od;
 
-    Print("      LoadOrbitCache: live record done in ",
-          (Runtime() - t_phase) / 1000., " s; promoting table to ",
-          "IsMatrixRep + rebuilding table_gf2 ...\n");
+    if IsBoundGlobal("_LogPhase") then
+        _LogPhase("load-cache", "live record done in ",
+                  (Runtime() - t_phase) / 1000.,
+                  " s; promoting table to IsMatrixRep + ",
+                  "rebuilding table_gf2 ...");
+    else
+        Print("      LoadOrbitCache: live record done in ",
+              (Runtime() - t_phase) / 1000.,
+              " s; promoting table to IsMatrixRep + ",
+              "rebuilding table_gf2 ...\n");
+    fi;
     t_phase := Runtime();
     # Promote table to GAP's matrix rep (matches the live builder's
     # ConvertToMatrixRep call so downstream `table * vec_target` hits the
@@ -447,8 +468,13 @@ LoadOrbitCache := function(path, expected_fp, G)
     table_gf2 := List(table, row ->
         List(row, x -> (QuoInt(x, r_half) mod 2) * one_gf2));
     ConvertToMatrixRep(table_gf2, GF(2));
-    Print("      LoadOrbitCache: table promotion + table_gf2 rebuild ",
-          "done in ", (Runtime() - t_phase) / 1000., " s\n");
+    if IsBoundGlobal("_LogPhase") then
+        _LogPhase("load-cache", "table promotion + table_gf2 rebuild ",
+                  "done in ", (Runtime() - t_phase) / 1000., " s");
+    else
+        Print("      LoadOrbitCache: table promotion + table_gf2 ",
+              "rebuild done in ", (Runtime() - t_phase) / 1000., " s\n");
+    fi;
 
     return rec(C := C, table := table, table_gf2 := table_gf2,
                elts := elts, n := n, idx_map := idx_map);
