@@ -480,19 +480,25 @@ LoadOrbitCache := function(path, expected_fp, G)
     table_gf2_bot := List(table, row ->
         List(row, x -> (x mod 2) * one_gf2));
     ConvertToMatrixRep(table_gf2_bot, GF(2));
+    # Issue #391 (A+B combine, PR #394): derive column-major view of
+    # table_gf2_top for the sparsity-aware GF(2) column-XOR path in
+    # the Path Z bit-pack dispatcher. On-disk format unchanged.
+    table_gf2_top_T := TransposedMat(table_gf2);
+    ConvertToMatrixRep(table_gf2_top_T, GF(2));
     if IsBoundGlobal("_LogPhase") then
         _LogPhase("load-cache", "table promotion + table_gf2 / ",
-                  "table_gf2_bot rebuild done in ",
+                  "table_gf2_bot / table_gf2_top_T rebuild done in ",
                   (Runtime() - t_phase) / 1000., " s");
     else
         Print("      LoadOrbitCache: table promotion + table_gf2 / ",
-              "table_gf2_bot rebuild done in ",
+              "table_gf2_bot / table_gf2_top_T rebuild done in ",
               (Runtime() - t_phase) / 1000., " s\n");
     fi;
 
     return rec(C := C, table := table,
                table_gf2 := table_gf2,           # back-compat alias
                table_gf2_top := table_gf2,
+               table_gf2_top_T := table_gf2_top_T,
                table_gf2_bot := table_gf2_bot,
                elts := elts, n := n, idx_map := idx_map);
 end;;
