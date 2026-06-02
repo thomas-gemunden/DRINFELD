@@ -323,7 +323,7 @@ end;;
 LoadOrbitCache := function(path, expected_fp, G)
     local catch, data, n, k, rep_exps, rep, C, pcgs, elts, idx_map,
           table, exp_val, r_half, one_gf2, table_gf2, table_gf2_bot,
-          table_gf2_top_T, a, t_phase;
+          table_gf2_top_T, table_T, a, t_phase;
     if not IsExistingFile(path) then
         return fail;
     fi;
@@ -485,17 +485,24 @@ LoadOrbitCache := function(path, expected_fp, G)
     # the Path Z bit-pack dispatcher. On-disk format unchanged.
     table_gf2_top_T := TransposedMat(table_gf2);
     ConvertToMatrixRep(table_gf2_top_T, GF(2));
+    # Issue #396 audit (A-5): column-major INTEGER view of table,
+    # mirror of table_gf2_top_T. Used by IsCoboundary2SplitVecAware's
+    # sparse column accumulator to avoid n²-closure column extracts.
+    # See BuildPerClassCocycleBasis for the design rationale.
+    table_T := TransposedMatMutable(table);
+    ConvertToMatrixRep(table_T);
     if IsBoundGlobal("_LogPhase") then
         _LogPhase("load-cache", "table promotion + table_gf2 / ",
-                  "table_gf2_bot / table_gf2_top_T rebuild done in ",
+                  "table_gf2_bot / table_gf2_top_T / table_T rebuild done in ",
                   (Runtime() - t_phase) / 1000., " s");
     else
         Print("      LoadOrbitCache: table promotion + table_gf2 / ",
-              "table_gf2_bot / table_gf2_top_T rebuild done in ",
+              "table_gf2_bot / table_gf2_top_T / table_T rebuild done in ",
               (Runtime() - t_phase) / 1000., " s\n");
     fi;
 
     return rec(C := C, table := table,
+               table_T := table_T,               # column-major integer view (A-5)
                table_gf2 := table_gf2,           # back-compat alias
                table_gf2_top := table_gf2,
                table_gf2_top_T := table_gf2_top_T,

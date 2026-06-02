@@ -499,7 +499,8 @@ end;;
 BuildPerClassCocycleBasis := function(setup, gRep, C)
     local key, elts, n, basis, basis_T, k, exp, R, ncells, table, idx_map,
           a, b, x, result,
-          r_half, table_gf2, table_gf2_bot, row, one_gf2, table_rows,
+          r_half, table_gf2, table_gf2_bot, table_gf2_top_T, table_T,
+          row, one_gf2, table_rows,
           contrib_row, contrib_b, S, chunk,
           a_elt, b_elt, ab_elt, gRep_a, a_gRep, b_gRep, gRep_b,
           S_gRep_a, S_a_gRep, S_a_b, S_gRep_b, S_b_gRep,
@@ -734,7 +735,22 @@ BuildPerClassCocycleBasis := function(setup, gRep, C)
     # as a packed-bit GF(2) vector.
     table_gf2_top_T := TransposedMat(table_gf2);
     ConvertToMatrixRep(table_gf2_top_T, GF(2));
+    # Issue #396 audit (A-5): column-major INTEGER view of table, mirror
+    # of table_gf2_top_T. Used by IsCoboundary2SplitVecAware's unit-support
+    # and sparse-accumulate paths to avoid the n²-closure column extract
+    # `List(table, row -> row[j])` (CLAUDE.md P3 anti-pattern). table_T[j]
+    # is the j-th column of table as a plain integer row vector.
+    #
+    # Memory caveat (audit §A-5): doubles per-orbit cache size (~1 GB ->
+    # ~2 GB at m=5). Acceptable for current heap budgets; revisit at
+    # m=8/m=9 (exp=8) where the integer path becomes the hot route.
+    # NOT exercised by the A-5b m=5 production driver (bit-pack route is
+    # primary at exp=4); defensive optimization for downstream consumers
+    # (exp != 4 / non-power-of-2 exponent paths).
+    table_T := TransposedMatMutable(table);
+    ConvertToMatrixRep(table_T);
     result := rec(C := C, table := table,
+                  table_T := table_T,               # column-major integer view
                   table_gf2 := table_gf2,           # back-compat alias = top bit
                   table_gf2_top := table_gf2,       # bit_{log2(r_half)} = bit_1 at exp=4
                   table_gf2_top_T := table_gf2_top_T,  # column-major view
@@ -917,7 +933,7 @@ function(setup, rep_cache, conj_action, target_idx, phi_path, M_path)
     local reps, G, sib_rep, sib_C, elts_sib, n_sib,
           k, exp, sigma, b, h_sib, table_sib,
           a, r_idx, r_rep_idx, s, idx_map_sib, r_half, table_gf2_sib,
-          table_gf2_bot_sib,
+          table_gf2_bot_sib, table_gf2_top_T_sib, table_T_sib,
           row, one_gf2;
     reps := conj_action.reps;
     G := setup.group;
@@ -978,7 +994,13 @@ function(setup, rep_cache, conj_action, target_idx, phi_path, M_path)
     ConvertToMatrixRep(table_sib);
     table_sib := table_sib * M_path;
     # Reduce mod exp (the matmul produces unbounded integers).
-    table_sib := List(table_sib, row -> List(row, x -> x mod exp));
+    # Issue #396 audit (B-7): replaced the nested closure
+    # `List(table_sib, row -> List(row, x -> x mod exp))` with the
+    # compiled list-mod-int form (CLAUDE.md P6 anti-pattern fix). GAP's
+    # `M mod c` on an integer matrix dispatches to compiled list-mod
+    # per row instead of the double-closure dispatch (n² × k = 660M
+    # closure invocations per sibling avoided at m=5).
+    table_sib := table_sib mod exp;
     ConvertToMatrixRep(table_sib);
 
     # GF(2) bit-r-extracted view (matches BuildPerClassCocycleBasis).
@@ -994,8 +1016,15 @@ function(setup, rep_cache, conj_action, target_idx, phi_path, M_path)
     # Column-major view for sparsity-aware column-XOR (issue #391 A+B combine).
     table_gf2_top_T_sib := TransposedMat(table_gf2_sib);
     ConvertToMatrixRep(table_gf2_top_T_sib, GF(2));
+    # Issue #396 audit (A-5): column-major INTEGER view, mirror of
+    # table_gf2_top_T_sib. Used by IsCoboundary2SplitVecAware on
+    # transport-built sibling caches. See BuildPerClassCocycleBasis for
+    # the design rationale.
+    table_T_sib := TransposedMatMutable(table_sib);
+    ConvertToMatrixRep(table_T_sib);
 
     return rec(C := sib_C, table := table_sib,
+               table_T := table_T_sib,             # column-major integer view
                table_gf2 := table_gf2_sib,         # back-compat alias
                table_gf2_top := table_gf2_sib,
                table_gf2_top_T := table_gf2_top_T_sib,

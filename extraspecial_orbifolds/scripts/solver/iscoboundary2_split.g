@@ -200,23 +200,32 @@ IsCoboundary2SplitVecAware := function(C, basis_cache, vec_target, setup)
     if k_nz = 1 then
         # ---- Unit-support fast path. ----
         # c_g_vec = basis_cache.table[*][j_nz] * vec_target[j_nz].
-        # Column extract via `List(table, row -> row[j_nz])` is one compiled
-        # list-element-pick per row; the outer `List` itself is a closure
-        # but the per-iteration body is a single ELM_LIST call, so this is
-        # ~3x faster than the dense matvec at the n=165 column-extract scale
-        # (each column is touched once vs all 165 columns).
+        # PR #396 A-5: replaced `List(basis_cache.table, row -> row[j_nz])`
+        # (n²-closure dispatch, CLAUDE.md P3 anti-pattern) with the cached
+        # column-major view `basis_cache.table_T[j_nz]` populated by
+        # BuildPerClassCocycleBasis + LoadOrbitCache. ELM_LIST is O(1)
+        # instead of one closure per row.
         j_nz := supp[1];
-        col_j := List(basis_cache.table, row -> row[j_nz]);
+        if IsBound(basis_cache.table_T) then
+            col_j := basis_cache.table_T[j_nz];
+        else
+            col_j := List(basis_cache.table, row -> row[j_nz]);
+        fi;
         c_g_vec := col_j * vec_target[j_nz];      # compiled list-times-int
         return IsCoboundary2SplitVec(C, c_g_vec, vec_target, setup);
     elif k_nz <= k_threshold then
         # ---- General sparse path. ----
         # Accumulate c_g_vec = sum_{j in supp} table[*][j] * vec_target[j]
-        # via AddRowVector (compiled scaled-add).
+        # via AddRowVector (compiled scaled-add). PR #396 A-5 column-
+        # major access (see unit-support comment above).
         n2 := Length(basis_cache.table);
         c_g_vec := ListWithIdenticalEntries(n2, 0);
         for j in supp do
-            col_j := List(basis_cache.table, row -> row[j]);
+            if IsBound(basis_cache.table_T) then
+                col_j := basis_cache.table_T[j];
+            else
+                col_j := List(basis_cache.table, row -> row[j]);
+            fi;
             AddRowVector(c_g_vec, col_j, vec_target[j]);
         od;
         return IsCoboundary2SplitVec(C, c_g_vec, vec_target, setup);
