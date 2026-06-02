@@ -73,6 +73,26 @@ F2_Add := function(A, B)
         List([1..Length(A[1])], j -> (A[i][j] + B[i][j]) mod 2));
 end;;
 
+# Issue #408 (PR #402 A-K4-1): override F2_Dot and F2_QuadDot to match
+# the sibling override pattern (F2_Mul / F2_VMul / etc. above). The
+# originals in defect_rep_minus_id.g:219-235 are interpreted manual
+# loops; reusing GAP's compiled `v * w` integer dot product + `mod 2`
+# is 10-100× faster at the n=32 / n=64 scale used by KRR spectral
+# characters.
+#
+# F2_QuadDot replaces the n² interpreted loop with two compiled matvecs:
+# `u * Q` (compiled list-times-matrix) followed by `(u*Q) * v` (compiled
+# list-times-list dot product), then mod 2.
+F2_Dot := function(u, v)
+    if Length(u) = 0 then return 0; fi;
+    return (u * v) mod 2;
+end;;
+
+F2_QuadDot := function(u, Q, v)
+    if Length(u) = 0 then return 0; fi;
+    return ((u * Q) * v) mod 2;
+end;;
+
 # Override MatOfBilForm with a closed-form O(n^2) version: the bilinear
 # form B associated to Q is simply (q + q^T) (mod 2).  The original
 # implementation in qforms_f2.g loops over all (i, j) and evaluates
