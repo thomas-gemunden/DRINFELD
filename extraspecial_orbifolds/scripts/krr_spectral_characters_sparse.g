@@ -361,8 +361,10 @@ TraceOnOmega0Batch := function(h, m)
     if Length(feasMat) > 0 then
         # feas_mat_apply: dim x #feas rows. Entry (i, j) = feasMat[j] . targetMat[i].
         # In GAP: targetMat * F2_Trans(feasMat) (integer mat-mat product), mod 2.
-        fmat_diag := List(targetMat * TransposedMat(feasMat),
-                          row -> List(row, x -> x mod 2));
+        # Anti-pattern P3+P6 fix (PR #402 A-K4-3): use compiled
+        # matrix-mod-int `(M * V) mod 2` instead of double-closure
+        # `List(M * V, row -> List(row, x -> x mod 2))`.
+        fmat_diag := (targetMat * TransposedMat(feasMat)) mod 2;
         infeasMask := List(fmat_diag, row -> ForAny(row, e -> e <> 0));
     else
         infeasMask := List([1..dim], i -> false);
@@ -393,7 +395,8 @@ TraceOnOmega0Batch := function(h, m)
     # gammaCross = x*H*R . ic for each row.
     # XH = Xmat * H : dim x n.  XHR = XH * R : dim x n.  Then dot with ic.
     XH := Xmat * ctx.H;
-    XHR := List(XH * ctx.R, row -> List(row, x -> x mod 2));
+    # PR #402 A-K4-3: compiled `(M * V) mod 2` (was double-closure P3+P6).
+    XHR := (XH * ctx.R) mod 2;
     gammaCross := List([1..dim], ci ->
         Sum([1..n], j -> XHR[ci][j] * icMat[ci][j]) mod 2);
     gammaConst := List([1..dim], ci ->
@@ -414,14 +417,16 @@ TraceOnOmega0Batch := function(h, m)
     fi;
     # beta = x*MhhSym*AT + ic*RT*HT*AT : dim x kerLen.
     XMhhSym := Xmat * ctx.MhhSym;
-    term1 := List(XMhhSym * ctx.AT, row -> List(row, x -> x mod 2));
+    # PR #402 A-K4-3: compiled `(M * V) mod 2` (was double-closure P3+P6).
+    term1 := (XMhhSym * ctx.AT) mod 2;
     icRT := icMat * ctx.RT;
-    icRTHT := List(icRT * ctx.HT, row -> List(row, x -> x mod 2));
-    icRTHTAT := List(icRTHT * ctx.AT, row -> List(row, x -> x mod 2));
+    icRTHT := (icRT * ctx.HT) mod 2;
+    icRTHTAT := (icRTHT * ctx.AT) mod 2;
     betaMat := List([1..dim], ci ->
         List([1..kerLen], j -> (term1[ci][j] + icRTHTAT[ci][j]) mod 2));
     # betaTilde = beta * ShT : dim x kerLen.
-    betaTilde := List(betaMat * ctx.sht.ShT, row -> List(row, x -> x mod 2));
+    # PR #402 A-K4-3: compiled `(M * V) mod 2` (was double-closure P3+P6).
+    betaTilde := (betaMat * ctx.sht.ShT) mod 2;
     # Radical-match check: betaTilde[ci][1..radical_len] must equal sht.t[1..radical_len].
     matchTarget := ctx.sht.t{[1..radical_len]};
     mismatchMask := List([1..dim], ci ->
