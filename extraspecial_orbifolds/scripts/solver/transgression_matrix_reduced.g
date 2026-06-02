@@ -482,16 +482,17 @@ end;;
 BuildReducedTransgressionMatrixFast := function(setup, g_rep, C)
     local cache, table_int, k, h3_torsion, exp_local,
           lift_entry, lift_sem, lift_batched, pivot_cols, Y_full,
-          rank, ncols, non_pivot_cols, r_quot, table_gf2,
+          rank, ncols, non_pivot_cols, r_quot, table_gf2, table_gf2_top_T,
           M_bar_F2, i, col_i_gf2, residual, one_gf2, zero_gf2,
           order_2_gens, fail_columns, l, r_local, cols_gf2,
           M_bar_gf2,
-          # back-sub locals
-          b, sol_dim, sol, nonzero_heads, vno, x;
+          # batched Step 1 locals
+          B_cols, k_use, idx, residual_batch;
 
     cache := BuildPerClassCocycleBasis(setup, g_rep, C);
     table_int := cache.table;
     table_gf2 := cache.table_gf2;   # n² × k GF(2) precomputed in cache
+    table_gf2_top_T := cache.table_gf2_top_T;   # column-major view (issue #391)
     exp_local := setup.exponent;
     h3_torsion := setup.torsion;
     k := setup.num_generators;
@@ -531,43 +532,52 @@ BuildReducedTransgressionMatrixFast := function(setup, g_rep, C)
     fail_columns := Filtered([1..k], i -> h3_torsion[i] <> 2);
 
     # Step 1: compute, for each order-2 generator i, the i-th column of
-    # M_bar as a length-r_quot GF(2) vector. Total cost is O(k) such
-    # vectors of size r_quot.
+    # M_bar as a length-r_quot GF(2) vector.
+    #
+    # Composition (PR #396 audit instance B-6): the previous version did
+    # k separate AddRowVector-based back-subs against the same cached
+    # `lift_sem` (one per order-2 generator). Each back-sub had ~99.7%
+    # interpreter overhead per the live A-5b profile. The
+    # cached `lift_batched` record already contains pre-built batched
+    # artefacts (Y_full in RREF + pivot_cols) for exactly this scenario;
+    # `_RowSpanResidualBatch(lift_batched, B)` computes the residual in
+    # one compiled GF(2) matmul + matrix add for a whole batch of RHSes,
+    # mirroring what `IsCoboundary2Mod2WithLiftVecBatch` does on the Path
+    # A hot path.
+    #
+    # Build B as the stacked column matrix (k_use × n²): row idx in B is
+    # column `order_2_gens[idx]` of table_gf2, which equals
+    # cache.table_gf2_top_T[order_2_gens[idx]] — a packed-GF(2) vector.
+    # The column-major view (table_gf2_top_T, populated by PR #391) avoids
+    # the n²-element closure dispatch that the previous extraction used.
+    k_use := Length(order_2_gens);
     cols_gf2 := List([1..k], i -> fail);
-    for i in order_2_gens do
-        # Extract column i from table_gf2 (n² × k GF(2)).
-        # table_gf2[r][i] = bit_{log2(exp/2)}(table[r][i]).
-        # For order-2 e_i, table[r][i] in {0, exp/2}, so bit is correct.
-        col_i_gf2 := List(table_gf2, row -> row[i]);
-        ConvertToVectorRep(col_i_gf2, GF(2));
+    if k_use > 0 then
+        B_cols := EmptyPlist(k_use);
+        for idx in [1..k_use] do
+            i := order_2_gens[idx];
+            # Column-major extraction: one ELM_LIST instead of a closure.
+            # ShallowCopy because _RowSpanResidualBatch may mutate inputs
+            # via in-place GF(2) ops in some code paths; conservative copy.
+            Add(B_cols, ShallowCopy(table_gf2_top_T[i]));
+        od;
+        ConvertToMatrixRep(B_cols, GF(2));
 
-        # Back-sub: b := col_i_gf2; for each pivot row, if b[pivot_col]
-        # is non-zero, XOR the pivot row. Use the same loop as
-        # IsCoboundary2Mod2WithLiftVec.
-        if rank = 0 then
-            # No constraints from lift_sem; residual = col_i_gf2 itself.
-            residual := col_i_gf2;
-        else
-            b := ShallowCopy(col_i_gf2);
-            nonzero_heads := lift_entry.nonzero_heads;
-            sol_dim := Length(lift_sem.coeffs[1]);
-            sol := ListWithIdenticalEntries(sol_dim, zero_gf2);
-            ConvertToVectorRep(sol, GF(2));
-            for l in nonzero_heads do
-                vno := lift_sem.heads[l];
-                x := b[l];
-                if x <> zero_gf2 then
-                    AddRowVector(b, lift_sem.vectors[vno], -x);
-                    AddRowVector(sol, lift_sem.coeffs[vno], x);
-                fi;
-            od;
-            residual := b;
-        fi;
-        # Extract non_pivot_cols entries → length r_quot GF(2) vector.
-        col_i_gf2 := residual{non_pivot_cols};
-        ConvertToVectorRep(col_i_gf2, GF(2));
-        cols_gf2[i] := col_i_gf2;
-    od;
+        # One batched residual computation. At rank=0 the residual equals
+        # B_cols itself (no constraints from lift_sem); _RowSpanResidualBatch
+        # short-circuits this case internally and returns B unchanged.
+        residual_batch := _RowSpanResidualBatch(lift_batched, B_cols);
+
+        # Slice each residual row to non_pivot_cols → length r_quot
+        # quotient-space vector. Compiled list-element-slice
+        # (ELMS_GF2VEC) on a GF(2) row.
+        for idx in [1..k_use] do
+            i := order_2_gens[idx];
+            col_i_gf2 := residual_batch[idx]{non_pivot_cols};
+            ConvertToVectorRep(col_i_gf2, GF(2));
+            cols_gf2[i] := col_i_gf2;
+        od;
+    fi;
     # Zero column for any non-order-2 generator (fail columns).
     for i in [1..k] do
         if cols_gf2[i] = fail then
@@ -807,22 +817,34 @@ end;;
 
 
 # UpdateColumnDispositionFromMBarGF2_Batch(M_bar_gf2, M_y, col_has_constraint)
-#   Batched variant: builds the FULL M_y mod 2 as a GF(2) matrix and
-#   multiplies M_bar_gf2 * M_y_gf2 in one shot, then checks each column
-#   for nonzero entries.
+#   Batched variant: builds M_y mod 2 RESTRICTED to currently-unconstrained
+#   columns as a GF(2) matrix and multiplies M_bar_gf2 * M_y_gf2_unconstrained
+#   in one shot, then checks each column for nonzero entries.
 #
 #   Use this when many columns are still unconstrained (early in the
 #   sweep) — GF(2) matrix-matrix multiply is much faster than k matrix-
 #   vector multiplies. Switch to the per-column variant once most
 #   columns are settled.
 #
-#   Peak memory: O(r × k) GF(2) bits during the product = ~80 MB at
-#   r=4M, k=165 (compressed). Acceptable; the original integer version
-#   was 70× larger.
+#   Composition (PR #396 audit instance A-3): the previous version did a
+#   full `M_bar_gf2 * M_y_gf2` over all k columns of M_y, even when most
+#   were already marked constrained via col_has_constraint. The "switch
+#   between batched and per-column" dispatcher amortised one win or the
+#   other but never composed them. We now restrict M_y to its unconstrained
+#   columns BEFORE the GF(2) matmul, so the compiled
+#   PROD_GF2MAT_GF2MAT call's numRHS shrinks to |unconstrained|. At
+#   later orbits, where most columns are already constrained, this is
+#   strictly better than both the pre-A-3 batched path (which paid the
+#   full O(r × k_dim) matmul cost) and the per-column path (which paid
+#   |unconstrained| separate matvec calls).
+#
+#   Peak memory: O(r × |unconstrained|) GF(2) bits during the product,
+#   bounded above by the previous ~80 MB at r=4M, k=165. At late orbits
+#   where |unconstrained| is small, peak memory drops proportionally.
 UpdateColumnDispositionFromMBarGF2_Batch := function(M_bar_gf2, M_y,
                                                       col_has_constraint)
-    local k_dim, zero_gf2, one_gf2, r_local, M_y_gf2, j, i, row,
-          prod_full;
+    local k_dim, zero_gf2, one_gf2, r_local, unconstrained, k_un,
+          M_y_gf2, j, i, row, prod_sliced, idx_u;
     if Length(M_bar_gf2) = 0 then
         return;
     fi;
@@ -831,24 +853,38 @@ UpdateColumnDispositionFromMBarGF2_Batch := function(M_bar_gf2, M_y,
     one_gf2 := One(GF(2));
     r_local := Length(M_bar_gf2);
 
-    # Build M_y mod 2 as a GF(2) matrix (k × k, ~3.4 KB at k=165).
+    # Identify currently-unconstrained columns. The matmul only needs to
+    # examine these — already-constrained columns can never flip back.
+    unconstrained := Filtered([1..k_dim], i -> not col_has_constraint[i]);
+    k_un := Length(unconstrained);
+    if k_un = 0 then
+        return;
+    fi;
+
+    # Build M_y mod 2 RESTRICTED to the unconstrained columns as a GF(2)
+    # matrix of shape k_dim × k_un. Each row is M_y[j]{unconstrained} mod 2
+    # lifted into GF(2). We construct row-by-row so the resulting matrix
+    # is in compressed GF(2) form for the compiled PROD_GF2MAT_GF2MAT call.
     M_y_gf2 := [];
     for j in [1..k_dim] do
-        row := List([1..k_dim],
+        row := List(unconstrained,
                     i -> If_(M_y[j][i] mod 2 = 0, zero_gf2, one_gf2));
         ConvertToVectorRep(row, GF(2));
         Add(M_y_gf2, row);
     od;
     ConvertToMatrixRep(M_y_gf2, GF(2));
 
-    # Compute M_bar_gf2 * M_y_gf2 over GF(2). Peak memory ~80 MB at m=5.
-    prod_full := M_bar_gf2 * M_y_gf2;
+    # Compute M_bar_gf2 * M_y_gf2_unconstrained over GF(2): shape
+    # (r_local × k_dim) × (k_dim × k_un) → (r_local × k_un). Peak
+    # memory scales with |unconstrained| rather than k_dim.
+    prod_sliced := M_bar_gf2 * M_y_gf2;
 
-    # Inspect each column for nonzero entries.
-    for i in [1..k_dim] do
-        if col_has_constraint[i] then continue; fi;
-        if not ForAll([1..r_local], j -> IsZero(prod_full[j][i])) then
-            col_has_constraint[i] := true;
+    # Inspect each column of the sliced product for nonzero entries.
+    # idx_u indexes into `unconstrained` (and into the columns of prod_sliced);
+    # unconstrained[idx_u] is the original column index in col_has_constraint.
+    for idx_u in [1..k_un] do
+        if not ForAll([1..r_local], j -> IsZero(prod_sliced[j][idx_u])) then
+            col_has_constraint[unconstrained[idx_u]] := true;
         fi;
     od;
 end;;
