@@ -135,14 +135,25 @@ ResIsTrivialOnDetectingFamily := function(m, omega_vec)
 
     # Per-EA restriction: res_EA_list[i] applied to hom_omega gives the
     # i-th EA's image in coords mod torsion_EA_list[i].
+    #
+    # A-DVAN-1 (PR #402 audit): the previous shape
+    #   vec_int := List([1..Length(torsion_EA_i)], j ->
+    #       Sum([1..Length(hom_omega)], k ->
+    #           hom_omega[k] * res_EA_i[k][j]));
+    # was the P9 anti-pattern (Sum-of-List per entry, interpreted GAP
+    # loops). Replaced by compiled `hom_omega * res_EA_i` (vector-times-
+    # matrix) which dispatches to PROD_VEC_MAT_INT. The res_EA_i
+    # matrices are already int-cast + IsMatrixRep-tagged by
+    # RestrictionMatrixViaHAP (PR #381 + #382), so the compiled matvec
+    # path engages immediately. Same fix applied to the D_8 and Q_8
+    # branches below. The trailing per-column mod loop is left
+    # untouched because moduli vary per column.
     res_EA_vec_list := [];
     f_EA_list := [];
     for i in [1..Length(rec_m.res_EA_list)] do
         torsion_EA_i := rec_m.torsion_EA_list[i];
         res_EA_i := rec_m.res_EA_list[i];
-        vec_int := List([1..Length(torsion_EA_i)], j ->
-            Sum([1..Length(hom_omega)], k ->
-                hom_omega[k] * res_EA_i[k][j]));
+        vec_int := hom_omega * res_EA_i;
         vec_modH := List([1..Length(vec_int)], j ->
             vec_int[j] mod torsion_EA_i[j]);
         Add(res_EA_vec_list, vec_modH);
@@ -151,9 +162,7 @@ ResIsTrivialOnDetectingFamily := function(m, omega_vec)
     od;
 
     # D_8 restriction.
-    res_D8_vec_int := List([1..Length(rec_m.torsion_D8)], j ->
-        Sum([1..Length(hom_omega)], i ->
-            hom_omega[i] * rec_m.res_D8[i][j]));
+    res_D8_vec_int := hom_omega * rec_m.res_D8;
     res_D8_vec := List([1..Length(res_D8_vec_int)], j ->
         res_D8_vec_int[j] mod rec_m.torsion_D8[j]);
     f_D8 := _DVAN_BuildHCocycleFromHomVec(rec_m.ctx_D8, res_D8_vec);
@@ -167,9 +176,7 @@ ResIsTrivialOnDetectingFamily := function(m, omega_vec)
         f_Q8 := fail;
         all_Q8_zero := true;
     else
-        res_Q8_vec_int := List([1..Length(rec_m.torsion_Q8)], j ->
-            Sum([1..Length(hom_omega)], i ->
-                hom_omega[i] * rec_m.res_Q8[i][j]));
+        res_Q8_vec_int := hom_omega * rec_m.res_Q8;
         res_Q8_vec := List([1..Length(res_Q8_vec_int)], j ->
             res_Q8_vec_int[j] mod rec_m.torsion_Q8[j]);
         f_Q8 := _DVAN_BuildHCocycleFromHomVec(rec_m.ctx_Q8, res_Q8_vec);
