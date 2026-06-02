@@ -1369,15 +1369,17 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
                     M_y_j_exp_T := TransposedMat(M_y_j_exp);
                     vec_target_exp := (M_y_j_exp_T[fc] * exp_axis_vec)
                                           mod h3_torsion;
-                    # Issue #370: cache_orbit.table is in IsMatrixRep
-                    # after ConvertToMatrixRep at load time, so the `*`
-                    # dispatches to compiled PROD_MAT_VEC_INT
-                    # (~100-1000x faster than the interpreted
-                    # `List(table, row -> Sum(jj, vec[jj]*row[jj]))`).
-                    # Result is bit-identical at the integer level.
-                    c_g_table_exp := cache_orbit.table * vec_target_exp;
-                    if not IsCoboundary2SplitVec(C, c_g_table_exp,
-                                                  vec_target_exp, setup) then
+                    # Issue #410: route through IsCoboundary2SplitVecAware
+                    # (sparsity-aware dispatcher from PRs #392 + #394
+                    # combine). Per-axis fallback inputs are unit-support
+                    # (just `exp_axis_vec` at index `fc`) when M_y_j_exp_T
+                    # is sparse, so the dispatcher's unit-support path
+                    # skips the n²·k matvec and reads a single column.
+                    # The dense fallback path inside the dispatcher
+                    # builds c_g_table lazily only when sparsity dispatch
+                    # doesn't apply, so we no longer materialise it here.
+                    if not IsCoboundary2SplitVecAware(C, cache_orbit,
+                                                      vec_target_exp, setup) then
                         exp_axis_in_ker_k := false;
                         break;
                     fi;
@@ -1439,11 +1441,12 @@ KernelOfTransgressionViaMBar := function(setup, orbits_data, classes, G,
                 # path above. exp_axis_vec = 2 for the half-vec test.
                 M_y_j_exp_T := TransposedMat(M_y_j_exp);
                 vec_target_exp := (M_y_j_exp_T[exp_index] * 2) mod h3_torsion;
-                # Issue #370: compiled PROD_MAT_VEC_INT (see note above
-                # at the axis_vec site).
-                c_g_table_exp := cache_orbit.table * vec_target_exp;
-                if not IsCoboundary2SplitVec(C, c_g_table_exp,
-                                              vec_target_exp, setup) then
+                # Issue #410: sparsity-aware dispatcher (see note at the
+                # axis_vec site above). Half-vec inputs `2 * e_{exp_index}`
+                # are unit-support, so the dispatcher's unit-support fast
+                # path applies.
+                if not IsCoboundary2SplitVecAware(C, cache_orbit,
+                                                  vec_target_exp, setup) then
                     half_in_ker := false;
                     break;
                 fi;
