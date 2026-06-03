@@ -27,3 +27,5 @@ _LoadCompiledOrInterpreted := function(base)
 end;;
 
 _LoadCompiledOrInterpreted("abelian_branch_fast");
+_LoadCompiledOrInterpreted("mod2_solver");
+_LoadCompiledOrInterpreted("transgression_kernel");

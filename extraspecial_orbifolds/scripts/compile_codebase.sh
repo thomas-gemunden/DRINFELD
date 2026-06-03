@@ -26,8 +26,28 @@ mkdir -p "$OUT_DIR"
 
 # Hot-path files to compile, in order of dependency. Add more as they get
 # refactored for gac-compatibility (see issue #286 file list).
+#
+# Files that compile cleanly (no source changes needed):
+#   * mod2_solver.g — GF(2) coboundary tests (BoundaryMatrixGF2,
+#     IsCoboundary2Mod2, IsCoboundary2Mod2WithLift, +Vec variants).
+#   * transgression_kernel.g — SetupCohomology3, StandardCocycleOf,
+#     IsCoboundary2, TransgressionKernel.
+#
+# Files NOT YET compilable (each needs its own refactor):
+#   * abelian_branch_fast.g — done in PR #438 (issue #434 follow-up).
+#   * iterated_bockstein.g — has top-level Read("transgression_kernel.g")
+#     bootstrap that errors out under LoadDynamicModule. Need to extract
+#     to a separate loader before this compiles.
+#   * iscoboundary2_split.g — same Read-at-top issue.
+#   * z4_fallback.g — same Read-at-top issue.
+#   * snf_wrapper.g — triggers CANNOT COMPILE EXPRESSION OF TNUM 170.
+#     Likely a float literal somewhere; needs to be tracked down.
+#   * run_e_plus_m_kernel_hap.g — driver, not a library; not a compile
+#     target.
 FILES=(
     abelian_branch_fast.g
+    solver/mod2_solver.g
+    transgression_kernel.g
 )
 
 echo "[compile_codebase.sh] compiling ${#FILES[@]} file(s) -> $OUT_DIR/"
