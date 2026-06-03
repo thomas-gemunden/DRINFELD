@@ -46,6 +46,36 @@ else
     Print("[smoke] T3 PASS: q_omega = ", Length(res.q_omega), " zeros\n");
 fi;
 
+# T4: mod2_solver.so + transgression_kernel.so are bound after load.
+Print("[smoke] T4: mod2_solver + transgression_kernel binding\n");
+for fn_name in ["BoundaryMatrixGF2", "IsCoboundary2Mod2",
+                "IsCoboundary2Mod2WithLift", "IsCoboundary2Mod2Vec",
+                "SetupCohomology3", "StandardCocycleOf", "IsCoboundary2"] do
+    if not IsBoundGlobal(fn_name) then
+        Print("[smoke] T4 FAIL: ", fn_name, " not bound\n");
+        failures := failures + 1;
+    fi;
+od;
+if failures = 0 then
+    Print("[smoke] T4 PASS: all 7 mod2_solver/transgression_kernel functions bound\n");
+fi;
+
+# T5: BoundaryMatrixGF2 on D_8 returns a sensible matrix shape.
+Print("[smoke] T5: BoundaryMatrixGF2 on D_8 sanity\n");
+D8 := DihedralGroup(8);;
+A := BoundaryMatrixGF2(D8);;
+if Length(A) <> 64 then  # |D_8|^2 = 8^2 = 64 rows
+    Print("[smoke] T5 FAIL: BoundaryMatrixGF2(D_8) has ", Length(A),
+          " rows; expected 64\n");
+    failures := failures + 1;
+elif Length(A[1]) <> 8 then  # |D_8| = 8 columns
+    Print("[smoke] T5 FAIL: BoundaryMatrixGF2(D_8) has ", Length(A[1]),
+          " cols; expected 8\n");
+    failures := failures + 1;
+else
+    Print("[smoke] T5 PASS: BoundaryMatrixGF2(D_8) shape 64x8\n");
+fi;
+
 if failures = 0 then
     Print("\ntest_gac_compile_smoke: ALL PASS\n");
     QuitGap(0);
