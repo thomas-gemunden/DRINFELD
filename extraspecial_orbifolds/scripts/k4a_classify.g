@@ -21,10 +21,11 @@
 # ----------
 #   K4aClassify(m)
 #
-# Inputs: m in {2, 3, 5}. (m = 7 remains blocked: the sparse
-# `BuildKRRSpectralCharactersSparse` Gauss-sum codepath at m = 7 is a
-# stub — see krr_spectral_characters_sparse.g :: `TraceOnOmega0Gauss`,
-# tracked at issue #236.)
+# Inputs: m in {2, 3, 5, 7}. (m = 7 wired up via the now-landed
+# Gauss-sum closed form in
+# `krr_spectral_characters_sparse.g :: TraceOnOmega0Gauss` (#236) +
+# the D-VAN m=7 EA generator persistence used by the lattice-source E
+# branch (#377). See issue #378 for the cap-lift rationale.)
 #
 # Returns a record with fields
 #   .m              : the input m
@@ -97,20 +98,24 @@
 #                     "incomplete"
 #   .timing         : rec(.wall_seconds, ..., per-branch breakdown.
 #
-# DEFERRAL POLICY (m >= 6)
+# DEFERRAL POLICY (m >= 8)
 # ------------------------
-# m = 5 is supported via the sparse trace path
+# m = 5 and m = 7 are both supported via the sparse trace path
 # (`krr_spectral_characters_sparse.g`, issue #220 / PR #235). The dense
 # `BuildKRRSpectralCharacters` at m = 5 would require ~3.7 years of CPU
 # for ONE T_h matrix (per the header note in `krr_spectral_characters.g`),
-# whereas the sparse / trace-only `BuildKRRSpectralCharactersSparse(5)`
-# computes the central-class trace table in ~30 minutes via character-
+# whereas the sparse / trace-only `BuildKRRSpectralCharactersSparse(m)`
+# computes the central-class trace table in minutes via character-
 # orthogonality reduction.
 #
-# m = 7 remains blocked: the sparse builder's `TraceOnOmega0Gauss`
-# Gauss-sum closed-form codepath is a stub at the time of this writing
-# (issue #236). Until it lands, K4aClassify errors out at m >= 6 with a
-# clear message pointing at #236.
+# At m = 7: the sparse builder's `TraceOnOmega0Gauss` Gauss-sum closed
+# form landed in #236. The lattice-source E branch's EA family loader
+# (`LoadDVANEAFamily(7)`) was wired in #377. Cap lifted to m = 7 in
+# issue #378.
+#
+# m = 6 (excluded as before): the BW(6) lattice does not give a KRR Phi
+# extension (E_+(6) is not the automorphism group of BW(6)'s even sub-
+# VOA). The K-4 EPIC targets m in {2, 3, 5, 7}.
 #
 # DEPENDENCIES
 # ============
@@ -688,16 +693,25 @@ K4aClassify := function(arg)
         Error("K4aClassify: m must be a positive integer; got ", m);
     fi;
 
-    n_max_supported := 5;
+    # Issue #378: cap lifted from m=5 to m=7 after #236 (Gauss-sum closed
+    # form) and #377 (D-VAN m=7 EA generator persistence) both landed.
+    # At m=7:
+    #   * Untwisted (omega = 0): runs end-to-end via the sparse trace
+    #     path (BuildKRRSpectralCharactersSparse(7) -> TraceOnOmega0 ->
+    #     TraceOnOmega0Gauss at m >= 7), `TranslateSpectralDataToEPlus`,
+    #     and `RestrictTraceOnWToSubgroupHonourParent` for D_8/Q_8.
+    #   * Twisted (omega != 0, lattice_source = true): the E branch
+    #     calls `LoadDVANEAFamily(7)` to read the persisted EA generator
+    #     tuples from `computed/dvan_min_family/m7/result.g`. If that
+    #     file is missing (D-VAN m=7 production not yet run), the
+    #     loader errors with a clear message pointing at the rerun.
+    n_max_supported := 7;
     if m > n_max_supported then
         Error(
             "K4aClassify: m = ", m, " is not yet supported. ",
-            "At m = 5 the sparse trace path ",
-            "(BuildKRRSpectralCharactersSparse, issue #220 / PR #235) ",
-            "is wired through. At m = 7 the sparse builder's ",
-            "TraceOnOmega0Gauss closed-form codepath is still a stub ",
-            "(issue #236). Until #236 lands, K4aClassify supports m ",
-            "in {2, 3, 5} only.");
+            "Supported m ∈ {2, 3, 5, 7}. Higher m would require a new ",
+            "extension of the sparse trace machinery + a corresponding ",
+            "Gauss-sum closed form beyond #236.");
     fi;
     if m = 4 then
         Error(
