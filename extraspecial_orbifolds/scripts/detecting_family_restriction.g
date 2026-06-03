@@ -1576,14 +1576,22 @@ end;;
 # present.
 _DETF_F2RrefState := function(data, ea_indices, include_D8, include_Q8)
     local state, j, k_G;
+    # m=7 D-VAN crash fix (issue #410 sibling): each F_2 cache is
+    # initialised independently because `_DETF_ClusterCandidatesByF2RREF`
+    # builds `res_EA_list_F2` alone, breaking the previous "if
+    # res_EA_list_F2 is bound then all three are bound" invariant.
     if not IsBound(data!.res_EA_list_F2) then
         data!.res_EA_list_F2 := List(data.res_EA_list,
                                      M -> M * One(GF(2)));
         for j in [1..Length(data!.res_EA_list_F2)] do
             ConvertToMatrixRep(data!.res_EA_list_F2[j], GF(2));
         od;
+    fi;
+    if not IsBound(data!.res_D8_F2) then
         data!.res_D8_F2 := data.res_D8 * One(GF(2));
         ConvertToMatrixRep(data!.res_D8_F2, GF(2));
+    fi;
+    if not IsBound(data!.res_Q8_F2) then
         if data.res_Q8 <> fail then
             data!.res_Q8_F2 := data.res_Q8 * One(GF(2));
             ConvertToMatrixRep(data!.res_Q8_F2, GF(2));
