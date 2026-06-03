@@ -91,6 +91,7 @@ Read(Concatenation(_DETFE2E_SCRIPTSDIR, "/joint_permutation_matcher.g"));
 Read(Concatenation(_DETFE2E_SCRIPTSDIR, "/d8_classifier.g"));
 Read(Concatenation(_DETFE2E_SCRIPTSDIR, "/q8_classifier.g"));
 Read(Concatenation(_DETFE2E_SCRIPTSDIR, "/detecting_family_restriction.g"));
+Read(Concatenation(_DETFE2E_SCRIPTSDIR, "/abelian_branch_fast.g"));
 
 # ---- Locate the modular_data tree and chdir to a symlink dir ----------
 #
@@ -143,6 +144,13 @@ fi;
 if not IsBoundGlobal("DETF_E2E_M5_TEST_COUNT") then
     DETF_E2E_M5_TEST_COUNT := 10;
 fi;
+# Issue #434: opt-in fast q_ω + b_ω path for the EA branch. Default false
+# (legacy slow path via ComputeModularData + JointPermutationMatcher).
+# When true, the EA branch dispatch uses ClassifyAbelianBranchFast and
+# the D_8 / Q_8 branches remain unchanged (the fast path is abelian-only).
+if not IsBoundGlobal("DETF_E2E_FAST_ABELIAN") then
+    DETF_E2E_FAST_ABELIAN := false;
+fi;
 
 _DETFE2E_COUNTS := rec(
     m2 := DETF_E2E_M2_TEST_COUNT,
@@ -173,7 +181,7 @@ _DETFE2E_COUNTS := rec(
 
 _DETFE2E_BranchDispatch := function(K, setup_K, v_K, branch_label)
     local omega_cocycle, val, expon, modular_ct, modular_untwisted, match,
-          class_res, untwisted_class_idx;
+          class_res, untwisted_class_idx, is_ea_branch, fast_res;
 
     if ForAll(v_K, x -> x = 0) then
         return rec(skipped := true, detected_nontrivial := false,
@@ -183,6 +191,22 @@ _DETFE2E_BranchDispatch := function(K, setup_K, v_K, branch_label)
     omega_cocycle := StandardCocycleOf(setup_K, v_K);
     val := Gcd(Gcd(v_K), setup_K.exponent);
     expon := setup_K.exponent / val;
+
+    is_ea_branch := branch_label <> "D_8" and branch_label <> "Q_8";
+
+    # Issue #434: when DETF_E2E_FAST_ABELIAN is true, route the EA branch
+    # through ClassifyAbelianBranchFast (q + b cocycle eval). D_8 / Q_8
+    # branches are non-abelian and always use the slow legacy path.
+    if is_ea_branch and DETF_E2E_FAST_ABELIAN = true then
+        fast_res := ClassifyAbelianBranchFast(K, omega_cocycle, expon);
+        return rec(skipped := false,
+                   detected_nontrivial := (fast_res.is_coboundary = false),
+                   branch_label := branch_label,
+                   fast := true,
+                   is_q_trivial := fast_res.is_q_trivial,
+                   is_b_trivial := fast_res.is_b_trivial);
+    fi;
+
     modular_ct := ComputeModularData(K, omega_cocycle, val, expon);
 
     if branch_label = "D_8" then
@@ -430,7 +454,8 @@ Print("=================================================================\n");
 Print("config: m2=", _DETFE2E_COUNTS.m2,
       ", m3=", _DETFE2E_COUNTS.m3,
       ", m5=", _DETFE2E_COUNTS.m5,
-      " unit vectors per m\n");
+      " unit vectors per m, ",
+      "DETF_E2E_FAST_ABELIAN = ", DETF_E2E_FAST_ABELIAN, "\n");
 
 _DETFE2E_T_TOTAL := Runtime();;
 _DETFE2E_PER_M_RESULTS := [];;
