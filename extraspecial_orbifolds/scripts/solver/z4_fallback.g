@@ -17,21 +17,24 @@
 # Convention: this file is intended to be Read from solver/tests/ or
 # from solver/ directly. We locate transgression_kernel.g by walking
 # up from CWD until we find it, so the file works from either entry.
-z4_fallback_orig_dir := DirectoryCurrent();;
-z4_fallback_target := fail;;
-for z4_fallback_try in [".", "..", "../.."] do
-    if IsExistingFile(Concatenation(z4_fallback_try, "/transgression_kernel.g")) then
-        z4_fallback_target := z4_fallback_try;
-        break;
+# Issue #286: conditional bootstrap so gac-compiled loading works.
+if not IsBoundGlobal("IsCoboundary2") then
+    z4_fallback_orig_dir := DirectoryCurrent();;
+    z4_fallback_target := fail;;
+    for z4_fallback_try in [".", "..", "../.."] do
+        if IsExistingFile(Concatenation(z4_fallback_try, "/transgression_kernel.g")) then
+            z4_fallback_target := z4_fallback_try;
+            break;
+        fi;
+    od;
+    if z4_fallback_target = fail then
+        Error("z4_fallback.g: cannot locate transgression_kernel.g from CWD ",
+              Filename(z4_fallback_orig_dir, ""));
     fi;
-od;;
-if z4_fallback_target = fail then
-    Error("z4_fallback.g: cannot locate transgression_kernel.g from CWD ",
-          Filename(z4_fallback_orig_dir, ""));
+    ChangeDirectoryCurrent(z4_fallback_target);
+    Read("transgression_kernel.g");
+    ChangeDirectoryCurrent(Filename(z4_fallback_orig_dir, ""));
 fi;
-ChangeDirectoryCurrent(z4_fallback_target);;
-Read("transgression_kernel.g");
-ChangeDirectoryCurrent(Filename(z4_fallback_orig_dir, ""));;
 
 IsCoboundary2Zexp := function(C, c, exp)
     return IsCoboundary2(C, c, exp);

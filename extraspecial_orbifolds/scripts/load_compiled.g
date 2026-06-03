@@ -6,26 +6,51 @@
 # exists in compiled/, else falls back to the interpreted .g.
 #
 # Re-compile artefacts via `./compile_codebase.sh`.
+#
+# Modules are loaded in dependency order (top-of-tree first).
 
 if not IsBoundGlobal("_LOAD_COMPILED_DIR") then
     _LOAD_COMPILED_DIR := Filename(
         DirectoryCurrent(), "compiled");
 fi;
 
-_LoadCompiledOrInterpreted := function(base)
-    local so_path, g_path;
+_LoadCompiledOrInterpreted := function(base, g_path)
+    local so_path;
     so_path := Concatenation(_LOAD_COMPILED_DIR, "/", base, ".so");
-    g_path := Concatenation(base, ".g");
     if IsExistingFile(so_path) then
         LoadDynamicModule(so_path);
-        Print("[load_compiled] LOADED compiled ", so_path, "\n");
     else
         Read(g_path);
-        Print("[load_compiled] FALLBACK to interpreted ", g_path,
-              " (no compiled .so at ", so_path, ")\n");
     fi;
 end;;
 
-_LoadCompiledOrInterpreted("abelian_branch_fast");
-_LoadCompiledOrInterpreted("mod2_solver");
-_LoadCompiledOrInterpreted("transgression_kernel");
+# Tier 1 — leaf modules (no DRINFELD-internal deps).
+_LoadCompiledOrInterpreted("mod2_solver", "solver/mod2_solver.g");
+_LoadCompiledOrInterpreted("transgression_kernel", "transgression_kernel.g");
+_LoadCompiledOrInterpreted("abelian_branch_fast", "abelian_branch_fast.g");
+_LoadCompiledOrInterpreted("joint_permutation_matcher", "joint_permutation_matcher.g");
+_LoadCompiledOrInterpreted("untwisted_modular_data", "untwisted_modular_data.g");
+_LoadCompiledOrInterpreted("em_construction", "em_construction.g");
+_LoadCompiledOrInterpreted("bw_lattice", "bw_lattice.g");
+_LoadCompiledOrInterpreted("quillen_detecting_subgroup", "quillen_detecting_subgroup.g");
+_LoadCompiledOrInterpreted("fsi_wrapper", "fsi_wrapper.g");
+
+# Tier 2 — depend on tier 1.
+_LoadCompiledOrInterpreted("z4_fallback", "solver/z4_fallback.g");
+_LoadCompiledOrInterpreted("iterated_bockstein", "solver/iterated_bockstein.g");
+_LoadCompiledOrInterpreted("krr_projector", "krr_projector.g");
+_LoadCompiledOrInterpreted("d8_classifier", "d8_classifier.g");
+_LoadCompiledOrInterpreted("q8_classifier", "q8_classifier.g");
+_LoadCompiledOrInterpreted("restrict_to_subgroup", "restrict_to_subgroup.g");
+_LoadCompiledOrInterpreted("brw_construction", "brw_construction.g");
+
+# Tier 3 — depend on tier 1 + 2.
+_LoadCompiledOrInterpreted("iscoboundary2_split", "solver/iscoboundary2_split.g");
+_LoadCompiledOrInterpreted("ct_modular_data", "ct_modular_data.g");
+_LoadCompiledOrInterpreted("brw_h3_action", "brw_h3_action.g");
+_LoadCompiledOrInterpreted("brw_simples_action", "brw_simples_action.g");
+_LoadCompiledOrInterpreted("keller_twist_is_trivial", "keller/keller_twist_is_trivial.g");
+
+# Tier 4 — depend on all of the above.
+_LoadCompiledOrInterpreted("detecting_family_restriction", "detecting_family_restriction.g");
+_LoadCompiledOrInterpreted("keller_s_entry", "keller/keller_s_entry.g");

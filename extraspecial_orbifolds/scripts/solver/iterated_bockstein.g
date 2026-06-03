@@ -45,25 +45,33 @@
 # per Path Z call — easily sub-second. For E_+(3) (r ≤ 6, L = 4) it
 # scales as 2^18 ≈ 256K solves; still tractable.
 #
-# Read-path note: this file is intended to be Read either directly from
-# solver/ or from solver/tests/. We locate mod2_solver.g (companion file)
-# by walking up from CWD until we find iterated_bockstein.g — same shim
-# pattern as iscoboundary2_split.g.
-itb_orig_dir := DirectoryCurrent();;
-itb_target := fail;;
-for itb_try in [".", "..", "../.."] do
-    if IsExistingFile(Concatenation(itb_try, "/iterated_bockstein.g")) then
-        itb_target := itb_try;
-        break;
+# Read-path note: companion file mod2_solver.g must be loaded BEFORE this
+# file. Existing test scripts and the load_compiled.g loader handle this
+# ordering. The conditional bootstrap below is preserved for backward
+# compatibility with tests that Read this file standalone — it triggers
+# only when the companion's symbols are not yet bound.
+#
+# Issue #286: for gac compilation, this top-level code is compiled into
+# the module init. The IsBoundGlobal check skips the Read() at runtime
+# when called under LoadDynamicModule (the loader has already pulled in
+# the compiled mod2_solver.so by then).
+if not IsBoundGlobal("BoundaryMatrixGF2") then
+    itb_orig_dir := DirectoryCurrent();;
+    itb_target := fail;;
+    for itb_try in [".", "..", "../.."] do
+        if IsExistingFile(Concatenation(itb_try, "/iterated_bockstein.g")) then
+            itb_target := itb_try;
+            break;
+        fi;
+    od;
+    if itb_target = fail then
+        Error("iterated_bockstein.g: cannot locate companion files from CWD ",
+              Filename(itb_orig_dir, ""));
     fi;
-od;;
-if itb_target = fail then
-    Error("iterated_bockstein.g: cannot locate companion files from CWD ",
-          Filename(itb_orig_dir, ""));
+    ChangeDirectoryCurrent(itb_target);
+    Read("mod2_solver.g");
+    ChangeDirectoryCurrent(Filename(itb_orig_dir, ""));
 fi;
-ChangeDirectoryCurrent(itb_target);;
-Read("mod2_solver.g");
-ChangeDirectoryCurrent(Filename(itb_orig_dir, ""));;
 
 # If_ helper: same convention as transgression_kernel.g and z4_fallback.g.
 # Defined unconditionally (callers may have set it from a prior Read;
