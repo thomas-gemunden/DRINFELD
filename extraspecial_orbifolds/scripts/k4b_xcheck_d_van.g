@@ -46,29 +46,58 @@
 # `TRIVIAL-AXIS DISAGREE`) and QUITs.
 
 # ---- Locate self ------------------------------------------------------
+# Issue #422: robust filename suffix check before extracting the dir.
+# Previously assumed `INPUT_FILENAME()` always ends in
+# `/k4b_xcheck_d_van.g`, which fails when the file is relocated or
+# invoked with a different leading-path convention; the bad extraction
+# produced `_K4B_RESULT_PATH = "/k4b_m5_result.g"` (with a leading /).
 _K4B_XCHECK_SELF := INPUT_FILENAME();;
-if _K4B_XCHECK_SELF <> fail and _K4B_XCHECK_SELF <> "stream" then
+_K4B_SUFFIX := "k4b_xcheck_d_van.g";;
+_K4B_XCHECK_DIR := fail;;
+if _K4B_XCHECK_SELF <> fail and _K4B_XCHECK_SELF <> "stream"
+   and Length(_K4B_XCHECK_SELF) >= Length(_K4B_SUFFIX)
+   and _K4B_XCHECK_SELF{[Length(_K4B_XCHECK_SELF) - Length(_K4B_SUFFIX) + 1
+                          .. Length(_K4B_XCHECK_SELF)]} = _K4B_SUFFIX then
     _K4B_XCHECK_DIR := _K4B_XCHECK_SELF{
-        [1..Length(_K4B_XCHECK_SELF) - Length("/k4b_xcheck_d_van.g")]};;
-else
-    _K4B_XCHECK_DIR := fail;;
+        [1..Length(_K4B_XCHECK_SELF) - Length(_K4B_SUFFIX)]};;
+    # Strip trailing slash (if any) so subsequent Concatenations are well-shaped.
+    if Length(_K4B_XCHECK_DIR) > 0
+       and _K4B_XCHECK_DIR[Length(_K4B_XCHECK_DIR)] = '/' then
+        _K4B_XCHECK_DIR := _K4B_XCHECK_DIR{
+            [1..Length(_K4B_XCHECK_DIR) - 1]};;
+    fi;
 fi;;
 
 # ---- Step 1: load K-4b result -----------------------------------------
 # k4b_m5_result.g is written by run_k4b_m5.sh and binds the global
 # RESULT (= the K4aClassify(5) record). If it doesn't exist yet we
 # emit a clear instruction rather than fail with a cryptic error.
-_K4B_RESULT_PATH := "k4b_m5_result.g";;
-if _K4B_XCHECK_DIR <> fail then
-    _K4B_RESULT_PATH := Concatenation(_K4B_XCHECK_DIR, "/k4b_m5_result.g");;
+#
+# Lookup order:
+#   1. <script-dir>/k4b_m5_result.g   (when INPUT_FILENAME resolved)
+#   2. ./k4b_m5_result.g              (CWD fallback)
+# The first existing match wins.
+_K4B_RESULT_PATH := fail;;
+if _K4B_XCHECK_DIR <> fail and _K4B_XCHECK_DIR <> ""
+   and IsExistingFile(Concatenation(_K4B_XCHECK_DIR,
+                                      "/k4b_m5_result.g")) then
+    _K4B_RESULT_PATH := Concatenation(_K4B_XCHECK_DIR,
+                                       "/k4b_m5_result.g");;
+elif IsExistingFile("k4b_m5_result.g") then
+    _K4B_RESULT_PATH := "k4b_m5_result.g";;
 fi;;
 
-if not IsExistingFile(_K4B_RESULT_PATH) then
-    Print("[k4b_xcheck] BLOCKED: ", _K4B_RESULT_PATH, " not found.\n");
+if _K4B_RESULT_PATH = fail then
+    Print("[k4b_xcheck] BLOCKED: k4b_m5_result.g not found.\n");
+    Print("[k4b_xcheck]   Checked candidate paths:\n");
+    if _K4B_XCHECK_DIR <> fail and _K4B_XCHECK_DIR <> "" then
+        Print("[k4b_xcheck]     ", _K4B_XCHECK_DIR, "/k4b_m5_result.g\n");
+    fi;
+    Print("[k4b_xcheck]     ./k4b_m5_result.g (relative to CWD)\n");
     Print("[k4b_xcheck]   Run ./run_k4b_m5.sh first to generate it.\n");
     Print("[k4b_xcheck]   The result file is the persisted output of\n");
     Print("[k4b_xcheck]   K4aClassify(5) and is required input here.\n");
-    QUIT_GAP(0);
+    QuitGap(0);
 fi;
 
 Read(_K4B_RESULT_PATH);   # binds RESULT
@@ -78,7 +107,7 @@ if not IsBound(RESULT) then
           " did not bind RESULT.\n");
     Print("[k4b_xcheck]   The file should contain `RESULT := rec(...);;`.\n");
     Print("[k4b_xcheck]   Has it been hand-edited / truncated?\n");
-    QUIT_GAP(0);
+    QuitGap(0);
 fi;
 
 Print("[k4b_xcheck] Loaded K-4b verdict from ", _K4B_RESULT_PATH, "\n");
@@ -196,22 +225,25 @@ if candidate_omega_orbits = fail then
     Print("[k4b_xcheck]   work needed to implement it. Falling back to\n");
     Print("[k4b_xcheck]   strategy (B): trivial-axis check.\n");
 elif IsList(candidate_omega_orbits) then
+    # Issue #422: `QUIT;` is illegal inside nested if/elif/else blocks in
+    # modern GAP. Use the `QuitGap(0)` function form, which is legal at
+    # any nesting depth.
     if Length(candidate_omega_orbits) = 0 then
         Print("[k4b_xcheck] INCONSISTENT: no ω has the K-4b restrictions.\n");
         Print("[k4b_xcheck]   Diagnostic: check K-4a-T5b's σ phase, or\n");
         Print("[k4b_xcheck]   T4b's ε extraction. See K-4b spec §Risks.\n");
-        QUIT;
+        QuitGap(0);
     elif Length(candidate_omega_orbits) > 1 then
         Print("[k4b_xcheck] MULTIPLE: ", Length(candidate_omega_orbits),
               " ω orbits match.\n");
         Print("[k4b_xcheck]   Indicates injectivity gap in {E, D_8, Q_8}\n");
         Print("[k4b_xcheck]   — see R-1, issue #193.\n");
-        QUIT;
+        QuitGap(0);
     else
         Print("[k4b_xcheck] CONSISTENT: unique ω orbit matches.\n");
         Print("[k4b_xcheck]   Orbit ", candidate_omega_orbits[1],
               " of H³(E_+(", RESULT.m, "); U(1)).\n");
-        QUIT;
+        QuitGap(0);
     fi;
 fi;
 
@@ -280,4 +312,4 @@ else
     Print("[k4b_xcheck]   or some other state combination. Investigate.\n");
 fi;
 
-QUIT;
+QuitGap(0);
