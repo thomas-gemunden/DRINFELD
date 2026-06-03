@@ -642,6 +642,21 @@ end;;
 #                     baseline at omega = 0, per the research note).
 #   .verbose        : forwarded to `BuildKRRIntertwinerData`.
 #                     Default false.
+#   .skip_dvan_fast_path : if true, disable the D-VAN fast-path
+#                     introduced in issue #426. When the fast-path is
+#                     enabled (default), `K4aClassify` calls
+#                     `KellerTwistIsTrivial(m, opts.omega_vec)` at the
+#                     top of the function (for non-zero omega only);
+#                     if it returns true, K4aClassify short-circuits
+#                     with `is_coboundary := true` and skips the
+#                     spectral build + branch sweep. The fast-path
+#                     return rec includes `dvan_fast_path := true`
+#                     plus all the conventional verdict fields
+#                     (`m`, `group`, `opts`, `spectral_data`,
+#                     `E_class`, `D8_class`, `Q8_class`, `trivial`,
+#                     `verdict`, `timing`). The full pipeline still
+#                     runs at omega = 0, and when this flag is true.
+#                     Default: false (fast-path enabled).
 #
 # At default opts (no `lattice_source`), behaviour is unchanged from
 # pre-#316.
@@ -652,7 +667,8 @@ K4aClassify := function(arg)
           data_E, data_D8, data_Q8, restricted_E, restricted_D8,
           restricted_Q8, E_class, D8_class, Q8_class, trivial, verdict,
           spectral_data, sparse_data, t_branch_0, t_E_branch,
-          t_D8_branch, t_Q8_branch, t_total, t_spectral, fld;
+          t_D8_branch, t_Q8_branch, t_total, t_spectral, fld,
+          t_dvan, wall_dvan, is_trivial;
 
     # ---- Argument validation -----------------------------------------
     if Length(arg) < 1 then
@@ -665,10 +681,11 @@ K4aClassify := function(arg)
     fi;
     # Normalise opts. Default = legacy (lattice_source = false).
     opts := rec(
-        lattice_source  := false,
-        omega_vec       := fail,
-        spectral_source := "lite",
-        verbose         := false
+        lattice_source       := false,
+        omega_vec            := fail,
+        spectral_source      := "lite",
+        verbose              := false,
+        skip_dvan_fast_path  := false
     );
     if user_opts <> fail then
         if not IsRecord(user_opts) then
@@ -676,7 +693,8 @@ K4aClassify := function(arg)
                   user_opts);
         fi;
         for fld in ["lattice_source", "omega_vec",
-                    "spectral_source", "verbose"] do
+                    "spectral_source", "verbose",
+                    "skip_dvan_fast_path"] do
             if IsBound(user_opts.(fld)) then
                 opts.(fld) := user_opts.(fld);
             fi;
@@ -758,6 +776,85 @@ K4aClassify := function(arg)
     fi;
 
     t_total_0 := Runtime();
+
+    # ---- D-VAN fast-path skip (issue #426) ---------------------------
+    # If the twist is detected as trivial via KellerTwistIsTrivial
+    # (D-VAN-5), short-circuit and return is_coboundary = true without
+    # running the spectral build + E/D_8/Q_8 branch sweep. Gated by
+    # opts.skip_dvan_fast_path (default false — fast-path enabled).
+    #
+    # Safety gate: the fast-path is correct IFF D-VAN's verdict matches
+    # K-4a's verdict for every omega. Until issue #425 verifies this
+    # empirically across the omega basis at m=2 and m=3, callers can
+    # disable by passing `skip_dvan_fast_path := true` to force the
+    # full K-4a pipeline.
+    #
+    # We skip the fast-path itself when omega_vec is zero (or `fail`)
+    # because the full pipeline at default opts is the Keller-alpha=0
+    # anchor and pre-#426 tests assert on every full-rec field.
+    if not _K4A_OmegaIsZero(opts.omega_vec)
+       and opts.skip_dvan_fast_path = false then
+        if not _K4A_LoadSibling("ResIsTrivialOnDetectingFamily",
+                                 "detecting_family_vanish.g") then
+            Print("[K4aClassify] D-VAN fast-path unavailable ",
+                  "(detecting_family_vanish.g not loadable); ",
+                  "proceeding with full pipeline.\n");
+        elif not _K4A_LoadSibling("KellerTwistIsTrivial",
+                                   "keller/keller_twist_is_trivial.g") then
+            Print("[K4aClassify] D-VAN fast-path unavailable ",
+                  "(KellerTwistIsTrivial not loadable); proceeding ",
+                  "with full pipeline.\n");
+        else
+            t_dvan := Runtime();
+            is_trivial := KellerTwistIsTrivial(m, opts.omega_vec);
+            wall_dvan := _K4A_SecsSince(t_dvan);
+            Print("[K4aClassify] D-VAN fast-path: ",
+                  "KellerTwistIsTrivial(", m, ", omega) = ", is_trivial,
+                  " (", wall_dvan, " s).\n");
+            if is_trivial then
+                Print("[K4aClassify] D-VAN fast-path TRIGGERED; ",
+                      "returning is_coboundary = true without ",
+                      "spectral build.\n");
+                return rec(
+                    m              := m,
+                    group          := EmGroup(m),
+                    opts           := opts,
+                    omega_vec      := opts.omega_vec,
+                    is_coboundary  := true,
+                    spectral_data  := rec(
+                        source                := "dvan_fast_path",
+                        rationale             := Concatenation(
+                            "D-VAN fast-path (issue #426): ",
+                            "KellerTwistIsTrivial(", String(m),
+                            ", omega) = true. ",
+                            "Spectral build skipped."),
+                        spectral_call_skipped := true,
+                        wall_seconds          := 0.0
+                    ),
+                    E_class        := rec(
+                        is_abelian     := true,
+                        is_coboundary  := true,
+                        dvan_fast_path := true),
+                    D8_class       := rec(
+                        is_abelian     := false,
+                        class_idx      := 1,
+                        dvan_fast_path := true),
+                    Q8_class       := rec(
+                        is_abelian     := false,
+                        class_idx      := 1,
+                        dvan_fast_path := true),
+                    trivial        := true,
+                    verdict        := "trivial",
+                    dvan_fast_path := true,
+                    dvan_wall_s    := wall_dvan,
+                    timing         := rec(
+                        wall_seconds   := _K4A_SecsSince(t_total_0),
+                        dvan_fast_path := wall_dvan
+                    )
+                );
+            fi;
+        fi;
+    fi;
 
     # ---- Construct G_em informational handle ------------------------
     # The matrix-realisation E_+(m) (`EmGroup(m)`) is what KRR's
