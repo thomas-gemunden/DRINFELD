@@ -344,7 +344,27 @@ end;;
 # call JointPermutationMatcher. Return rec(is_abelian, is_coboundary,
 # match, modular_ct, modular_untwisted, wall_seconds).
 _K4A_ClassifyAbelianBranch := function(restricted, H)
-    local t0, modular_ct, modular_untwisted, match;
+    local t0, modular_ct, modular_untwisted, match, fast_res;
+    # Issue #434: fast q_ω + b_ω abelian-branch path. Opt-in via the
+    # global `_K4A_USE_FAST_ABELIAN_BRANCH = true`. Requires the
+    # restricted rec to carry `omega_cocycle` (3-arg fn) + `modulus`
+    # (the cocycle's coefficient exponent N). _K4A_RestrictForBranch
+    # surfaces these whenever opts.lattice_source = true and ω ≠ 0,
+    # which is exactly the case where the fast path is needed.
+    if IsBoundGlobal("_K4A_USE_FAST_ABELIAN_BRANCH")
+       and ValueGlobal("_K4A_USE_FAST_ABELIAN_BRANCH") = true
+       and IsBound(restricted.omega_cocycle)
+       and IsBound(restricted.modulus) then
+        if not _K4A_LoadSibling("ClassifyAbelianBranchFast",
+                                "abelian_branch_fast.g") then
+            Print("[K4aClassify] fast abelian-branch unavailable; ",
+                  "falling back to slow path.\n");
+        else
+            fast_res := ClassifyAbelianBranchFast(
+                H, restricted.omega_cocycle, restricted.modulus);
+            return fast_res;
+        fi;
+    fi;
     t0 := Runtime();
     # Issue #333: at omega != 0 the projective consumption downstream of
     # RestrictTraceOnWToSubgroupProjective produces a (S, T) that does
@@ -433,8 +453,22 @@ end;;
 _K4A_ClassifyEBranchMulti := function(opts, m, ea_family)
     local t0, restmats, setup_G, omega_G, omega_H_fn, val, expon,
           per_ea, is_coboundary_all, ea_entry, H_EA, modular_ct,
-          modular_untwisted, match, ea_idx, is_index_input;
+          modular_untwisted, match, ea_idx, is_index_input,
+          use_fast, fast_res, ea_is_coboundary;
     t0 := Runtime();
+    # Issue #434: when _K4A_USE_FAST_ABELIAN_BRANCH is true, dispatch
+    # each per-EA check through ClassifyAbelianBranchFast — skips the
+    # ComputeModularData S-build + JointPermutationMatcher per EA.
+    use_fast := IsBoundGlobal("_K4A_USE_FAST_ABELIAN_BRANCH")
+                and ValueGlobal("_K4A_USE_FAST_ABELIAN_BRANCH") = true;
+    if use_fast then
+        if not _K4A_LoadSibling("ClassifyAbelianBranchFast",
+                                "abelian_branch_fast.g") then
+            Print("[_K4A_ClassifyEBranchMulti] fast abelian-branch ",
+                  "unavailable; falling back to slow path.\n");
+            use_fast := false;
+        fi;
+    fi;
     # Detect input shape. The two paths differ only in (i) how setup_G is
     # obtained and (ii) how H_EA is extracted from each ea_family entry.
     is_index_input := not IsEmpty(ea_family) and IsInt(ea_family[1]);
@@ -465,24 +499,30 @@ _K4A_ClassifyEBranchMulti := function(opts, m, ea_family)
         else
             H_EA := ea_entry;
         fi;
-        modular_ct := ComputeModularData(H_EA, omega_H_fn, val, expon);
-        modular_untwisted := ComputeUntwistedModularData(H_EA);
-        match := JointPermutationMatcher(
-            modular_untwisted.S, modular_untwisted.T,
-            modular_ct.S, modular_ct.T);
+        if use_fast then
+            fast_res := ClassifyAbelianBranchFast(H_EA, omega_H_fn, expon);
+            ea_is_coboundary := fast_res.is_coboundary;
+        else
+            modular_ct := ComputeModularData(H_EA, omega_H_fn, val, expon);
+            modular_untwisted := ComputeUntwistedModularData(H_EA);
+            match := JointPermutationMatcher(
+                modular_untwisted.S, modular_untwisted.T,
+                modular_ct.S, modular_ct.T);
+            ea_is_coboundary := match.ok;
+        fi;
         Add(per_ea, rec(
             ea_idx        := If_(is_index_input, ea_entry, ea_idx),
             ea_order      := Order(H_EA),
-            is_coboundary := match.ok
+            is_coboundary := ea_is_coboundary
         ));
-        if not match.ok then
+        if not ea_is_coboundary then
             is_coboundary_all := false;
         fi;
         if opts.verbose then
             Print("  [_K4A_ClassifyEBranchMulti] EA #",
                   If_(is_index_input, ea_entry, ea_idx),
                   " (|EA| = ", Order(H_EA),
-                  "): is_coboundary = ", match.ok, "\n");
+                  "): is_coboundary = ", ea_is_coboundary, "\n");
         fi;
     od;
     return rec(
@@ -598,6 +638,10 @@ _K4A_RestrictForBranch := function(opts, data, H_subgroup)
         expon := setup_G_full.exponent / val;
         restricted.modular_ct_override := ComputeModularData(
             H_subgroup, omega_H, val, expon);
+        # Issue #434: surface omega_cocycle + modulus so the fast q + b
+        # abelian-branch classifier can avoid rebuilding the cocycle.
+        restricted.omega_cocycle := omega_H;
+        restricted.modulus := expon;
         return restricted;
     fi;
     return RestrictTraceOnWToSubgroup(data, H_subgroup);
