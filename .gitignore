@@ -42,3 +42,6 @@ extraspecial_orbifolds/computed/E_plus_7/structural/canonical_blocks.g
 # per-BRW-orbit cocycle-basis caches) are local-only.
 computed/transgression/*/sweep_state.g
 computed/transgression/*/orbit_*_cache.g
+
+# gac compiled artefacts (issue #286)
+extraspecial_orbifolds/scripts/compiled/
