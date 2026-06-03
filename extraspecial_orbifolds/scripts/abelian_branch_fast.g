@@ -17,19 +17,15 @@
 # `tests/test_detf_e2e_injectivity.g` when `DETF_E2E_FAST_ABELIAN = true`.
 
 
-ClassifyAbelianBranchFast := function(H, omega_cocycle, modulus)
-    local elems, n, q, b, i, j, ab, q_lookup, q_a, q_b, q_ab,
+DeclareGlobalFunction("ClassifyAbelianBranchFast");
+
+InstallGlobalFunction(ClassifyAbelianBranchFast, function(H, omega_cocycle, modulus)
+    local elems, n, q, b, i, j, ab, q_a, q_b, q_ab,
           is_q_trivial, is_b_trivial, is_trivial, t0, row;
     t0 := Runtime();
     elems := AsList(H);
     n := Length(elems);
-    # q_ω(a) = ω(a, a, a) mod modulus.
     q := List(elems, a -> omega_cocycle(a, a, a) mod modulus);
-    # Position-keyed lookup against `elems`.
-    q_lookup := function(a)
-        return q[Position(elems, a)];
-    end;
-    # b_ω(a, b) = q_ω(a*b) - q_ω(a) - q_ω(b) mod modulus.
     b := EmptyPlist(n);
     for i in [1..n] do
         row := EmptyPlist(n);
@@ -37,7 +33,7 @@ ClassifyAbelianBranchFast := function(H, omega_cocycle, modulus)
         for j in [1..n] do
             ab := elems[i] * elems[j];
             q_b := q[j];
-            q_ab := q_lookup(ab);
+            q_ab := q[Position(elems, ab)];
             row[j] := (q_ab - q_a - q_b) mod modulus;
         od;
         b[i] := row;
@@ -52,10 +48,10 @@ ClassifyAbelianBranchFast := function(H, omega_cocycle, modulus)
         b_omega        := b,
         is_q_trivial   := is_q_trivial,
         is_b_trivial   := is_b_trivial,
-        wall_seconds   := (Runtime() - t0) / 1000.0,
+        wall_ms        := Runtime() - t0,
         method         := "abelian_branch_fast_q_b"
     );
-end;;
+end);
 
 if IsBoundGlobal("_LogStamped") then
     _LogStamped("Loaded abelian_branch_fast.g (#434).");
