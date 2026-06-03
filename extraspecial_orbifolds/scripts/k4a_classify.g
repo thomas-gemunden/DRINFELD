@@ -903,16 +903,47 @@ K4aClassify := function(arg)
                   "D-VAN minimum family at m = ", m, " (issue #333).\n");
         fi;
         E_class := _K4A_ClassifyEBranchMulti(opts, m, _K4A_GetDVANEAFamily(m));
-    elif m >= 5 then
-        data_E := TranslateSpectralDataToEPlus(sparse_data, ea_rec.parent);
-        restricted_E := RestrictTraceOnWToSubgroupHonourParent(
-            data_E, ea_rec.subgroup);
-        E_class := _K4A_ClassifyAbelianBranch(restricted_E, ea_rec.subgroup);
     else
-        data_E := _K4A_BuildBranchData(opts, m, ea_rec.parent);
-        restricted_E := _K4A_RestrictForBranch(opts, data_E,
-                                                ea_rec.subgroup);
-        E_class := _K4A_ClassifyAbelianBranch(restricted_E, ea_rec.subgroup);
+        # Issue #428: when the multi-EA path is gated off by a missing
+        # D-VAN minimum family (loader returned fail) at non-trivial omega
+        # with m >= 3, the single-EA fallback is mathematically non-injective
+        # and can produce false-negative "trivial" verdicts. Loudly warn
+        # users before running the fallback, and flag the result.
+        if opts.lattice_source
+           and (not _K4A_OmegaIsZero(opts.omega_vec))
+           and m >= 3
+           and _K4A_GetDVANEAFamily(m) = fail then
+            Print("\n",
+                  "  ============================================================\n",
+                  "  WARNING: D-VAN minimum detecting family unavailable at m = ", m, ".\n",
+                  "    LoadDVANEAFamily(", m, ") / _K4A_GetDVANEAFamily(", m, ") returned fail.\n",
+                  "    Falling back to single-EA `MaximalElementaryAbelian_E_plus(", m, ").subgroup`.\n",
+                  "    Single-EA restriction is NOT injective at m >= 3.\n",
+                  "    A FALSE-NEGATIVE 'trivial' verdict is POSSIBLE.\n",
+                  "  To fix:\n",
+                  "    * For m=7: regenerate computed/dvan_min_family/m7/result.g with\n",
+                  "      ea_generators field populated (see issue #427).\n",
+                  "    * For other m: ensure _K4A_DVAN_EA_FAMILIES has the correct entry\n",
+                  "      in k4a_classify.g.\n",
+                  "  ============================================================\n");
+        fi;
+        if m >= 5 then
+            data_E := TranslateSpectralDataToEPlus(sparse_data, ea_rec.parent);
+            restricted_E := RestrictTraceOnWToSubgroupHonourParent(
+                data_E, ea_rec.subgroup);
+            E_class := _K4A_ClassifyAbelianBranch(restricted_E, ea_rec.subgroup);
+        else
+            data_E := _K4A_BuildBranchData(opts, m, ea_rec.parent);
+            restricted_E := _K4A_RestrictForBranch(opts, data_E,
+                                                    ea_rec.subgroup);
+            E_class := _K4A_ClassifyAbelianBranch(restricted_E, ea_rec.subgroup);
+        fi;
+        if opts.lattice_source
+           and (not _K4A_OmegaIsZero(opts.omega_vec))
+           and m >= 3
+           and _K4A_GetDVANEAFamily(m) = fail then
+            E_class.dvan_family_missing := true;
+        fi;
     fi;
     t_E_branch := _K4A_SecsSince(t_branch_0);
     Print("  E-branch result: is_coboundary = ", E_class.is_coboundary,
@@ -993,6 +1024,8 @@ K4aClassify := function(arg)
         Q8_class       := Q8_class,
         trivial        := trivial,
         verdict        := verdict,
+        dvan_family_missing := IsBound(E_class.dvan_family_missing)
+                                and E_class.dvan_family_missing,
         timing         := rec(
             wall_seconds  := t_total,
             E_branch      := t_E_branch,
