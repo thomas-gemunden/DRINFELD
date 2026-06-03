@@ -45,9 +45,33 @@ mkdir -p "$OUT_DIR"
 #   * run_e_plus_m_kernel_hap.g — driver, not a library; not a compile
 #     target.
 FILES=(
-    abelian_branch_fast.g
+    # Tier 1 — leaf modules
     solver/mod2_solver.g
     transgression_kernel.g
+    abelian_branch_fast.g
+    joint_permutation_matcher.g
+    untwisted_modular_data.g
+    em_construction.g
+    bw_lattice.g
+    quillen_detecting_subgroup.g
+    fsi_wrapper.g
+    # Tier 2 — depend on tier 1
+    solver/z4_fallback.g
+    solver/iterated_bockstein.g
+    krr_projector.g
+    d8_classifier.g
+    q8_classifier.g
+    restrict_to_subgroup.g
+    brw_construction.g
+    # Tier 3
+    solver/iscoboundary2_split.g
+    ct_modular_data.g
+    brw_h3_action.g
+    brw_simples_action.g
+    keller/keller_twist_is_trivial.g
+    # Tier 4
+    detecting_family_restriction.g
+    keller/keller_s_entry.g
 )
 
 echo "[compile_codebase.sh] compiling ${#FILES[@]} file(s) -> $OUT_DIR/"

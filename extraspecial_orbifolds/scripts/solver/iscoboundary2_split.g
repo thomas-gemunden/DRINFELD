@@ -25,23 +25,30 @@
 # or from solver/tests/. Both companion files (mod2_solver.g, z4_fallback.g)
 # live next to this file, so we locate them by walking up from CWD until
 # we find iscoboundary2_split.g — same shim pattern as z4_fallback.g.
-ic2split_orig_dir := DirectoryCurrent();;
-ic2split_target := fail;;
-for ic2split_try in [".", "..", "../.."] do
-    if IsExistingFile(Concatenation(ic2split_try, "/iscoboundary2_split.g")) then
-        ic2split_target := ic2split_try;
-        break;
+# Issue #286: conditional bootstrap so gac-compiled loading works. The
+# companion modules must be loaded before this file; existing test scripts
+# Read this file standalone and rely on the bootstrap below to pull in
+# mod2_solver.g + z4_fallback.g + iterated_bockstein.g.
+if not IsBoundGlobal("IsCoboundary2Mod2WithLift")
+   or not IsBoundGlobal("IsCoboundary2Z2k") then
+    ic2split_orig_dir := DirectoryCurrent();;
+    ic2split_target := fail;;
+    for ic2split_try in [".", "..", "../.."] do
+        if IsExistingFile(Concatenation(ic2split_try, "/iscoboundary2_split.g")) then
+            ic2split_target := ic2split_try;
+            break;
+        fi;
+    od;
+    if ic2split_target = fail then
+        Error("iscoboundary2_split.g: cannot locate companion files from CWD ",
+              Filename(ic2split_orig_dir, ""));
     fi;
-od;;
-if ic2split_target = fail then
-    Error("iscoboundary2_split.g: cannot locate companion files from CWD ",
-          Filename(ic2split_orig_dir, ""));
+    ChangeDirectoryCurrent(ic2split_target);
+    Read("mod2_solver.g");
+    Read("z4_fallback.g");
+    Read("iterated_bockstein.g");
+    ChangeDirectoryCurrent(Filename(ic2split_orig_dir, ""));
 fi;
-ChangeDirectoryCurrent(ic2split_target);;
-Read("mod2_solver.g");
-Read("z4_fallback.g");
-Read("iterated_bockstein.g");
-ChangeDirectoryCurrent(Filename(ic2split_orig_dir, ""));;
 
 IsCoboundary2Split := function(C, c_g, vec, setup)
     local i, exp_index, r, c_prime, k;
