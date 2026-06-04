@@ -149,8 +149,31 @@ fi;
 # When true, the EA branch dispatch uses ClassifyAbelianBranchFast and
 # the D_8 / Q_8 branches remain unchanged (the fast path is abelian-only).
 if not IsBoundGlobal("DETF_E2E_FAST_ABELIAN") then
-    DETF_E2E_FAST_ABELIAN := false;
+    # Default changed to true (perf audit follow-up): the fast q + b cocycle-
+    # eval path (#437) is ~500x faster per branch at |EA|=64 and is
+    # mathematically equivalent for triviality detection. Set to `false`
+    # explicitly to engage the legacy ComputeModularData + JointPermutationMatcher
+    # path for cross-validation.
+    DETF_E2E_FAST_ABELIAN := true;
 fi;
+if not IsBoundGlobal("DETF_E2E_FULL_EA_FAMILY") then
+    # Default false: iterate only over the minimum detecting EA subset
+    # (PR #320 / PR #380 / PR #435). Set to `true` to iterate over the
+    # full H_EA_list (5x more at m=3, 12x more at m=5). The min-subset is
+    # mathematically sufficient by AM04 IV.4-IV.5 + Quillen injectivity.
+    DETF_E2E_FULL_EA_FAMILY := false;
+fi;
+
+# Perf audit P2: minimum detecting EA family indices (into rec_m.H_EA_list).
+# Same as _K4A_DVAN_EA_FAMILIES in k4a_classify.g — duplicated here so the
+# test doesn't depend on the K-4a stack at load time.
+#   m=2: 3 EAs (one Klein-quadric ruling)
+#   m=3: 6 EAs (PR #320 brute-force min)
+#   m=5: 9 EAs (PR #320 greedy-with-drop-one)
+_DETFE2E_DETECTING_INDICES := rec();;
+_DETFE2E_DETECTING_INDICES.("2") := [3, 2, 5];;
+_DETFE2E_DETECTING_INDICES.("3") := [4, 6, 7, 11, 16, 22];;
+_DETFE2E_DETECTING_INDICES.("5") := [33, 48, 54, 57, 70, 76, 88, 89, 109];;
 
 _DETFE2E_COUNTS := rec(
     m2 := DETF_E2E_M2_TEST_COUNT,
@@ -249,13 +272,14 @@ end;;
 # against torsion_K. res_K has shape k_G x k_{H_K}.
 
 _DETFE2E_RunForM := function(m, test_count_req)
-    local rec_m, setup_G, k_G, n_pass, n_fail, results, t0_m, wall_m,
+    local rec_m, setup_G, k_G, n_pass, n_fail, t0_m, wall_m,
           i, omega_vec, t0_i, wall_i, branches_detected, branches_skipped,
-          j, ea_setup, ea_H, v_EA, branch_EA, v_D8, branch_D8, v_Q8,
+          j, jj, ea_setup, ea_H, v_EA, branch_EA, v_D8, branch_D8, v_Q8,
           branch_Q8, all_branches_trivial, branch_dets, label,
-          test_count, anchor_omega, anchor_res, results_m,
-          omega_int_EA, omega_int_D8, omega_int_Q8, anchor_all_trivial,
-          n_anchor_pass;
+          test_count, results_m, ea_indices, ea_subset, ea_setups,
+          ea_labels, ea_torsions, ea_res_T, setup_D8, setup_Q8,
+          res_D8_T, res_Q8_T, key, anchor_all_trivial, n_anchor_pass,
+          row;
 
     Print("\n=================================================================\n");
     Print("=== m = ", m, " : E2E injectivity through classifier pipeline ===\n");
@@ -271,10 +295,23 @@ _DETFE2E_RunForM := function(m, test_count_req)
     rec_m := BuildRestrictionMatrices(m, "hap");
     setup_G := rec_m.setup_G;
     k_G := setup_G.num_generators;
+
+    # ---- Perf audit P2: select detecting EA subset ----
+    key := String(m);
+    if DETF_E2E_FULL_EA_FAMILY = true
+       or not IsBound(_DETFE2E_DETECTING_INDICES.(key)) then
+        ea_indices := [1..Length(rec_m.H_EA_list)];
+    else
+        ea_indices := _DETFE2E_DETECTING_INDICES.(key);
+    fi;
+
     Print("  E_+(", m, "): |G| = ", Order(rec_m.G),
           ", k_G = ", k_G,
           ", H_EA_list len = ", Length(rec_m.H_EA_list),
-          ", Q_8 present = ", rec_m.H_Q8 <> fail, "\n");
+          ", EA subset = ", Length(ea_indices), "/", Length(rec_m.H_EA_list),
+          " (", If_(DETF_E2E_FULL_EA_FAMILY, "full", "min-detecting"), ")",
+          ", Q_8 present = ", rec_m.H_Q8 <> fail,
+          ", DETF_E2E_FAST_ABELIAN = ", DETF_E2E_FAST_ABELIAN, "\n");
 
     test_count := Minimum(test_count_req, k_G);
     if test_count < test_count_req then
@@ -283,46 +320,56 @@ _DETFE2E_RunForM := function(m, test_count_req)
               "; capping at ", test_count, "\n");
     fi;
 
+    # ---- Perf audit P1+P4+P7: precompute outside the generator loop ----
+    ea_subset := List(ea_indices, j -> rec_m.H_EA_list[j]);
+    ea_setups := List(ea_subset, h -> SetupCohomology3(h));
+    ea_labels := List(ea_indices,
+                      j -> Concatenation("EA_", String(j)));
+    ea_torsions := List(ea_indices, j -> rec_m.torsion_EA_list[j]);
+    # Perf audit P6: store rows of res_K transposed-style; with the unit-
+    # vector convention `omega_vec * res_K` reduces to `res_K[i]` (the i-th
+    # row of res_K, indexing into the k_G-dimensional input space).
+    ea_res_T := List(ea_indices, j -> rec_m.res_EA_list[j]);
+    setup_D8 := SetupCohomology3(rec_m.H_D8);
+    res_D8_T := rec_m.res_D8;
+    if rec_m.H_Q8 <> fail then
+        setup_Q8 := SetupCohomology3(rec_m.H_Q8);
+        res_Q8_T := rec_m.res_Q8;
+    fi;
+
     n_pass := 0;
     n_fail := 0;
     n_anchor_pass := 0;
     results_m := [];
 
     # ---- omega_vec = 0 anchor: every branch should report trivial ----
+    # Perf audit: anchor's v_K is the zero vector for every branch, so
+    # _DETFE2E_BranchDispatch short-circuits via `ForAll(v_K, x -> x = 0)`.
+    # No modular-data builds.
     Print("\n  --- omega_vec = 0 anchor ---\n");
-    anchor_omega := ListWithIdenticalEntries(k_G, 0);
     t0_i := Runtime();
     branch_dets := [];
     anchor_all_trivial := true;
-    for j in [1..Length(rec_m.H_EA_list)] do
-        ea_H := rec_m.H_EA_list[j];
-        ea_setup := SetupCohomology3(ea_H);
-        omega_int_EA := anchor_omega * rec_m.res_EA_list[j];
-        v_EA := List([1..Length(omega_int_EA)], k ->
-            omega_int_EA[k] mod rec_m.torsion_EA_list[j][k]);
+    for jj in [1..Length(ea_subset)] do
+        v_EA := ListWithIdenticalEntries(Length(ea_torsions[jj]), 0);
         branch_EA := _DETFE2E_BranchDispatch(
-            ea_H, ea_setup, v_EA,
-            Concatenation("EA_", String(j)));
+            ea_subset[jj], ea_setups[jj], v_EA, ea_labels[jj]);
         Add(branch_dets, branch_EA);
         if branch_EA.detected_nontrivial then
             anchor_all_trivial := false;
         fi;
     od;
-    omega_int_D8 := anchor_omega * rec_m.res_D8;
-    v_D8 := List([1..Length(omega_int_D8)], k ->
-        omega_int_D8[k] mod rec_m.torsion_D8[k]);
+    v_D8 := ListWithIdenticalEntries(Length(rec_m.torsion_D8), 0);
     branch_D8 := _DETFE2E_BranchDispatch(
-        rec_m.H_D8, SetupCohomology3(rec_m.H_D8), v_D8, "D_8");
+        rec_m.H_D8, setup_D8, v_D8, "D_8");
     Add(branch_dets, branch_D8);
     if branch_D8.detected_nontrivial then
         anchor_all_trivial := false;
     fi;
     if rec_m.H_Q8 <> fail then
-        omega_int_Q8 := anchor_omega * rec_m.res_Q8;
-        v_Q8 := List([1..Length(omega_int_Q8)], k ->
-            omega_int_Q8[k] mod rec_m.torsion_Q8[k]);
+        v_Q8 := ListWithIdenticalEntries(Length(rec_m.torsion_Q8), 0);
         branch_Q8 := _DETFE2E_BranchDispatch(
-            rec_m.H_Q8, SetupCohomology3(rec_m.H_Q8), v_Q8, "Q_8");
+            rec_m.H_Q8, setup_Q8, v_Q8, "Q_8");
         Add(branch_dets, branch_Q8);
         if branch_Q8.detected_nontrivial then
             anchor_all_trivial := false;
@@ -351,23 +398,20 @@ _DETFE2E_RunForM := function(m, test_count_req)
 
     # ---- e_i unit vectors ----
     for i in [1..test_count] do
-        omega_vec := ListWithIdenticalEntries(k_G, 0);
-        omega_vec[i] := 1;
         t0_i := Runtime();
-
         branches_detected := [];
         branches_skipped := [];
         branch_dets := [];
 
-        for j in [1..Length(rec_m.H_EA_list)] do
-            ea_H := rec_m.H_EA_list[j];
-            ea_setup := SetupCohomology3(ea_H);
-            omega_int_EA := omega_vec * rec_m.res_EA_list[j];
-            v_EA := List([1..Length(omega_int_EA)], k ->
-                omega_int_EA[k] mod rec_m.torsion_EA_list[j][k]);
+        # Perf audit P6: for omega_vec = e_i (one-hot), the matvec
+        # `omega_vec * res_K` equals row i of res_K. Skip the matvec and
+        # index directly. The res_K matrices have shape k_G x k_H_K.
+        for jj in [1..Length(ea_subset)] do
+            row := ea_res_T[jj][i];
+            v_EA := List([1..Length(row)],
+                k -> row[k] mod ea_torsions[jj][k]);
             branch_EA := _DETFE2E_BranchDispatch(
-                ea_H, ea_setup, v_EA,
-                Concatenation("EA_", String(j)));
+                ea_subset[jj], ea_setups[jj], v_EA, ea_labels[jj]);
             Add(branch_dets, branch_EA);
             if branch_EA.skipped then
                 Add(branches_skipped, branch_EA.branch_label);
@@ -376,11 +420,11 @@ _DETFE2E_RunForM := function(m, test_count_req)
             fi;
         od;
 
-        omega_int_D8 := omega_vec * rec_m.res_D8;
-        v_D8 := List([1..Length(omega_int_D8)], k ->
-            omega_int_D8[k] mod rec_m.torsion_D8[k]);
+        row := res_D8_T[i];
+        v_D8 := List([1..Length(row)],
+            k -> row[k] mod rec_m.torsion_D8[k]);
         branch_D8 := _DETFE2E_BranchDispatch(
-            rec_m.H_D8, SetupCohomology3(rec_m.H_D8), v_D8, "D_8");
+            rec_m.H_D8, setup_D8, v_D8, "D_8");
         Add(branch_dets, branch_D8);
         if branch_D8.skipped then
             Add(branches_skipped, branch_D8.branch_label);
@@ -389,11 +433,11 @@ _DETFE2E_RunForM := function(m, test_count_req)
         fi;
 
         if rec_m.H_Q8 <> fail then
-            omega_int_Q8 := omega_vec * rec_m.res_Q8;
-            v_Q8 := List([1..Length(omega_int_Q8)], k ->
-                omega_int_Q8[k] mod rec_m.torsion_Q8[k]);
+            row := res_Q8_T[i];
+            v_Q8 := List([1..Length(row)],
+                k -> row[k] mod rec_m.torsion_Q8[k]);
             branch_Q8 := _DETFE2E_BranchDispatch(
-                rec_m.H_Q8, SetupCohomology3(rec_m.H_Q8), v_Q8, "Q_8");
+                rec_m.H_Q8, setup_Q8, v_Q8, "Q_8");
             Add(branch_dets, branch_Q8);
             if branch_Q8.skipped then
                 Add(branches_skipped, branch_Q8.branch_label);
