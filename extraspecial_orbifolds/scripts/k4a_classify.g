@@ -163,8 +163,18 @@
 _k4a_self := INPUT_FILENAME();;
 _k4a_dir := fail;;
 if _k4a_self <> fail and _k4a_self <> "stream" then
-    _k4a_dir := _k4a_self{[1..Length(_k4a_self)
-                            - Length("/k4a_classify.g")]};
+    if Length(_k4a_self) > Length("/k4a_classify.g") then
+        _k4a_dir := _k4a_self{[1..Length(_k4a_self)
+                                - Length("/k4a_classify.g")]};
+    else
+        # INPUT_FILENAME returned just the basename — fall back to CWD.
+        _k4a_dir := Filename(DirectoryCurrent(), "");
+        # Filename(DirectoryCurrent(), "") ends with "/"; strip.
+        if Length(_k4a_dir) > 0
+           and _k4a_dir[Length(_k4a_dir)] = '/' then
+            _k4a_dir := _k4a_dir{[1..Length(_k4a_dir) - 1]};
+        fi;
+    fi;
 fi;;
 
 # Helper: try to Read a sibling file if a given global is not yet bound.
@@ -283,7 +293,8 @@ _K4A_DVAN_EA_FAMILIES.("5") := [33, 48, 54, 57, 70, 76, 88, 89, 109];;
 # produced the file. `_DETF_BuildSetupG_LHS(m)` is deterministic given
 # `m`, so a fresh call reconstructs a compatible parent group.
 LoadDVANEAFamily := function(m)
-    local result_path, dvan_result, setup_G, G, subgroups;
+    local result_path, dvan_result, setup_G, G, fam_pcgs, subgroups,
+          gen_tuples;
     if _k4a_dir = fail then
         return fail;
     fi;
@@ -293,9 +304,6 @@ LoadDVANEAFamily := function(m)
     if not IsExistingFile(result_path) then
         return fail;
     fi;
-    # The file binds a top-level `dvan_m<m>_result` global (e.g.
-    # `dvan_m7_result`) when Read; for forward compat we also check
-    # the generic `dvan_result` name.
     Read(result_path);
     dvan_result := fail;
     if IsBoundGlobal(Concatenation("dvan_m", String(m), "_result")) then
@@ -304,22 +312,32 @@ LoadDVANEAFamily := function(m)
     elif IsBoundGlobal("dvan_result") then
         dvan_result := ValueGlobal("dvan_result");
     fi;
-    if dvan_result = fail then
+    if dvan_result = fail or not IsRecord(dvan_result) then
         return fail;
     fi;
-    if not IsRecord(dvan_result)
-       or not IsBound(dvan_result.ea_generators) then
+    # New schema (issue #427 follow-up, exponent-vector serialisation
+    # that round-trips cleanly via PrintTo/Read): ea_generators_exp.
+    # Legacy schema: ea_generators (pc-elements; only loadable when
+    # f1..fn are bound — broken for cross-process Read).
+    if not IsBound(dvan_result.ea_generators_exp)
+       and not IsBound(dvan_result.ea_generators) then
         return fail;
     fi;
-    # Lazy-load the LHS setup helper.
     if not _K4A_LoadSibling("_DETF_BuildSetupG_LHS",
                              "detecting_family_restriction.g") then
         return fail;
     fi;
     setup_G := _DETF_BuildSetupG_LHS(m);
     G := setup_G.group;
-    subgroups := List(dvan_result.ea_generators,
-                      gen_tuple -> Subgroup(G, gen_tuple));
+    if IsBound(dvan_result.ea_generators_exp) then
+        fam_pcgs := FamilyPcgs(G);
+        gen_tuples := List(dvan_result.ea_generators_exp,
+            exp_tuple -> List(exp_tuple,
+                exps -> PcElementByExponentsNC(fam_pcgs, exps)));
+    else
+        gen_tuples := dvan_result.ea_generators;
+    fi;
+    subgroups := List(gen_tuples, gen_tuple -> Subgroup(G, gen_tuple));
     return subgroups;
 end;;
 
