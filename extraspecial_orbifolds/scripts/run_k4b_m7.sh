@@ -157,7 +157,11 @@ ulimit -v $((96 * 1024 * 1024)) 2>/dev/null || true
 echo "[run_k4b] launching gap..." | tee -a "${LOG}"
 
 set +e
-gap -q -b -c "
+# -o 48g: increase GAP's pre-set memory limit. The default (a few GB on
+# macOS Homebrew) is too small for m=7's class-data + spectral build,
+# which can spike to 15-20 GB during ExponentsOfPcElement / OnTuples
+# inside HAP's permutation-group conjugacy enumeration.
+gap -q -b -o 48g -c "
     Read(\"../../src/modular_data.g\");;
     Read(\"k4a_classify.g\");;
     result := K4aClassify(7);;
