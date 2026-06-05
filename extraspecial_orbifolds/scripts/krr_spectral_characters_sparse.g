@@ -599,9 +599,9 @@ end;;
 _BuildGaussCtx := function(h, m)
     local j, ctx, base, n, k, X_mat, ic_mat, feasMat, F_mat,
           solveMap, pivCols, Q1, Q2, Q3, L_mat, BT_mat, BT_radmat,
-          BT_npod, BT_npev, radLen, dimND, halfND, sht,
+          BT_T, radLen, dimND, halfND, sht,
           R, H, RT, HT, Mhh, MhhSym, AT, A, kerLen, t_rad,
-          row, col, i, t1, t2;
+          col, i, t1, t2, odd_col, even_col, feasLeft, feasRight;
     for j in [1..Length(_gaussCtxKeys)] do
         if IsIdenticalObj(_gaussCtxKeys[j], h) then
             return _gaussCtxVals[j];
@@ -625,7 +625,8 @@ _BuildGaussCtx := function(h, m)
     # ---- Build X_mat (k x n): x(c) = c * X_mat ----
     # x(c)[p_j] = solveMap[j] . (c, c) = c · (left+right halves of solveMap[j]).
     # x(c)[non-pivot col] = 0.
-    X_mat := List([1..k], i -> List([1..n], j -> 0));
+    # Perf #445 G1: NullMat is compiled.
+    X_mat := NullMat(k, n);
     for j in [1..Length(pivCols)] do
         col := pivCols[j];
         for i in [1..k] do
@@ -633,15 +634,21 @@ _BuildGaussCtx := function(h, m)
         od;
     od;
     # ---- ic_mat (k x n): ic(c) = c * ic_mat = (0_k, c) ----
-    ic_mat := List([1..k], i -> List([1..n], j -> 0));
+    ic_mat := NullMat(k, n);
     for i in [1..k] do
         ic_mat[i][k + i] := 1;
     od;
     # ---- F_mat (#feas x k): feasibility constraint F_mat * c^T = 0 ----
     # feasMat[r] . (c, c) = sum_i feasMat[r][i] * c[i] + feasMat[r][k+i] * c[i]
     #                   = sum_i (feasMat[r][i] + feasMat[r][k+i]) * c[i].
-    F_mat := List([1..Length(feasMat)], i ->
-        List([1..k], j -> (feasMat[i][j] + feasMat[i][k + j]) mod 2));
+    # Perf #445 G2: column-slice + compiled matrix add + mod.
+    if Length(feasMat) > 0 then
+        feasLeft  := feasMat{[1..Length(feasMat)]}{[1..k]};
+        feasRight := feasMat{[1..Length(feasMat)]}{[k + 1..2 * k]};
+        F_mat := (feasLeft + feasRight) mod 2;
+    else
+        F_mat := [];
+    fi;
     # ---- Q1 = X_mat * Mhh * X_mat^T (k x k) ----
     Q1 := F2_Mul(F2_Mul(X_mat, Mhh), F2_Trans(X_mat));
     # ---- Q2 = X_mat * H * R * ic_mat^T (k x k) ----
@@ -651,34 +658,39 @@ _BuildGaussCtx := function(h, m)
     if kerLen > 0 then
         t1 := F2_Mul(F2_Mul(X_mat, MhhSym), AT);
         t2 := F2_Mul(F2_Mul(F2_Mul(ic_mat, RT), HT), AT);
-        L_mat := List([1..k], i ->
-            List([1..kerLen], j -> (t1[i][j] + t2[i][j]) mod 2));
+        # Perf #445 G5: compiled matrix add + mod replaces nested closure.
+        L_mat := (t1 + t2) mod 2;
         # ---- BT_mat = L_mat * Sh^T (k x kerLen) ----
         BT_mat := F2_Mul(L_mat, sht.ShT);
+        # Perf #445 G6/G7: precompute BT_T = TransposedMat(BT_mat) once
+        # so column extracts (rows of BT_T) are O(1) reads instead of
+        # `List([1..k], j -> BT_mat[j][col])` closure dispatch per call.
+        BT_T := TransposedMat(BT_mat);
         # Radical-match constraint: BT_radmat * c^T = t_rad where
         # BT_radmat[r] = BT_mat[*, r] for r in [1..radLen].
-        BT_radmat := List([1..radLen], r -> List([1..k], i -> BT_mat[i][r]));
+        BT_radmat := BT_T{[1..radLen]};
         t_rad := sht.t{[1..radLen]};
         # hpair(c) sum: build Q3 = sum_i BT_odd[i] * BT_even[i]^T.
-        Q3 := List([1..k], i -> List([1..k], j -> 0));
+        # Perf #445 G3: outer-product accumulation via compiled matmul.
+        # OLD (k=64 at m=7): O(k^2 * halfND) interpreted mod-2 muls.
+        # NEW: halfND compiled k x 1 * 1 x k matmuls + one final mod 2.
+        # halfND = sht.nDimND / 2 -> sht.nDimND nonzero columns in pairs.
+        Q3 := NullMat(k, k);
         for i in [1..halfND] do
-            BT_npod := List([1..k], j -> BT_mat[j][radLen + 2 * i - 1]);
-            BT_npev := List([1..k], j -> BT_mat[j][radLen + 2 * i]);
-            for row in [1..k] do
-                for col in [1..k] do
-                    Q3[row][col] := (Q3[row][col]
-                        + BT_npod[row] * BT_npev[col]) mod 2;
-                od;
-            od;
+            odd_col := radLen + 2 * i - 1;
+            even_col := radLen + 2 * i;
+            Q3 := Q3 + TransposedMat([BT_T[odd_col]]) * [BT_T[even_col]];
         od;
+        Q3 := Q3 mod 2;
     else
         L_mat := [];
         BT_mat := [];
         BT_radmat := [];
         t_rad := [];
-        Q3 := List([1..k], i -> List([1..k], j -> 0));
+        Q3 := NullMat(k, k);
     fi;
     # ---- Q = Q1 + Q2 + Q3 (k x k) ----
+    # Perf #445 G4: compiled matrix add + mod replaces nested closure.
     ctx := rec(
         h := h, m := m, n := n, k := k,
         kerLen := kerLen,
@@ -688,8 +700,7 @@ _BuildGaussCtx := function(h, m)
         F_mat := F_mat,
         BT_radmat := BT_radmat,
         t_rad := t_rad,
-        Q := List([1..k], i ->
-            List([1..k], j -> (Q1[i][j] + Q2[i][j] + Q3[i][j]) mod 2))
+        Q := (Q1 + Q2 + Q3) mod 2
     );
     Add(_gaussCtxKeys, h);
     Add(_gaussCtxVals, ctx);
@@ -944,16 +955,17 @@ TraceOnOmega0Gauss := function(h, m)
     # Cross part: c_0 (Q + Q^T) (y B_W)^T = c_0 (Q + Q^T) B_W^T y^T.
     # As a linear form in y, L_y = c_0 (Q + Q^T) B_W^T  (row of length dimW).
     B_W_mat := B_W;   # dimW x k
-    Q_sym := List([1..k], i ->
-        List([1..k], j -> (Q[i][j] + Q[j][i]) mod 2));
+    # Perf #445: compiled matrix transpose + add + mod replaces O(k^2)
+    # nested closure for the symmetric part of Q.
+    Q_sym := (Q + TransposedMat(Q)) mod 2;
     # L_y = c_0 * Q_sym * B_W^T  (row of length dimW), reduce mod 2.
     L_y := F2_VMul(F2_VMul(c_0, Q_sym), F2_Trans(B_W_mat));
     # Q_psi (dimW x dimW): B_W * Q * B_W^T  + diag(L_y) (linear-in-y as
     # quadratic over F_2).
     BWQ := F2_Mul(B_W_mat, Q);     # dimW x k
     BW_QT_BWT := F2_Mul(BWQ, F2_Trans(B_W_mat));   # dimW x dimW
-    Q_psi := List([1..dimW], i ->
-        List([1..dimW], j -> BW_QT_BWT[i][j]));
+    # Perf #445: MutableCopyMat is compiled.
+    Q_psi := MutableCopyMat(BW_QT_BWT);
     for i in [1..dimW] do
         Q_psi[i][i] := (Q_psi[i][i] + L_y[i]) mod 2;
     od;
