@@ -144,6 +144,12 @@ fi;
 if not IsBoundGlobal("DETF_E2E_M5_TEST_COUNT") then
     DETF_E2E_M5_TEST_COUNT := 10;
 fi;
+if not IsBoundGlobal("DETF_E2E_M7_TEST_COUNT") then
+    # Default 0 (gated). m=7 requires the LHS resolution of E_+(7)
+    # (~17 min cold) + 10 RestrictionMatrixViaHAP calls (~12 s each for
+    # EAs, sub-second for D_8/Q_8). Set to 5 for smoke, 455 for full.
+    DETF_E2E_M7_TEST_COUNT := 0;
+fi;
 # Issue #434: opt-in fast q_ω + b_ω path for the EA branch. Default false
 # (legacy slow path via ComputeModularData + JointPermutationMatcher).
 # When true, the EA branch dispatch uses ClassifyAbelianBranchFast and
@@ -170,15 +176,19 @@ fi;
 #   m=2: 3 EAs (one Klein-quadric ruling)
 #   m=3: 6 EAs (PR #320 brute-force min)
 #   m=5: 9 EAs (PR #320 greedy-with-drop-one)
+#   m=7: all 8 (already the detecting subset; loaded via LoadDVANEAFamily(7)
+#        from computed/dvan_min_family/m7/result.g, salvaged in PR #442).
 _DETFE2E_DETECTING_INDICES := rec();;
 _DETFE2E_DETECTING_INDICES.("2") := [3, 2, 5];;
 _DETFE2E_DETECTING_INDICES.("3") := [4, 6, 7, 11, 16, 22];;
 _DETFE2E_DETECTING_INDICES.("5") := [33, 48, 54, 57, 70, 76, 88, 89, 109];;
+_DETFE2E_DETECTING_INDICES.("7") := [1, 2, 3, 4, 5, 6, 7, 8];;
 
 _DETFE2E_COUNTS := rec(
     m2 := DETF_E2E_M2_TEST_COUNT,
     m3 := DETF_E2E_M3_TEST_COUNT,
-    m5 := DETF_E2E_M5_TEST_COUNT
+    m5 := DETF_E2E_M5_TEST_COUNT,
+    m7 := DETF_E2E_M7_TEST_COUNT
 );;
 
 # ---- Branch dispatch ---------------------------------------------------
@@ -271,6 +281,65 @@ end;;
 # (detecting_family_vanish.g): hom_omega * res_K, then per-column mod
 # against torsion_K. res_K has shape k_G x k_{H_K}.
 
+# m=7 custom setup: BuildRestrictionMatrices(7, "hap") OOMs because it
+# enumerates 9.8M Lagrangians eagerly. We bypass that and use only the
+# 8 chosen EAs from LoadDVANEAFamily(7) (PR #442 / result.g) plus D_8
+# and Q_8 sections. Builds a rec compatible with the rest of the test.
+_DETFE2E_BuildM7Setup := function()
+    local setup_G, G, ea_subgroups, H_D8, H_Q8,
+          H_EA_list, ctx_EA_list, res_EA_list, torsion_EA_list,
+          ctx_D8, res_D8, ctx_Q8, res_Q8, i;
+    setup_G := _DETF_BuildSetupG_LHS(7);
+    G := setup_G.group;
+    ea_subgroups := LoadDVANEAFamily(7);
+    if ea_subgroups = fail then
+        Error("_DETFE2E_BuildM7Setup: LoadDVANEAFamily(7) returned fail. ",
+              "Check computed/dvan_min_family/m7/result.g has ",
+              "ea_generators_exp (PR #442).");
+    fi;
+    H_D8 := _DETF_FindD8In(G, 7);
+    H_Q8 := _DETF_FindQ8In(G, 7);
+    H_EA_list := ea_subgroups;
+    ctx_EA_list := [];
+    res_EA_list := [];
+    for i in [1..Length(H_EA_list)] do
+        Add(ctx_EA_list, SubgroupCohomologyContext(H_EA_list[i]));
+        Add(res_EA_list, RestrictionMatrixViaHAP(
+            setup_G, ctx_EA_list[i],
+            SubgroupInclusion(H_EA_list[i], G)));
+    od;
+    ctx_D8 := SubgroupCohomologyContext(H_D8);
+    res_D8 := RestrictionMatrixViaHAP(setup_G, ctx_D8,
+                                       SubgroupInclusion(H_D8, G));
+    if H_Q8 <> fail then
+        ctx_Q8 := SubgroupCohomologyContext(H_Q8);
+        res_Q8 := RestrictionMatrixViaHAP(setup_G, ctx_Q8,
+                                           SubgroupInclusion(H_Q8, G));
+    else
+        ctx_Q8 := fail;
+        res_Q8 := fail;
+    fi;
+    torsion_EA_list := List(ctx_EA_list, c -> c.torsion);
+    return rec(
+        m := 7,
+        source := "m7-custom",
+        G := G,
+        setup_G := setup_G,
+        H_EA_list := H_EA_list,
+        ctx_EA_list := ctx_EA_list,
+        res_EA_list := res_EA_list,
+        torsion_EA_list := torsion_EA_list,
+        H_D8 := H_D8,
+        ctx_D8 := ctx_D8,
+        res_D8 := res_D8,
+        torsion_D8 := ctx_D8.torsion,
+        H_Q8 := H_Q8,
+        ctx_Q8 := ctx_Q8,
+        res_Q8 := res_Q8,
+        torsion_Q8 := If_(ctx_Q8 = fail, fail, ctx_Q8.torsion)
+    );
+end;;
+
 _DETFE2E_RunForM := function(m, test_count_req)
     local rec_m, setup_G, k_G, n_pass, n_fail, t0_m, wall_m,
           i, omega_vec, t0_i, wall_i, branches_detected, branches_skipped,
@@ -292,7 +361,11 @@ _DETFE2E_RunForM := function(m, test_count_req)
     fi;
 
     t0_m := Runtime();
-    rec_m := BuildRestrictionMatrices(m, "hap");
+    if m = 7 then
+        rec_m := _DETFE2E_BuildM7Setup();
+    else
+        rec_m := BuildRestrictionMatrices(m, "hap");
+    fi;
     setup_G := rec_m.setup_G;
     k_G := setup_G.num_generators;
 
@@ -498,6 +571,7 @@ Print("=================================================================\n");
 Print("config: m2=", _DETFE2E_COUNTS.m2,
       ", m3=", _DETFE2E_COUNTS.m3,
       ", m5=", _DETFE2E_COUNTS.m5,
+      ", m7=", _DETFE2E_COUNTS.m7,
       " unit vectors per m, ",
       "DETF_E2E_FAST_ABELIAN = ", DETF_E2E_FAST_ABELIAN, "\n");
 
@@ -507,6 +581,7 @@ _DETFE2E_PER_M_RESULTS := [];;
 Add(_DETFE2E_PER_M_RESULTS, _DETFE2E_RunForM(2, _DETFE2E_COUNTS.m2));
 Add(_DETFE2E_PER_M_RESULTS, _DETFE2E_RunForM(3, _DETFE2E_COUNTS.m3));
 Add(_DETFE2E_PER_M_RESULTS, _DETFE2E_RunForM(5, _DETFE2E_COUNTS.m5));
+Add(_DETFE2E_PER_M_RESULTS, _DETFE2E_RunForM(7, _DETFE2E_COUNTS.m7));
 
 _DETFE2E_WALL_TOTAL := (Runtime() - _DETFE2E_T_TOTAL) / 1000.;;
 
