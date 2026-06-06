@@ -491,11 +491,14 @@ TranslateSpectralDataToEPlus := function(arg)
         fi;
         # num_irreps mirrors the EU side directly (same per-class
         # value, since the per-class centraliser is isomorphic via
-        # psi^{-1}).
-        ep_num_irreps := ShallowCopy(idx_EU.num_irreps);
+        # psi^{-1}). We reference the lists directly (no ShallowCopy)
+        # because at m=7, `idx_EU.global_to_local` has ~268M entries
+        # and a shallow copy would allocate the entire outer plist
+        # again (~2 GB). Consumers treat these fields as read-only.
+        ep_num_irreps := idx_EU.num_irreps;
         ep_rank := idx_EU.rank;
-        ep_global_offset := ShallowCopy(idx_EU.global_offset);
-        ep_global_to_local := ShallowCopy(idx_EU.global_to_local);
+        ep_global_offset := idx_EU.global_offset;
+        ep_global_to_local := idx_EU.global_to_local;
         # Note: we do NOT set `is_closed_form := true` on idx_EP, even
         # though the EU-side was closed-form. The reason: the closed-form
         # irrep evaluator `EPlusBuildAllCharacterRows` requires class
