@@ -160,6 +160,17 @@ set +e
 gap -q -b -c "
     Read(\"../../src/modular_data.g\");;
     Read(\"k4a_classify.g\");;
+    # Issue #449: enable the closed-form q_omega + b_omega abelian-branch
+    # fast path for the multi-EA spectral E branch. At m=5 (|H|=64), the
+    # slow path is O(|H|^4) = 16M ops per EA; the fast path is O(|H|^3)
+    # ~= 256K ops per EA. With 9 EAs in the D-VAN min family this saves
+    # ~50 min of wall time. The fast path uses a zero-cocycle stub that
+    # the spectral helper sets on each per-EA `restricted` record; the
+    # math is correct at default opts (no explicit ω) because the H-side
+    # restriction uses H's own untwisted baseline (T4a ε = 1).
+    _K4A_USE_FAST_ABELIAN_BRANCH := true;;
+    Print(\"[run_k4b_m5] _K4A_USE_FAST_ABELIAN_BRANCH = \",
+          _K4A_USE_FAST_ABELIAN_BRANCH, \"\n\");;
     result := K4aClassify(5);;
 
     # Persist the result. The full record contains very heavy fields
@@ -185,15 +196,40 @@ gap -q -b -c "
             group_order    := Order(result.spectral_data.sparse.group)
         )
     );;
-    persist.E_class := rec(
-        is_abelian          := result.E_class.is_abelian,
-        is_coboundary       := result.E_class.is_coboundary,
-        modular_ct_rank     := Length(result.E_class.modular_ct.S),
-        modular_untwisted_rank :=
-            Length(result.E_class.modular_untwisted.S),
-        match_ok            := result.E_class.match.ok,
-        wall_seconds        := result.E_class.wall_seconds
-    );;
+    # Issue #449: at m >= 5 with the multi-EA spectral E-branch dispatch,
+    # result.E_class is the aggregate record from
+    # _K4A_ClassifySpectralEBranchMulti — it does NOT have .modular_ct,
+    # .modular_untwisted, or .match fields (those would live on each
+    # per_ea_results[i] sub-rec, but are not built on the fast path).
+    # The aggregate carries .per_ea_results + .modular_ct_rank +
+    # .modular_untwisted_rank + .spectral_multi_ea. Persist accordingly.
+    if IsBound(result.E_class.spectral_multi_ea)
+       and result.E_class.spectral_multi_ea = true then
+        persist.E_class := rec(
+            is_abelian          := result.E_class.is_abelian,
+            is_coboundary       := result.E_class.is_coboundary,
+            modular_ct_rank     := result.E_class.modular_ct_rank,
+            modular_untwisted_rank :=
+                result.E_class.modular_untwisted_rank,
+            match_ok            := result.E_class.is_coboundary,
+            spectral_multi_ea   := true,
+            family_source       := result.E_class.family_source,
+            per_ea_results      := result.E_class.per_ea_results,
+            wall_seconds        := result.E_class.wall_seconds
+        );;
+    else
+        # Single-EA record (legacy path; only triggers if the D-VAN family
+        # is unavailable, which the new dispatch will warn about loudly).
+        persist.E_class := rec(
+            is_abelian          := result.E_class.is_abelian,
+            is_coboundary       := result.E_class.is_coboundary,
+            modular_ct_rank     := Length(result.E_class.modular_ct.S),
+            modular_untwisted_rank :=
+                Length(result.E_class.modular_untwisted.S),
+            match_ok            := result.E_class.match.ok,
+            wall_seconds        := result.E_class.wall_seconds
+        );;
+    fi;;
     # For D_8 / Q_8 (rank 22, small), keep the full modular_ct so
     # downstream consumers can re-classify if needed. Drop only
     # \`all_matches\` and \`pi\` which are list-typed and well-shaped
