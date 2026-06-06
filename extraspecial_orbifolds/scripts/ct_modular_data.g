@@ -93,6 +93,93 @@ fi;
 
 
 # ============================================================
+# Internal helper: batched per-(class, element) trace_on_W lookup.
+# ============================================================
+#
+# Issue #449 / Audit B4 (was 2026-06-02 A-K4-4):
+# The naive `_CTComputeSBlock` calls `intertwiner_data.trace_on_W(i, k, h)`
+# at the innermost (k, l) loop. For fixed (i, h) the value
+# `trace_on_W(i, k, h)` is INDEPENDENT of the (a, b, k', l') outer iteration
+# state, so we can batch the per-k calls into a single length-Ni vector
+# lookup per (i, h).
+#
+# Quantitative impact:
+#   Before — per (a, b) commuting pair: Ni + Ni × Nj `trace_on_W` calls
+#            (Ni at the eps_chi_b precompute, Ni × Nj inside the l loop).
+#   After  — per (a, b) commuting pair: Ni + Nj `trace_on_W` calls
+#            (one length-Ni chi_vec_b lookup + one length-Nj chi_vec_a
+#            lookup; the inner (k, l) loop becomes scalar arithmetic on
+#            pre-evaluated values).
+# At m=5 K-4b with the |EA|=64 / |D_8|=8 branch, Ni ≈ Nj ≈ 8 and the
+# saving on `trace_on_W` calls per (a, b) is Ni × Nj − Nj = 56 calls
+# per (a, b). At m=7 with |EA|=256, Ni ≈ Nj ≈ 258 so the saving is
+# 258 × 258 − 258 = ~66 250 calls per (a, b).
+#
+# The helper supports three paths in order of preference:
+#  (1) Caller-supplied `trace_on_W_vec(i, h) -> length-Ni vector`.
+#      Hook for future spectral builders that can compute the vector
+#      cheaply in bulk; currently no builder publishes this field but
+#      the protocol is in place.
+#  (2) `EvalIrr` fast-lookup bypass when `intertwiner_data.trace_on_W`
+#      reduces to `EvalIrr(idx, i, *, h)`. Detected via the
+#      `intertwiner_data.trace_on_W_kind` flag set to "evalirr". Single
+#      `ClassIndexInCentraliser(idx, i, h)` call + Ni table reads.
+#  (3) Fallback: invoke `intertwiner_data.trace_on_W(i, k, h)` per
+#      k ∈ [1..Ni]. Same call count Ni as path (2) but goes through
+#      the scalar callable interface — universal correctness regardless
+#      of which builder produced the intertwiner_data.
+#
+# Path (2) detection: we inspect `intertwiner_data.trace_on_W_kind` if
+# set by the caller. Recognised tags:
+#   "evalirr"     -> path (2) bypass for ALL classes (e.g. the output
+#                    of `BuildIntertwinerDataUntwisted`,
+#                    `RestrictTraceOnWToSubgroup`, and
+#                    `RestrictTraceOnWToSubgroupHonourParent`, which
+#                    all return `EvalIrr(idx, i, k, h)` directly per
+#                    `restrict_to_subgroup.g:770-772`).
+# Absent or any other value: fall back to path (3). No correctness
+# difference, just no batching savings on the table-lookup step.
+
+_CTBatchedTraceOnW := function(intertwiner_data, i, h, Ni)
+    local idx, vec, cc_idx, k, kind;
+    # Path (1): caller-supplied batched callable.
+    if IsBound(intertwiner_data.trace_on_W_vec) then
+        return intertwiner_data.trace_on_W_vec(i, h);
+    fi;
+    idx := intertwiner_data.idx;
+    kind := fail;
+    if IsBound(intertwiner_data.trace_on_W_kind) then
+        kind := intertwiner_data.trace_on_W_kind;
+    fi;
+    # Path (2): EvalIrr fast bypass.
+    # `EvalIrr(idx, i, k, h)` decomposes as:
+    #     cc_idx := ClassIndexInCentraliser(idx, i, h);
+    #     return idx.irreps[i][k][cc_idx];
+    # The `cc_idx` is INDEPENDENT of k; the closed-form bypass for
+    # central E_+(m) classes (also triggered inside `EvalIrr`) materialises
+    # `idx.irreps[i]` as a real list-of-rows via `_EnsureClassData`, so the
+    # `[cc_idx]` indexing path is uniform across closed-form and generic
+    # paths once class data is materialised.
+    if kind = "evalirr" then
+        # Force class data to materialise (no-op on subsequent calls
+        # for the same i, including the lazy and closed-form paths).
+        cc_idx := ClassIndexInCentraliser(idx, i, h);
+        vec := EmptyPlist(Ni);
+        for k in [1..Ni] do
+            Add(vec, idx.irreps[i][k][cc_idx]);
+        od;
+        return vec;
+    fi;
+    # Path (3): fallback via the scalar callable.
+    vec := EmptyPlist(Ni);
+    for k in [1..Ni] do
+        Add(vec, intertwiner_data.trace_on_W(i, k, h));
+    od;
+    return vec;
+end;;
+
+
+# ============================================================
 # Internal helper: compute the (i, j) class-pair S-block via the
 # intertwiner_data callables.
 # ============================================================
@@ -111,12 +198,20 @@ fi;
 # multiplies in `intertwiner_data.epsilon`. The eps factor is computed
 # **once per (a, b) pair** (not per (k, l)) since it does not depend on
 # the irreps, only on the group elements.
+#
+# Issue #449 / Audit B4: per-(a, b) batched trace_on_W lookup.
+# For each (i, b_tilde) and (j, a_tilde) we precompute the length-Ni
+# (resp. length-Nj) vector of trace_on_W values ONCE via
+# `_CTBatchedTraceOnW`, then the inner (k, l) loop reads pre-evaluated
+# scalars. This eliminates Ni × Nj − Nj `trace_on_W` calls per (a, b)
+# pair, replacing them with simple list indexing.
 
 _CTComputeSBlock := function(intertwiner_data, i, j)
     local idx, transport, M, Ni, Nj, elts_i, elts_j, ts_i, ts_j,
           ai, bi, a, b, t_a, s_b, b_tilde, a_tilde, k, l, ord,
-          cen_i_elts, c, elt_to_idx_j, eps, eps_chi_b, chi2_val,
-          g_i, g_j, t_i, t_j;
+          cen_i_elts, c, elt_to_idx_j, eps, eps_chi_b,
+          g_i, g_j, t_i, t_j, chi_vec_b, chi_vec_a,
+          chi_vec_b_conj, chi_vec_a_conj, M_k;
 
     idx := intertwiner_data.idx;
     transport := intertwiner_data.transport;
@@ -155,13 +250,18 @@ _CTComputeSBlock := function(intertwiner_data, i, j)
                 b_tilde := t_a^-1 * b * t_a;     # in C_H(g_i)
                 a_tilde := s_b^-1 * a * s_b;     # in C_H(g_j)
                 eps := intertwiner_data.epsilon(g_i, g_j, a, b);
+                # B4: batched per-(class, element) trace_on_W vectors.
+                chi_vec_b := _CTBatchedTraceOnW(intertwiner_data, i,
+                                                 b_tilde, Ni);
+                chi_vec_a := _CTBatchedTraceOnW(intertwiner_data, j,
+                                                 a_tilde, Nj);
+                chi_vec_b_conj := List(chi_vec_b, ComplexConjugate);
+                chi_vec_a_conj := List(chi_vec_a, ComplexConjugate);
                 for k in [1..Ni] do
-                    eps_chi_b := eps * ComplexConjugate(
-                        intertwiner_data.trace_on_W(i, k, b_tilde));
+                    eps_chi_b := eps * chi_vec_b_conj[k];
+                    M_k := M[k];
                     for l in [1..Nj] do
-                        chi2_val := ComplexConjugate(
-                            intertwiner_data.trace_on_W(j, l, a_tilde));
-                        M[k][l] := M[k][l] + eps_chi_b * chi2_val;
+                        M_k[l] := M_k[l] + eps_chi_b * chi_vec_a_conj[l];
                     od;
                 od;
             od;
@@ -179,13 +279,18 @@ _CTComputeSBlock := function(intertwiner_data, i, j)
                 b_tilde := c;                    # = t_a^{-1} * b * t_a
                 a_tilde := s_b^-1 * a * s_b;     # in C_H(g_j)
                 eps := intertwiner_data.epsilon(g_i, g_j, a, b);
+                # B4: batched per-(class, element) trace_on_W vectors.
+                chi_vec_b := _CTBatchedTraceOnW(intertwiner_data, i,
+                                                 b_tilde, Ni);
+                chi_vec_a := _CTBatchedTraceOnW(intertwiner_data, j,
+                                                 a_tilde, Nj);
+                chi_vec_b_conj := List(chi_vec_b, ComplexConjugate);
+                chi_vec_a_conj := List(chi_vec_a, ComplexConjugate);
                 for k in [1..Ni] do
-                    eps_chi_b := eps * ComplexConjugate(
-                        intertwiner_data.trace_on_W(i, k, b_tilde));
+                    eps_chi_b := eps * chi_vec_b_conj[k];
+                    M_k := M[k];
                     for l in [1..Nj] do
-                        chi2_val := ComplexConjugate(
-                            intertwiner_data.trace_on_W(j, l, a_tilde));
-                        M[k][l] := M[k][l] + eps_chi_b * chi2_val;
+                        M_k[l] := M_k[l] + eps_chi_b * chi_vec_a_conj[l];
                     od;
                 od;
             od;

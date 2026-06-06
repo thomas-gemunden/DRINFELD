@@ -82,6 +82,11 @@ BuildIntertwinerDataUntwisted := function(G)
         trace_on_W := function(class_idx, irrep_idx, h)
             return EvalIrr(idx, class_idx, irrep_idx, h);
         end,
+        # B4 (#458 / was 2026-06-02 A-K4-4): trace_on_W reduces to EvalIrr
+        # so consumers (e.g. `_CTBatchedTraceOnW` in `ct_modular_data.g`)
+        # can take the single-`ClassIndexInCentraliser` + Ni-row-reads
+        # fast path without re-paying the per-k closure dispatch.
+        trace_on_W_kind := "evalirr",
         epsilon := function(g1, g2, a, b) return 1; end
     );
 end;;
@@ -112,6 +117,8 @@ BuildIntertwinerDataUntwistedLazy := function(G)
         trace_on_W := function(class_idx, irrep_idx, h)
             return EvalIrr(idx, class_idx, irrep_idx, h);
         end,
+        # B4 (#458 / was 2026-06-02 A-K4-4): see BuildIntertwinerDataUntwisted.
+        trace_on_W_kind := "evalirr",
         epsilon := function(g1, g2, a, b) return 1; end
     );
 end;;

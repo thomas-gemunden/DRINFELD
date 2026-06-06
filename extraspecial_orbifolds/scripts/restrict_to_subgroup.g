@@ -579,6 +579,11 @@ RestrictTraceOnWToSubgroup := function(intertwiner_data_G, H)
         idx          := idx_H,
         transport    := transport_H,
         trace_on_W   := base_data.trace_on_W,
+        # B4 (#458 / was 2026-06-02 A-K4-4): base_data is the output of
+        # `BuildIntertwinerDataUntwisted(H)`, whose `trace_on_W` reduces
+        # to `EvalIrr(idx_H, ...)`. Propagate the kind tag so
+        # `_CTBatchedTraceOnW` can take the fast path.
+        trace_on_W_kind := "evalirr",
         epsilon      := base_data.epsilon,
         class_to_G   := class_to_G,
         parent_G     := G,
@@ -1080,6 +1085,12 @@ RestrictTraceOnWToSubgroupHonourParent := function(intertwiner_data_G, H)
         idx          := idx_H,
         transport    := transport_H,
         trace_on_W   := new_trace_on_W,
+        # B4 (#458 / was 2026-06-02 A-K4-4): `new_trace_on_W` is a thin
+        # wrapper that calls `base_data.trace_on_W(k_H_arg, irrep_idx_H, h_H)`
+        # (see #275 unscaling note above). `base_data` is from
+        # `BuildIntertwinerDataUntwisted(H)`, so `trace_on_W` reduces to
+        # `EvalIrr(idx_H, ...)`. Propagate the kind tag for batched lookup.
+        trace_on_W_kind := "evalirr",
         epsilon      := new_epsilon,
         class_to_G   := class_to_G,
         irrep_index_translation := irrep_index_translation,
