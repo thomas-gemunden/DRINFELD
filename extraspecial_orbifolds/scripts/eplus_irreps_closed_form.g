@@ -321,7 +321,7 @@ end;;
 # ============================================================
 EPlusBuildAllCharacterRows := function(m, class_reps)
     local rows, num_classes, bits_per_class, j, ell_idx, ell,
-          row, parity, i, faithful_row, n, k;
+          row, faithful_row, n, k, i, parities, bits_mat;
     n := 2 ^ m;
     num_classes := Length(class_reps);
     Print("[eplus-irreps] EPlusBuildAllCharacterRows(m = ", m,
@@ -331,6 +331,10 @@ EPlusBuildAllCharacterRows := function(m, class_reps)
     for j in [1..num_classes] do
         Add(bits_per_class, _EPlusBitsOf(m, class_reps[j]));
     od;
+    # Pre-transpose bits as a (num_classes × 2m) integer matrix so each
+    # ell-row product is a compiled vector-matrix multiply rather than
+    # an interpreted O(num_classes × 2m) nested loop.
+    bits_mat := ImmutableMatrix(Integers, bits_per_class);
     rows := EmptyPlist(4 ^ m + 1);
     # Linear irreps.
     for ell_idx in [0..4 ^ m - 1] do
@@ -342,18 +346,11 @@ EPlusBuildAllCharacterRows := function(m, class_reps)
             Add(ell, k mod 2);
             k := QuoInt(k, 2);
         od;
-        row := EmptyPlist(num_classes);
-        for j in [1..num_classes] do
-            parity := 0;
-            for i in [1..2 * m] do
-                parity := parity + ell[i] * bits_per_class[j][i];
-            od;
-            if (parity mod 2) = 0 then
-                Add(row, 1);
-            else
-                Add(row, -1);
-            fi;
-        od;
+        # Compiled vector-matrix product: bits_mat * ell gives a
+        # length-num_classes vector of inner products ell . bits_j.
+        parities := (bits_mat * ell) mod 2;
+        # row[j] = 1 if parity even, -1 if odd. Compiled scalar arith.
+        row := 1 - 2 * parities;
         Add(rows, row);
     od;
     # Faithful irrep.
