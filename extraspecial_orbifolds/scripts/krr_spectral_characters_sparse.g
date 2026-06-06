@@ -651,7 +651,7 @@ _BuildGaussCtx := function(h, m)
           solveMap, pivCols, Q1, Q2, Q3, L_mat, BT_mat, BT_radmat,
           BT_T, radLen, dimND, halfND, sht,
           R, H, RT, HT, Mhh, MhhSym, AT, A, kerLen, t_rad,
-          col, i, t1, t2, odd_col, even_col, feasLeft, feasRight;
+          col, col_vec, i, t1, t2, odd_col, even_col, feasLeft, feasRight;
     for j in [1..Length(_gaussCtxKeys)] do
         if IsIdenticalObj(_gaussCtxKeys[j], h) then
             return _gaussCtxVals[j];
@@ -676,11 +676,16 @@ _BuildGaussCtx := function(h, m)
     # x(c)[p_j] = solveMap[j] . (c, c) = c · (left+right halves of solveMap[j]).
     # x(c)[non-pivot col] = 0.
     # Perf #445 G1: NullMat is compiled.
+    # Perf #456 B6: vectorise the per-i inner loop via compile-primitive
+    # range-slice list add + scalar mod (replaces the P3 anti-pattern of
+    # 64 interpreted entry assignments at m=7). Each iteration now invokes
+    # SUM_LIST_LIST_DEFAULT + LIST_MOD_INT on a length-k vector.
     X_mat := NullMat(k, n);
     for j in [1..Length(pivCols)] do
         col := pivCols[j];
+        col_vec := (solveMap[j]{[1..k]} + solveMap[j]{[k + 1 .. 2 * k]}) mod 2;
         for i in [1..k] do
-            X_mat[i][col] := (solveMap[j][i] + solveMap[j][k + i]) mod 2;
+            X_mat[i][col] := col_vec[i];
         od;
     od;
     # ---- ic_mat (k x n): ic(c) = c * ic_mat = (0_k, c) ----
@@ -1257,8 +1262,8 @@ BuildKRRSpectralCharactersSparse := function(m)
         idx := BuildSimpleIndex(G);
     fi;
     t1 := Runtime();
-    Print("[BKRRSCS] Step 1/4 done in ", (t1 - t0) / 1000.0,
-          " s. |G| = ", idx.order,
+    Print("[BKRRSCS] Step 1/4 done in ", t1 - t0,
+          " ms. |G| = ", idx.order,
           ", num_classes = ", Length(idx.classes), "\n");
     num_classes := Length(idx.classes);
     z := -IdentityMat(n);
@@ -1318,17 +1323,17 @@ BuildKRRSpectralCharactersSparse := function(m)
             if j mod h_progress_step = 0 or j = cls_data.num then
                 Print("[BKRRSCS]   h ", j, "/", cls_data.num,
                       " done (delta wall = ",
-                      (Runtime() - h_progress_t) / 1000.0,
-                      " s for last ", j - h_progress_last,
+                      Runtime() - h_progress_t,
+                      " ms for last ", j - h_progress_last,
                       " h's; cum wall = ",
-                      (Runtime() - t0) / 1000.0, " s)\n");
+                      Runtime() - t0, " ms)\n");
                 h_progress_t := Runtime();
                 h_progress_last := j;
             fi;
         od;
         t1 := Runtime();
-        Print("[BKRRSCS] Step 3/4 done in ", (t1 - t0) / 1000.0,
-              " s (", cls_data.num, " conjugacy classes)\n");
+        Print("[BKRRSCS] Step 3/4 done in ", t1 - t0,
+              " ms (", cls_data.num, " conjugacy classes)\n");
         centraliser_traces[i] := rec(reps := cls_data.reps,
                                       sizes := cls_data.sizes,
                                       traces := traces);
@@ -1337,7 +1342,7 @@ BuildKRRSpectralCharactersSparse := function(m)
         t_mult_0 := Runtime();
         mults := CharacterMultiplicities(idx, i, cls_data, traces);
         Print("[BKRRSCS] Step 4/4 done in ",
-              (Runtime() - t_mult_0) / 1000.0, " s\n");
+              Runtime() - t_mult_0, " ms\n");
         multiplicities[i] := mults;
         character_match[i] := List([1..idx.num_irreps[i]], irrep_idx ->
             rec(standard_irrep_idx := irrep_idx,
