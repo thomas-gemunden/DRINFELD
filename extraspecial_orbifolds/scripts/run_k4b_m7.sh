@@ -163,6 +163,16 @@ set +e
 # inside HAP's permutation-group conjugacy enumeration.
 gap -q -b -o 48g -c "
     Read(\"../../src/modular_data.g\");;
+    # PR #440 / load_compiled.g: pre-bind 23 hot-path modules
+    # (untwisted_modular_data, restrict_to_subgroup, ct_modular_data,
+    # mod2_solver, abelian_branch_fast, ...) via their gac-compiled .so
+    # siblings where available; the loader falls back to interpreted
+    # .g on any missing .so. ~2-5x speedup on EvalIrr / restriction
+    # calls which dominate the m=7 post-spectral E/D_8/Q_8 sweep.
+    # MUST load BEFORE k4a_classify.g so that the latter's
+    # _K4A_LoadSibling(\"BuildSimpleIndex\", ...) checks find the
+    # pre-bound compiled symbols and skip re-reading the interpreted .g.
+    Read(\"load_compiled.g\");;
     Read(\"k4a_classify.g\");;
     # B5 (#449 audit): route the post-spectral E branch through the
     # closed-form q_omega + b_omega path (PR #437). At m = 7 the slow
