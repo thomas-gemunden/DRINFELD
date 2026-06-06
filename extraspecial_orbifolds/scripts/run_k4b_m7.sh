@@ -205,15 +205,36 @@ gap -q -b -o 48g -c "
             group_order    := Order(result.spectral_data.sparse.group)
         )
     );;
-    persist.E_class := rec(
-        is_abelian          := result.E_class.is_abelian,
-        is_coboundary       := result.E_class.is_coboundary,
-        modular_ct_rank     := Length(result.E_class.modular_ct.S),
-        modular_untwisted_rank :=
-            Length(result.E_class.modular_untwisted.S),
-        match_ok            := result.E_class.match.ok,
-        wall_seconds        := result.E_class.wall_seconds
-    );;
+    # Issue #449: at m >= 5 with the multi-EA spectral E-branch dispatch,
+    # result.E_class is the aggregate record from
+    # _K4A_ClassifySpectralEBranchMulti — it does NOT have .modular_ct,
+    # .modular_untwisted, or .match fields. Persist the multi-EA shape
+    # when present, else fall back to single-EA fields.
+    if IsBound(result.E_class.spectral_multi_ea)
+       and result.E_class.spectral_multi_ea = true then
+        persist.E_class := rec(
+            is_abelian          := result.E_class.is_abelian,
+            is_coboundary       := result.E_class.is_coboundary,
+            modular_ct_rank     := result.E_class.modular_ct_rank,
+            modular_untwisted_rank :=
+                result.E_class.modular_untwisted_rank,
+            match_ok            := result.E_class.is_coboundary,
+            spectral_multi_ea   := true,
+            family_source       := result.E_class.family_source,
+            per_ea_results      := result.E_class.per_ea_results,
+            wall_seconds        := result.E_class.wall_seconds
+        );;
+    else
+        persist.E_class := rec(
+            is_abelian          := result.E_class.is_abelian,
+            is_coboundary       := result.E_class.is_coboundary,
+            modular_ct_rank     := Length(result.E_class.modular_ct.S),
+            modular_untwisted_rank :=
+                Length(result.E_class.modular_untwisted.S),
+            match_ok            := result.E_class.match.ok,
+            wall_seconds        := result.E_class.wall_seconds
+        );;
+    fi;;
     # For D_8 / Q_8 (rank 22, small), keep the full modular_ct so
     # downstream consumers can re-classify if needed. Drop only
     # \`all_matches\` and \`pi\` which are list-typed and well-shaped

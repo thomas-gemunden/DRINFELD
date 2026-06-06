@@ -440,6 +440,188 @@ _K4A_ClassifyNonAbelianBranch := function(restricted, H, classifier)
 end;;
 
 
+# Issue #449 followup: spectral-path multi-EA E-branch classifier. The
+# default-opts (lattice_source = false, omega_vec = fail) path at m >= 5
+# previously called `TranslateSpectralDataToEPlus(sparse_data, ea_rec.parent)`
+# followed by a SINGLE-EA `RestrictTraceOnWToSubgroupHonourParent` +
+# `_K4A_ClassifyAbelianBranch` on `ea_rec.subgroup`. This is mathematically
+# non-injective at m >= 3 (single-EA restriction has non-trivial kernel on
+# H^3(E_+(m); U(1))); a "trivial" E_class verdict from a single EA is
+# necessary but NOT sufficient. The audit comment at the dispatch site
+# flags m=3 false-negative kernel basis vectors e_31, e_32, e_33.
+#
+# This helper iterates the same per-EA spectral restriction over D-VAN's
+# minimum detecting family (9 EAs at m=5, 8 EAs at m=7). The aggregate
+# verdict is the AND of all per-EA `is_coboundary` flags. By AM04 +
+# Quillen injectivity (D-VAN `final_ker = 1` at m=5; m=7 sampled to
+# `final_ker = 1` empirically), this is the correct triviality test on
+# the spectral E branch.
+#
+# Inputs:
+#   opts        : the K4aClassify opts record (used only for `.verbose`).
+#   m           : positive integer.
+#   sparse_data : the sparse KRR spectral record produced by
+#                 `BuildKRRSpectralCharactersSparse(m)`. We translate this
+#                 record once to the EP-family of the EA family's parent
+#                 group, then restrict per EA.
+#   ea_family   : either
+#                   (a) a list of integers — D-VAN EA indices into
+#                       `BuildRestrictionMatrices(m, "hap").H_EA_list`
+#                       (m=5 hardcoded path).
+#                   (b) a list of Group objects — D-VAN EA subgroups
+#                       loaded via `LoadDVANEAFamily(m)` (m=7 path).
+#
+# All EAs in the family must live inside a common parent G; this helper
+# obtains G from `MaximalElementaryAbelian_E_plus(m).parent` (indices
+# path) or `_DETF_BuildSetupG_LHS(m).group` (subgroups path), then
+# translates the spectral data ONCE to that G's EP family.
+#
+# Fast path. At default opts (no explicit omega_vec) the per-EA
+# restriction uses H's own untwisted baseline (the T4a downscope ε = 1).
+# We surface a zero-cocycle stub + modulus 1 on `restricted_E` so the
+# `ClassifyAbelianBranchFast` path (gated on `_K4A_USE_FAST_ABELIAN_BRANCH`)
+# can engage and skip the ~6 min ComputeCTModularData + JointPermutationMatcher
+# per EA. At m=5 (|H|=64) this is ~seconds instead of ~54 min total for
+# 9 EAs; at m=7 (|H|=256) the slow path is O(|H|^4) = 4e9 ops per EA so
+# the fast path is essential.
+#
+# Returns: rec(is_abelian := true, is_coboundary := AND over all EAs,
+# per_ea_results := [list of {ea_idx, ea_order, is_coboundary} recs],
+# spectral_multi_ea := true, family_source := "dvan-min-family",
+# wall_seconds, modular_ct_rank, modular_untwisted_rank).
+_K4A_ClassifySpectralEBranchMulti := function(opts, m, sparse_data, ea_family)
+    local t0, restmats, setup_G, G_parent, data_E, per_ea,
+          is_coboundary_all, ea_entry, H_EA, restricted_E, E_class_i,
+          ea_idx, is_index_input, ea_label, last_rank_ct, last_rank_untw,
+          ea_rec_parent, h_ea_list, walltext;
+    t0 := Runtime();
+    # Detect input shape. The two paths differ in (i) how G_parent is
+    # obtained and (ii) how H_EA is extracted from each ea_family entry.
+    is_index_input := not IsEmpty(ea_family) and IsInt(ea_family[1]);
+    if is_index_input then
+        # m<=5 (hardcoded indices) path. We need only the EA enumeration
+        # (`_DETF_AllMaxEAsIn`), not the per-EA cohomology context or
+        # restriction matrices that `BuildRestrictionMatrices` also builds.
+        # Bypassing the full `BuildRestrictionMatrices(m, "hap")` saves
+        # ~5-15 min (resolution + per-EA chain maps) at m=5 that we don't
+        # need for the spectral abelian-branch classification, which
+        # works directly from H_EA subgroup objects.
+        if not IsBoundGlobal("_DETF_AllMaxEAsIn") then
+            if not _K4A_LoadSibling("_DETF_AllMaxEAsIn",
+                                     "detecting_family_restriction.g") then
+                Error("_K4A_ClassifySpectralEBranchMulti: cannot locate ",
+                      "detecting_family_restriction.g for indices-input path");
+            fi;
+        fi;
+        # Use a fresh MaximalElementaryAbelian_E_plus to pin a parent G
+        # (single instance of EPlusGroup(m)) that the EA enumeration
+        # will produce subgroups inside of.
+        ea_rec_parent := MaximalElementaryAbelian_E_plus(m);
+        G_parent := ea_rec_parent.parent;
+        h_ea_list := _DETF_AllMaxEAsIn(G_parent, m);
+        restmats := rec(H_EA_list := h_ea_list);
+    else
+        # m=7 subgroup-input path. Subgroups in ea_family live inside
+        # `_DETF_BuildSetupG_LHS(m).group` by construction
+        # (LoadDVANEAFamily reconstructs them via FamilyPcgs of this G).
+        if not _K4A_LoadSibling("_DETF_BuildSetupG_LHS",
+                                 "detecting_family_restriction.g") then
+            Error("_K4A_ClassifySpectralEBranchMulti: cannot locate ",
+                  "detecting_family_restriction.g for subgroup-input path");
+        fi;
+        setup_G := _DETF_BuildSetupG_LHS(m);
+        G_parent := setup_G.group;
+        restmats := fail;
+    fi;
+    # Translate the parent-G spectral data ONCE to the EP-family of
+    # G_parent. All per-EA restrictions reuse this translated record.
+    data_E := TranslateSpectralDataToEPlus(sparse_data, G_parent);
+    per_ea := [];
+    is_coboundary_all := true;
+    ea_idx := 0;
+    last_rank_ct := fail;
+    last_rank_untw := fail;
+    for ea_entry in ea_family do
+        ea_idx := ea_idx + 1;
+        if is_index_input then
+            H_EA := restmats.H_EA_list[ea_entry];
+            ea_label := ea_entry;
+        else
+            H_EA := ea_entry;
+            ea_label := ea_idx;
+        fi;
+        # Per-EA progress logging (always on — each EA can take up to
+        # ~6 min at m=5 on the slow path; surface for monitoring).
+        Print("  [_K4A_ClassifySpectralEBranchMulti] EA ", ea_idx,
+              "/", Length(ea_family), " (idx ", ea_label,
+              ", |EA| = ", Order(H_EA), ") starting ...\n");
+        restricted_E := RestrictTraceOnWToSubgroupHonourParent(
+            data_E, H_EA);
+        # Issue #449 fast-path stub: surface a zero cocycle + modulus 1
+        # so _K4A_ClassifyAbelianBranch's fast path (gated on
+        # `_K4A_USE_FAST_ABELIAN_BRANCH`) can engage and skip the
+        # ~6 min ComputeCTModularData + JointPermutationMatcher per EA.
+        # At default opts (no explicit omega_vec), the H-side trace
+        # functional IS the H-untwisted baseline (the T4a downscope
+        # ε = 1), so the cocycle is implicitly 0 and is_coboundary = true
+        # trivially. The fast q_omega + b_omega path confirms this in
+        # O(|H|^2) instead of O(|H|^4); at m=7 (|H|=256) this is
+        # essential for tractability.
+        restricted_E.omega_cocycle :=
+            function(x, y, z) return 0; end;
+        restricted_E.modulus := 1;
+        E_class_i := _K4A_ClassifyAbelianBranch(restricted_E, H_EA);
+        Add(per_ea, rec(
+            ea_idx        := ea_label,
+            ea_order      := Order(H_EA),
+            is_coboundary := E_class_i.is_coboundary
+        ));
+        if E_class_i.is_coboundary <> true then
+            is_coboundary_all := false;
+        fi;
+        # Keep the LAST per-EA rank for the aggregate record (the
+        # all-EA modular_ct ranks are identical since all EAs are
+        # (Z/2)^(m+1)). On the fast path, modular_ct is not built, so
+        # we use the formula |H|^2 = (2^(m+1))^2 for the rank.
+        if IsBound(E_class_i.modular_ct) then
+            last_rank_ct := Length(E_class_i.modular_ct.S);
+        else
+            last_rank_ct := Order(H_EA) ^ 2;
+        fi;
+        if IsBound(E_class_i.modular_untwisted) then
+            last_rank_untw := Length(E_class_i.modular_untwisted.S);
+        else
+            last_rank_untw := Order(H_EA) ^ 2;
+        fi;
+        # Fast path returns wall_ms; slow path returns wall_seconds.
+        # Render whichever was set.
+        if IsBound(E_class_i.wall_seconds) then
+            walltext := Concatenation(
+                String(E_class_i.wall_seconds), " s");
+        elif IsBound(E_class_i.wall_ms) then
+            walltext := Concatenation(
+                String(E_class_i.wall_ms), " ms, fast path");
+        else
+            walltext := "wall N/A";
+        fi;
+        Print("  [_K4A_ClassifySpectralEBranchMulti] EA ", ea_idx,
+              "/", Length(ea_family), " (idx ", ea_label,
+              "): is_coboundary = ", E_class_i.is_coboundary,
+              " (", walltext, ")\n");
+    od;
+    return rec(
+        is_abelian             := true,
+        is_coboundary          := is_coboundary_all,
+        per_ea_results         := per_ea,
+        spectral_multi_ea      := true,
+        family_source          := "dvan-min-family",
+        modular_ct_rank        := last_rank_ct,
+        modular_untwisted_rank := last_rank_untw,
+        wall_seconds           := _K4A_SecsSince(t0)
+    );
+end;;
+
+
 # Issue #333 followup: E-branch classifier over D-VAN's minimum detecting
 # family of maximal EAs. Replaces the single-EA `_K4A_ClassifyAbelianBranch`
 # when `opts.lattice_source = true` and `omega_vec != 0`. At single-EA the
@@ -1053,13 +1235,34 @@ K4aClassify := function(arg)
     # At m < 5 the legacy path (BuildIntertwinerDataUntwisted +
     # RestrictTraceOnWToSubgroup) is retained — it is the K-4a-T7
     # anchor and changing it would invalidate #201's regression test.
-    # Issue #333 followup: at omega != 0 the single-EA E branch has a
-    # non-trivial kernel (e.g. e_31, e_32, e_33 at m=3 give false-negative
-    # `trivial` verdicts). Route to multi-EA classifier over D-VAN's
-    # minimum detecting family when a hardcoded family is available.
-    if opts.lattice_source
-       and (not _K4A_OmegaIsZero(opts.omega_vec))
-       and _K4A_GetDVANEAFamily(m) <> fail then
+    # Issue #449 / #333 followup: single-EA restriction is mathematically
+    # non-injective at m >= 3 (e.g. e_31, e_32, e_33 at m=3 are in the
+    # kernel — verified empirically), producing false-negative `trivial`
+    # verdicts. Dispatch the E branch to a MULTI-EA classifier over D-VAN's
+    # minimum detecting family whenever one is available:
+    #   * Spectral default-opts path at m >= 5: route through
+    #     `_K4A_ClassifySpectralEBranchMulti` (the new helper that
+    #     translates the sparse spectral data once and iterates the
+    #     per-EA HonourParent restriction).
+    #   * Lattice-source path with omega != 0: route through the existing
+    #     `_K4A_ClassifyEBranchMulti` (rebuilds Z(Vec^{omega|_H}_H) modular
+    #     data per EA via direct ComputeModularData).
+    # Fall back to single-EA only when neither multi-EA path is feasible
+    # (m < 5 default-opts, or omega != 0 with no D-VAN family loaded).
+    if m >= 5 and _K4A_GetDVANEAFamily(m) <> fail
+       and _K4A_OmegaIsZero(opts.omega_vec) then
+        # Default-opts spectral path at m >= 5 with D-VAN family available.
+        # The sparse spectral data is already built at this point.
+        if opts.verbose then
+            Print("  [E branch] routing to spectral multi-EA classifier ",
+                  "over D-VAN minimum family at m = ", m,
+                  " (issue #449).\n");
+        fi;
+        E_class := _K4A_ClassifySpectralEBranchMulti(
+            opts, m, sparse_data, _K4A_GetDVANEAFamily(m));
+    elif opts.lattice_source
+         and (not _K4A_OmegaIsZero(opts.omega_vec))
+         and _K4A_GetDVANEAFamily(m) <> fail then
         if opts.verbose then
             Print("  [E branch] routing to multi-EA classifier over ",
                   "D-VAN minimum family at m = ", m, " (issue #333).\n");
@@ -1089,6 +1292,21 @@ K4aClassify := function(arg)
                   "      in k4a_classify.g.\n",
                   "  ============================================================\n");
         fi;
+        # Issue #449: similarly warn for the default-opts spectral path at
+        # m >= 5 when the D-VAN family is unavailable. This is the
+        # mathematically-suspect case the multi-EA reroute above guards.
+        if m >= 5
+           and _K4A_OmegaIsZero(opts.omega_vec)
+           and _K4A_GetDVANEAFamily(m) = fail then
+            Print("\n",
+                  "  ============================================================\n",
+                  "  WARNING: D-VAN minimum detecting family unavailable at m = ", m, ".\n",
+                  "    _K4A_GetDVANEAFamily(", m, ") returned fail.\n",
+                  "    Falling back to single-EA spectral E-branch.\n",
+                  "    Single-EA restriction is NOT injective at m >= 3.\n",
+                  "    A FALSE-NEGATIVE 'trivial' verdict is POSSIBLE.\n",
+                  "  ============================================================\n");
+        fi;
         if m >= 5 then
             data_E := TranslateSpectralDataToEPlus(sparse_data, ea_rec.parent);
             restricted_E := RestrictTraceOnWToSubgroupHonourParent(
@@ -1103,6 +1321,11 @@ K4aClassify := function(arg)
         if opts.lattice_source
            and (not _K4A_OmegaIsZero(opts.omega_vec))
            and m >= 3
+           and _K4A_GetDVANEAFamily(m) = fail then
+            E_class.dvan_family_missing := true;
+        fi;
+        if m >= 5
+           and _K4A_OmegaIsZero(opts.omega_vec)
            and _K4A_GetDVANEAFamily(m) = fail then
             E_class.dvan_family_missing := true;
         fi;

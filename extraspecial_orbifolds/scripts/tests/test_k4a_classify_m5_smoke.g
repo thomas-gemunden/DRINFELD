@@ -232,6 +232,32 @@ if RESULT.verdict = "trivial" then
     fi;
 fi;
 
+# Issue #449: multi-EA spectral E-branch sub-shape (when present).
+# At m=5 with default opts and the D-VAN min-family loaded, the E branch
+# is dispatched through _K4A_ClassifySpectralEBranchMulti, which adds
+# a `spectral_multi_ea := true` flag, a `family_source` label, and a
+# `per_ea_results` list with one entry per EA in the D-VAN family.
+if IsBound(RESULT.E_class.spectral_multi_ea)
+   and RESULT.E_class.spectral_multi_ea = true then
+    K4AM5AssertEqual("E_class.family_source = 'dvan-min-family'",
+                     RESULT.E_class.family_source, "dvan-min-family");
+    K4AM5AssertTrue("E_class.per_ea_results is a list",
+                    IsList(RESULT.E_class.per_ea_results));
+    # D-VAN m=5 family has 9 EAs.
+    K4AM5AssertEqual("E_class.per_ea_results length = 9 (D-VAN m=5 family)",
+                     Length(RESULT.E_class.per_ea_results), 9);
+    # Each per-EA entry has the expected shape.
+    K4AM5AssertTrue("E_class.per_ea_results[1] has ea_order = 64",
+                    RESULT.E_class.per_ea_results[1].ea_order = 64);
+    # Aggregate AND of per-EA is_coboundary equals top-level
+    # is_coboundary.
+    K4AM5AssertEqual(
+        "E_class.is_coboundary = AND over per_ea_results",
+        RESULT.E_class.is_coboundary,
+        ForAll(RESULT.E_class.per_ea_results,
+               r -> r.is_coboundary = true));
+fi;
+
 # ---- T5: spectral_data.source = "krr-sparse" ---------------------------
 Print("\n-----------------------------------------------------------------\n");
 Print("T5: spectral_data.source = 'krr-sparse' (m = 5 spec ask)\n");
