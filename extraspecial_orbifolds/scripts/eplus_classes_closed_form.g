@@ -350,6 +350,12 @@ BuildSimpleIndexEPlusClosedForm := function(m)
         global_to_local := glob_to_local,
         rank := rank,
         is_lazy := true,
+        # Issue #449 A1''' + A1'''': mark this idx as the closed-form
+        # builder's output so that downstream consumers
+        # (`_EnsureClassData`, `EvalIrr` in `untwisted_modular_data.g`)
+        # can dispatch to the closed-form irrep evaluator at the central
+        # class instead of building `CharacterTable(EmUnimodGroup(m))`.
+        is_closed_form := true,
         # Extras specific to the closed-form builder.
         class_types := types,
         per_type_counts := enum.per_type_counts,

@@ -158,12 +158,53 @@ end;;
 
 # Materialise the per-class CharacterTable data for class i. No-op if
 # already materialised, or if `idx` is the eager version (no `is_lazy`).
+#
+# Issue #449 A1''' + A1'''': when idx comes from
+# `BuildSimpleIndexEPlusClosedForm` AND class i is the central one
+# (centraliser = G = idx.group), bypass the expensive
+# `CharacterTable(EmUnimodGroup(m))` build entirely and instead
+# populate `idx.irreps[i]` via the closed-form evaluator
+# (`EPlusBuildAllCharacterRows` in `eplus_irreps_closed_form.g`).
+# This is the second OOM-cliff fix for K-4b m=7 (after #450 fixed
+# `ConjugacyClasses(G)`).
 _EnsureClassData := function(idx, i)
-    local ct, cc, irr;
+    local ct, cc, irr, m_inferred, all_rows;
     if not IsBound(idx.is_lazy) or idx.is_lazy = false then
         return;
     fi;
     if idx.ct_centraliser[i] <> fail then
+        return;
+    fi;
+    # Closed-form dispatch for central class of E_+(m) (issue #449
+    # A1''' + A1''''). Only triggers when:
+    #   (a) idx has `.is_closed_form = true` (set by
+    #       `BuildSimpleIndexEPlusClosedForm`).
+    #   (b) The centraliser is the ambient group itself (i.e. the
+    #       class is one of the two central classes {I, -I}).
+    #   (c) The closed-form evaluator is loaded
+    #       (`EPlusBuildAllCharacterRows` in scope).
+    if IsBound(idx.is_closed_form) and idx.is_closed_form = true
+       and IsBound(idx.centralisers[i]) and idx.centralisers[i] = idx.group
+       and IsBoundGlobal("EPlusBuildAllCharacterRows") then
+        m_inferred := LogInt(idx.order, 2) - 1;  # |G| = 2^{2m+1} => 2m+1
+        m_inferred := QuoInt(m_inferred, 2);
+        # `idx.cc_centraliser[i]` = `idx.classes`: for the central class
+        # the centraliser is G, so the centraliser's conjugacy classes
+        # are EXACTLY G's conjugacy classes (which we already have).
+        idx.cc_centraliser[i] := idx.classes;
+        # Build the |Irr| = 4^m + 1 character rows via the closed-form
+        # evaluator. Each row is a length-|classes| list of integers
+        # supporting `chi[j]` indexing the same way GAP's Character
+        # objects do (so downstream consumers like
+        # `CharacterMultiplicities` need no change).
+        all_rows := EPlusBuildAllCharacterRows(m_inferred, idx.reps);
+        idx.irreps[i] := all_rows;
+        idx.irrep_dims[i] := List(all_rows, chi -> chi[1]);
+        # `ct_centraliser[i]` is left as a sentinel string "closed-form"
+        # so the `idx.ct_centraliser[i] <> fail` guard above
+        # short-circuits future calls. We don't build an actual
+        # CharacterTable object here (that's the whole point).
+        idx.ct_centraliser[i] := "closed-form";
         return;
     fi;
     ct := CharacterTable(idx.centralisers[i]);
@@ -188,7 +229,24 @@ ClassIndexInCentraliser := function(idx, i, x)
 end;;
 
 # Evaluate the k-th irrep of C_G(g_i) at element x ∈ C_G(g_i).
+#
+# Issue #449 A1''' + A1'''': for closed-form idxs at the central
+# class, route directly through `EPlusEvalIrrep`. This is faster
+# than the lookup path (no class-index search) and works even before
+# `_EnsureClassData` has populated `idx.irreps[i]`. For closed-form
+# idxs at NON-central classes, fall through to the standard path
+# (which currently has no closed-form bypass — the non-central
+# centraliser CT is still built generically). For non-closed-form
+# idxs the standard lookup path is used unchanged.
 EvalIrr := function(idx, i, k, x)
+    local m_inferred;
+    if IsBound(idx.is_closed_form) and idx.is_closed_form = true
+       and IsBound(idx.centralisers[i]) and idx.centralisers[i] = idx.group
+       and IsBoundGlobal("EPlusEvalIrrep") then
+        m_inferred := LogInt(idx.order, 2) - 1;  # |G| = 2^{2m+1} => 2m+1
+        m_inferred := QuoInt(m_inferred, 2);
+        return EPlusEvalIrrep(m_inferred, k, x);
+    fi;
     _EnsureClassData(idx, i);
     return idx.irreps[i][k][ClassIndexInCentraliser(idx, i, x)];
 end;;
