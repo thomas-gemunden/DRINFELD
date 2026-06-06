@@ -66,6 +66,53 @@
 
 
 # ============================================================
+# Lazy-centraliser accessor (issue #449 A1').
+#
+# When `BuildSimpleIndexEPlusClosedForm` runs at m=7 it must enumerate
+# 1 + 1 + (4^7 − 1) = 16385 conjugacy classes. The two central classes
+# trivially have centraliser = G, but the 16383 non-central classes
+# would otherwise eagerly trigger `Centralizer(G, rep)` calls each. In
+# the K-4b m=7 spectral pipeline (`BuildKRRSpectralCharactersSparse`),
+# only the central class is processed — the non-central centralisers
+# are never used. Eager construction is ~3 min wall + 100-500 MB
+# memory wasted.
+#
+# We therefore initialise `idx.centralisers[i] := fail` for non-central
+# classes and force every centraliser read through this accessor, which
+# materialises the centraliser on first access and caches it in-place.
+#
+# CALL CONVENTION
+# ===============
+# Any code that previously did
+#     C := idx.centralisers[i];
+# MUST now do
+#     C := _EPlusCentraliserOf(idx, i);
+# This is a no-op for already-materialised entries and is also safe for
+# eager `idx` records (without `is_lazy` or where the slot is a group
+# rather than `fail`): the function only computes a Centralizer when
+# the slot is `fail`.
+#
+# WHO CALLS THIS
+# ==============
+# Every direct `idx.centralisers[i]` read in the spectral / projector
+# / restrict / closed-form-central code path. Search the codebase
+# with `grep -rn 'idx[._a-zA-Z]*centralisers\['` to find call sites.
+# ============================================================
+_EPlusCentraliserOf := function(idx, i)
+    if not IsBound(idx.centralisers[i]) then
+        Error("_EPlusCentraliserOf: idx.centralisers[", i,
+              "] is not bound. Was the idx record built via ",
+              "BuildSimpleIndex or BuildSimpleIndexLazy or ",
+              "BuildSimpleIndexEPlusClosedForm?");
+    fi;
+    if idx.centralisers[i] = fail then
+        idx.centralisers[i] := Centralizer(idx.group, idx.reps[i]);
+    fi;
+    return idx.centralisers[i];
+end;;
+
+
+# ============================================================
 # Class enumerator: walk the 2^{2m} cosets of Z = <-I> in
 # EmUnimodGroup(m), pick one representative per coset, return the
 # four-type partition.
@@ -233,13 +280,16 @@ end;;
 #                          ("id"|"minus_one"|"sigma2"|"sigma_1sigma_2").
 #   .source             : "closed-form-eplus" (diagnostic).
 #
-# NOTE on `idx.centralisers`:
-#   * For the central classes (id, minus_one), the centraliser is G itself
-#     — we install G directly with no Centralizer call.
-#   * For non-central classes, we call `Centralizer(G, rep)`. At m = 7
-#     this is 16383 such calls. They are independent and not the
-#     dominant cost (the `ConjugacyClasses(G)` we replaced is the
-#     bottleneck per issue #447).
+# NOTE on `idx.centralisers` (issue #449 A1'):
+#   * For the central classes (id, minus_one), the centraliser is G
+#     itself — we install G directly with no Centralizer call.
+#   * For non-central classes we install `fail` as a sentinel, and the
+#     centraliser is computed lazily on first access via
+#     `_EPlusCentraliserOf(idx, i)`. In the K-4b m=7 spectral pipeline
+#     only the central class is processed (non-central short-circuits
+#     at `BuildKRRSpectralCharactersSparse` line 1217), so the
+#     non-central centralisers are never materialised. This saves
+#     16383 × ~10ms = ~3 min wall and ~100-500 MB memory at m=7.
 #
 # CONSTRUCTION ORDER
 # ------------------
@@ -249,8 +299,9 @@ end;;
 #      `SetConjugacyClasses(G, classes)`. This memoises the attribute so
 #      that any later `ConjugacyClasses(G)` / `CharacterTable(G)` /
 #      `NrConjugacyClasses(G)` call uses OUR enumeration.
-#   3. Build centralisers eagerly: G for central classes (free), and
-#      `Centralizer(G, rep)` for non-central reps.
+#   3. Build centralisers list: G for central classes (free, no call);
+#      `fail` sentinel for non-central classes (lazy, materialised on
+#      first access via `_EPlusCentraliserOf`).
 #   4. Compute `num_irreps` from the analytical type formula.
 #   5. Wire up `global_offset`, `global_to_local`, `rank`, mark `.is_lazy
 #      := true`, and seed the lazy CT/Irr slots with `fail`.
@@ -302,17 +353,21 @@ BuildSimpleIndexEPlusClosedForm := function(m)
         SetConjugacyClasses(G, classes);
     fi;
 
-    # Step 3: centralisers. Central classes -> G. Non-central ->
-    # Centralizer(G, rep). At m = 7 this is 2 + 16383 centraliser calls;
-    # the per-call cost (O(|G|)) is unrelated to the `ConjugacyClasses(G)`
-    # bottleneck we replaced. Tracked separately if it becomes a
-    # bottleneck of its own.
+    # Step 3: centralisers (lazy for non-central, issue #449 A1').
+    #
+    # Central classes (id, minus_one) have centraliser = G itself (free,
+    # no Centralizer call). Non-central classes get `fail` as a sentinel
+    # and are materialised on first access via `_EPlusCentraliserOf`.
+    #
+    # In the K-4b m=7 spectral pipeline only the central class is
+    # processed, so the non-central centralisers are never built. At
+    # m=7 this saves 16383 × ~10ms = ~3 min wall and ~100-500 MB memory.
     centralisers := EmptyPlist(num_classes);
     for i in [1..num_classes] do
         if types[i] = "id" or types[i] = "minus_one" then
             Add(centralisers, G);
         else
-            Add(centralisers, Centralizer(G, reps[i]));
+            Add(centralisers, fail);  # materialised on first access
         fi;
     od;
 

@@ -63,7 +63,13 @@ ClosedFormCentralS := function(idx, central_class, rho_index,
     # everything).
     sigma_at_central := EvalIrr(idx, target_class, sigma_index, rep_central);
 
-    denom := Order(idx.centralisers[target_class]);
+    # Issue #449 A1': lazy centraliser materialisation for closed-form
+    # E_+(m) idxs. No-op for eager idxs.
+    if IsBoundGlobal("_EPlusCentraliserOf") then
+        denom := Order(_EPlusCentraliserOf(idx, target_class));
+    else
+        denom := Order(idx.centralisers[target_class]);
+    fi;
     return sigma_at_central * ComplexConjugate(rho_at_target) / denom;
 end;;
 

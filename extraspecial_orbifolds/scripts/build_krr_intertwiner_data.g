@@ -726,7 +726,14 @@ _KRRI_BuildProjectiveCallables := function(omega_vec, G, m, idx, verbose)
             return per_class[class_idx];
         fi;
         g := idx.reps[class_idx];
-        C := idx.centralisers[class_idx];
+        # Issue #449 A1': lazy centraliser materialisation for
+        # closed-form E_+(m) idxs. K-4a/K-4b sweep paths reach this
+        # per non-central class. No-op for eager idxs.
+        if IsBoundGlobal("_EPlusCentraliserOf") then
+            C := _EPlusCentraliserOf(idx, class_idx);
+        else
+            C := idx.centralisers[class_idx];
+        fi;
         alpha := function(x, y)
             return _KRRI_AlphaG(omega_cb, m_omega, g, x, y);
         end;
