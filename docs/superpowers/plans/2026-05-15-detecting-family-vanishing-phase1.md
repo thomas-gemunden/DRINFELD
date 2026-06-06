@@ -1094,6 +1094,20 @@ git commit -m "[D-VAN-3] ResIsTrivialOnDetectingFamily core test function"
 **Files:**
 - Modify: `tests/test_detecting_family_vanish.g`
 
+> **AUDIT NOTE (2026-06-06):** The Task 2.4 / 3.1 / 6.2 framing of
+> "D-VAN trivial bit matches `i in in_kernel_gens`" is a math
+> conflation between `ker(Tr)` and the detecting-family kernel and
+> was corrected in the actual test file (PR #150/#156). The
+> shipped test gates `IsEmpty(trivial_unit_gens_m2)` — every unit
+> generator is non-zero in H^3, hence D-VAN must return
+> `trivial=false`. See the test file's Tasks 2.4 + 3.1 comments and
+> `extraspecial_orbifolds/docs/superpowers/research/
+> 2026-06-06-ker-tr-detecting-family-audit.md` for the audit.
+>
+> The code blocks below are preserved as the original plan, but the
+> assertion logic was REPLACED in the shipped tests; do not run the
+> code below as-is.
+
 This is the empirical anchor that proves D-VAN is mathematically correct.
 
 - [ ] **Step 1: Append the gate test**
@@ -1376,6 +1390,11 @@ Branch: `dvan-4-m3-anchor` off `dvan-3-vanish-test` (or `main` if merged).
 
 **Files:**
 - Modify: `tests/test_detecting_family_vanish.g`
+
+> **AUDIT NOTE (2026-06-06):** Same conflation as Task 2.4. The
+> shipped test re-frames as "every unit generator is non-zero ⟹
+> `trivial=false`" without referencing `in_kernel_gens`. See audit
+> note above and the shipped test file for the correct framing.
 
 - [ ] **Step 1: Append the m=3 Gate 1A test**
 
@@ -1792,6 +1811,14 @@ Track its progress at #47.
 - Modify: `tests/test_detecting_family_vanish.g`
 
 Branch: `dvan-7-m5-anchor` off `main` (which should have D-VAN-2..6 + A-5b merged).
+
+> **AUDIT NOTE (2026-06-06):** Task 6.2 has the same conflation as
+> Tasks 2.4 / 3.1. The correct m=5 anchor is a self-contained
+> `trivial=false` sweep on the 165 unit generators (each is a
+> non-zero class in H^3 by AM04+Quillen injectivity), NOT a
+> comparison against A-5b's `in_kernel_gens`. The driver
+> `run_d_van_7_m5.sh` was withdrawn for this reason; see audit
+> note above.
 
 - [ ] **Step 1: Append the m=5 Gate 1A test**
 

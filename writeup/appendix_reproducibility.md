@@ -417,7 +417,7 @@ These are the gaps between "anchored regime" and "production targets" in the pap
 
 `K4aClassify(5)` errors deliberately with a message pointing at issue #220 (and `K4aClassify(4)` does the same). The blocker is `BuildKRRSpectralCharactersSparse`: at $m = 5$ the central twisted module $W_a = \Omega_0$ has dimension $2^{16} = 65\,536$, so the dense $T_h$ approach used at $m = 3$ would take $\approx 3.7$ years per matrix. The fix is a sparse / trace-only approach using $\mathrm{Tr}(T_h^j)$ and character orthogonality, described in issue #220 (in flight).
 
-The D-VAN $m = 5$ anchor (Gate 1E) is separately gated on the A-5b kernel-of-Tr ground truth at $m = 5$ (issue #47).
+The D-VAN $m = 5$ anchor (Gate 1E, revised) is a self-contained 165/165 `trivial=false` sweep on the unit basis of $H^3(E_+(5); U(1))$, by direct analogy with the m=3 Task 3.1. It does **not** depend on A-5b's kernel-of-Tr computation. (An earlier draft asserted such a dependency; that was a math conflation between $\ker(\mathrm{Tr})$ and the detecting-family restriction kernel, corrected in the 2026-06-06 audit at `extraspecial_orbifolds/docs/superpowers/research/2026-06-06-ker-tr-detecting-family-audit.md`.)
 
 ### 6.2 $m = 7$ production
 

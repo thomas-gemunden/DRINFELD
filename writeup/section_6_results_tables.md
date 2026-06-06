@@ -84,7 +84,7 @@ rows are scaffolded with TBD walls and the relevant unblock PR.
 | 2 | K-4a `K4aClassify(2)` (bonus, T4 of `test_k4a_classify.g`) | 8 / 8 assertions PASS; `verdict = "trivial"`, E/D_8/Q_8 all trivial-class | \(< 1\,\)s | \#224 |
 | 2 | E_+(2) Tier-4 SNF kernel (A-2, issue \#41) | \(\lvert\ker(\mathrm{Tr})\rvert = 2\,048\) (cross-checked by brute force) | \(\approx 75\,\)s | (T-2 SNF closure, see `section_3_infrastructure.md` \S3.7) |
 | 3 | D-VAN Phase 1 anchor: 35 unit generators non-trivial (D-VAN-4, issue \#143) | 35 / 35 generators report `trivial = false`; plus \(2 \cdot e_g\) Q_8 witness | \(\approx 6.2\,\)s | \#150 (Gate 1A/1B at \(m=2\)), \#156 (Q_8 extension, m=3) |
-| 5 | A-5b kernel sweep (issue \#47, A-5b) | \(\lvert\ker(\mathrm{Tr})\rvert = 2^{52}\) (52 order-2 generators; no \(\mathbb Z/4\) component; \(\lvert\mathrm{coker}(\mathrm{Tr})\rvert = 2^{114}\)); ground truth for D-VAN-7 \#148 | TBD (full wall) | \#221, \#225, \#233 (R2 perf rounds); \#381–\#386, \#391, \#395 (orbit-cache + Path Z combine); `computed/transgression/5/kernel.g` |
+| 5 | A-5b kernel sweep (issue \#47, A-5b) | \(\lvert\ker(\mathrm{Tr})\rvert = 2^{52}\) (52 order-2 generators; no \(\mathbb Z/4\) component; \(\lvert\mathrm{coker}(\mathrm{Tr})\rvert = 2^{114}\)); independent structural fact about \(H^3(E_+(5); U(1))\) (not a D-VAN-7 oracle — see \#148 and 2026-06-06 audit) | TBD (full wall) | \#221, \#225, \#233 (R2 perf rounds); \#381–\#386, \#391, \#395 (orbit-cache + Path Z combine); `computed/transgression/5/kernel.g` |
 | 5 | K-4b `K4aClassify(5)` (PR \#227 scaffold) | gated on \#220 sparse trace (now landed via \#235) + lifting `n_max_supported := 3` | TBD | PR \#227 scaffold; verdict PR pending |
 | 7 | K-4c `K4aClassify(7)` (PR \#242 spec) | gated on \#236 sparse Gauss-sum + \#129 lazy idx + (optional) \#137 LHS-perturbed res | TBD | PR \#242 (spec only); verdict PR future |
 
@@ -106,8 +106,10 @@ Notes on Table 2:
 - The D-VAN row covers the m=3 portion of `test_detecting_family_vanish.g`;
   the full file (including m=2 Gates 1A/1B and m=3 Tasks 3.1+) runs
   in \(\approx 6.2\,\)s wall total per PR \#156.
-- The A-5b m=5 row is the kernel-of-Tr ground-truth sweep, gating
-  D-VAN-7 (\#148). The performance work landed in PRs \#221 + \#225
+- The A-5b m=5 row is the kernel-of-Tr sweep. (Originally described
+  as ``gating D-VAN-7''; that framing was a math conflation, corrected
+  in the 2026-06-06 audit. D-VAN-7 is a self-contained injectivity
+  sweep — see \S4.3 footnote.) The performance work landed in PRs \#221 + \#225
   (KroneckerProduct rewrites of the mod-2 lift inner loops,
   \(\approx 2.3\times\) speedup at \(n = 2048\)) and the batched
   back-substitution variant in PR \#233 (R2-3), with subsequent
@@ -144,9 +146,9 @@ rows are TBD with the in-flight blockers identified.
 
 | \(m\) | K-4a verdict | D-VAN verdict | Status | Interpretation |
 | --- | --- | --- | --- | --- |
-| 2 | `trivial` (`K4aClassify(2)`, PR \#224) | `trivial` on every basis vector (Gates 1A + 1B, PR \#150) | \(\checkmark\) confirmed | \(V_{\mathrm{BW}(2)}^{E_+(2)}\) lattice orbifold is untwisted; bonus anchor below the Keller \(m \in \{3, 5, 7\}\) range |
-| 3 | `trivial` (`K4aClassify(3)`, PR \#224 + \#228) | `trivial` on each basis vector (D-VAN \#143 + \#150 + \#156) | \(\checkmark\) confirmed | matches Keller 2024 \S6 direct construction; \(V_{E_8} = V_{\mathrm{BW}(3)}^{E_+(3)}\); primary calibration anchor |
-| 5 | TBD (K-4b at agent \#113 / PR \#227 scaffold; verdict gated on lifting `n_max_supported` cap, sparse trace \#235 now merged) | TBD (D-VAN-7 \#148, blocked on A-5b kernel.g \#47) | in progress | expected: `trivial` (per Keller conjecture / KRR local conditions) |
+| 2 | `trivial` (`K4aClassify(2)`, PR \#224) | every unit basis vector is reported `trivial=false`, half-vec / Z/8 witness OK (Gates 1A + 1B, PR \#150) | \(\checkmark\) confirmed | \(V_{\mathrm{BW}(2)}^{E_+(2)}\) lattice orbifold is untwisted; bonus anchor below the Keller \(m \in \{3, 5, 7\}\) range |
+| 3 | `trivial` (`K4aClassify(3)`, PR \#224 + \#228) | every unit basis vector reported `trivial=false`; \(2 \cdot e_{order-4}\) Q\_8 witness (D-VAN \#143 + \#150 + \#156) | \(\checkmark\) confirmed | matches Keller 2024 \S6 direct construction; \(V_{E_8} = V_{\mathrm{BW}(3)}^{E_+(3)}\); primary calibration anchor |
+| 5 | TBD (K-4b at agent \#113 / PR \#227 scaffold; verdict gated on lifting `n_max_supported` cap, sparse trace \#235 now merged) | TBD (D-VAN-7 \#148, self-contained 165/165 `trivial=false` sweep; no `kernel.g` dependency per 2026-06-06 audit) | in progress | expected: `trivial` (per Keller conjecture / KRR local conditions) |
 | 7 | TBD (post K-2c \#129 + sparse Gauss-sum \#236) | TBD (post Q-int B2-6 \#166 + Phase 2 Quillen restriction \#137 / Q-int B3) | future | expected: `trivial` (per Keller conjecture; gap-4 \(c = 128\) holomorphic VOA if confirmed) |
 
 The "Status" column legend:
@@ -365,7 +367,7 @@ in-flight issues:
 | Table 2 \(m = 5\) K-4b wall | `run_k4b_m5.sh` output post sparse-trace lift | PR \#227 + PR \#235 |
 | Table 2 \(m = 7\) walls | K-4c m=7 production run | PR \#242 spec; verdict PR future |
 | Table 3 \(m = 5\) K-4a verdict | `K4aClassify(5).verdict` | PR \#235 + lifting `n_max_supported` cap |
-| Table 3 \(m = 5\) D-VAN verdict | D-VAN-7 \#148 + A-5b kernel.g (kernel.g now available) | \#148, \#47 |
+| Table 3 \(m = 5\) D-VAN verdict | D-VAN-7 \#148 (self-contained 165/165 trivial=false sweep; no `kernel.g` dependency per 2026-06-06 audit) | \#148 |
 | Table 3 \(m = 7\) verdicts | post K-2c \#129 + sparse Gauss-sum \#236 + (D-VAN) Q-int B2-6 \#166 | \#187 K-4 EPIC, \#190 K-4c spec |
 | Figure 3 \(m = 5\) orbit sizes | A-5b run output (orbit sizes \((1, 1, 1023, 1024) = 2\,049\) classes total) | \#47 |
 | Figure 4 \(m = 5\) K-4a wall | K-4b production run | \#235 + PR \#227 verdict |

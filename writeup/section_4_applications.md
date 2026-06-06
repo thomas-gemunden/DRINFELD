@@ -374,28 +374,31 @@ rather than merely cross-checking.
 
 ### 4.3.2 Status of the two pipelines at \(m = 5\)
 
-**D-VAN at \(m = 5\)** is gated on the empirical kernel-of-\(\mathrm{Tr}\)
-ground truth from A-5b (#47). The A-5b R2 performance work has shipped
-two `KroneckerProduct` rewrites of the mod-2 lift inner loops (PRs #221
-for `BocksteinH1ToH2`, #225 for `IsCoboundary2Mod2WithLiftWitness`), each
-giving a measured 2.33×–2.37× speedup at \(n = 2048\); batched
-back-substitution is in flight on branch `a5b-r2-3-batched-backsub`. The
-m=5 kernel sweep itself runs on PID 22335 at time of writing (a multi-day
-background job).
+**D-VAN at \(m = 5\)** is a self-contained 165/165 \texttt{trivial=false}
+sweep on the unit basis of \(H^3(E_+(5); U(1))\), by direct analogy with
+the m=3 Task 3.1. It does \textbf{not} depend on the A-5b
+\(\ker(\mathrm{Tr})\) computation — that dependency was a misframing in
+an earlier draft, corrected in the 2026-06-06 audit (see
+\texttt{extraspecial\_orbifolds/docs/superpowers/research/2026-06-06-ker-tr-detecting-family-audit.md}).
+D-VAN tests injectivity of restriction to \(\{E, D_8, Q_8\}\); each unit
+basis vector is a non-zero class in \(H^3\) so D-VAN must report
+\texttt{trivial=false} on every one of them, at every \(m\). The D-VAN
+verdict on each unit generator is a single matrix–vector product
+followed by a zero check, sub-millisecond per generator (cf. §4.2 of
+the methodology paper).
 
-Once A-5b lands `computed/transgression/5/kernel.g` in the same schema as
-`computed/transgression/3/kernel.g` (the `in_kernel_gens`, `exp_index`,
-`half_vec_in_kernel`, `basis_summary` fields described in
-`writeup/section_3_infrastructure.md`), D-VAN-7 (#148) will run the
-analogous unit-generator sweep at \(m = 5\) and compare. The expectation
-(by analogy with \(m = 2, 3\) and by Harada–Kono structure) is that
-\(\ker(\mathrm{Tr})\) is *at least* the rank-1 \(A(4)\) and the
-\(\mathbb F_2\) elementary-abelian part — i.e. potentially the whole
-\(H^3(E_+(5); U(1))\) as at \(m = 3\), or a proper sub if some local
-2-cocycle catches one of the generators. Either way the D-VAN verdict
-on each unit generator is then a single matrix–vector product followed by
-a zero check, and is sub-millisecond per generator (cf. §4.2 of the
-methodology paper).
+**A-5b at \(m = 5\)** is a separate workstream that computes
+\(\ker(\mathrm{Tr})\) for \(E_+(5)\); it ships
+\texttt{computed/transgression/5/kernel.g} in the same schema as
+\texttt{computed/transgression/3/kernel.g}. The A-5b R2 performance work
+has shipped two \texttt{KroneckerProduct} rewrites of the mod-2 lift
+inner loops (PRs #221 for \texttt{BocksteinH1ToH2}, #225 for
+\texttt{IsCoboundary2Mod2WithLiftWitness}), each giving a measured
+2.33×–2.37× speedup at \(n = 2048\); batched back-substitution shipped
+in subsequent PRs (#381–#386, #391, #395). The result at \(m = 5\) is
+\(|\ker(\mathrm{Tr})| = 2^{52}\) inside the ambient \(2^{166}\). This
+is an \emph{independent} structural fact about \(H^3(E_+(5); U(1))\)
+that does not serve as a verdict oracle for D-VAN.
 
 **K-4a at \(m = 5\)** is gated on the sparse trace optimisation of issue
 #220. The dense computation `BuildKRRSpectralCharacters(m)` takes 2.4 s
@@ -426,7 +429,7 @@ driver scaffold (PR #227, `run_k4b_m5.sh` + `k4b_xcheck_d_van.g` +
 | --- | --- | --- |
 | #220 | `BuildKRRSpectralCharactersSparse(5)` lands at \(< 30\) min wall | in flight |
 | #47 / A-5b | `computed/transgression/5/kernel.g` produced | running (PID 22335) |
-| #148 / D-VAN-7 | D-VAN unit-generator sweep at m=5 + verdict-vs-kernel agreement | gated on #143, #47 |
+| #148 / D-VAN-7 | D-VAN unit-generator sweep at m=5 (self-contained 165/165 trivial=false; cf. m=3 Task 3.1; revised 2026-06-06 audit — no `kernel.g` dependency) | gated on #143 only |
 | PR #227 / K-4b | `run_k4b_m5.sh` execution | gated on #220 + T6 |
 
 The expected outcome (per Keller's prediction): \([\alpha] = 0\) in
@@ -447,7 +450,7 @@ verdict ship:
 
 - **`kernel_size` at \(m = 5\):** TBD (loaded from `computed/transgression/5/kernel.g`).
 - **`torsion` shape:** TBD (expected \((\mathbb Z/2)^{r(5)} \oplus \mathbb Z/4\); the value of \(r(5)\) is a Q-int A2 deliverable).
-- **D-VAN-7 result:** TBD (35-or-\(r(5)\)-many unit-generator verdicts, expected all `non-trivial`).
+- **D-VAN-7 result:** TBD (165 unit-generator verdicts, all expected `trivial=false` by AM04+Quillen injectivity of restriction to \(\{E, D_8, Q_8\}\); cf. m=3 Task 3.1).
 - **K-4b verdict:** TBD (`K4aClassify(5).verdict`).
 - **Per-branch wall times:** TBD (expected: similar order of magnitude as m=3, dominated by `BuildKRRSpectralCharactersSparse(5)` build cost).
 - **K-4b/D-VAN cross-table at \(m = 5\):** TBD (the §8.5 archival record).

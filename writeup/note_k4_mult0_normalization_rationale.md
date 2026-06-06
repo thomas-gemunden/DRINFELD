@@ -299,13 +299,21 @@ test is the in-flight m=5 K-4a verdict.
    with a clean `class_idx` that doesn't match the expected D_8 trivial
    cocycle, this is the next thing to investigate.
 
-3. **Cross-validation pending against A-5b's m=5 kernel.** The K-4a
+3. **Trivial-axis cross-check against A-5b's m=5 kernel.** The K-4a
    verdict at m=5 confirms triviality on the detecting family,
-   implying ω = 0 in H^3(E_+(5); U(1)) via restriction-injectivity.
-   A-5b's independent kernel computation of the transgression should
-   confirm `2^k ∈ ker(Tr)` for the corresponding cocycle class. The
-   two pipelines are mathematically distinct and should agree if both
-   are correct.
+   implying ω = 0 in H^3(E_+(5); U(1)) via restriction-injectivity
+   (AM04+Quillen). The zero class is trivially in ker(Tr), so A-5b's
+   ker(Tr) computation will contain it; this is a one-way
+   implication, not a cross-validation. The two pipelines are
+   kernels of DIFFERENT maps:
+     - K-4a / D-VAN test the detecting-family restriction kernel
+       (= {0} by injectivity).
+     - A-5b's ker(Tr) is the transgression kernel
+       (= 2^52 at m=5).
+   They agree only at the trivial-trivial axis (both report
+   triviality on ω = 0); per-class agreement off that axis is not
+   expected. See the 2026-06-06 audit at
+   `extraspecial_orbifolds/docs/superpowers/research/2026-06-06-ker-tr-detecting-family-audit.md`.
 
 ## Refs
 

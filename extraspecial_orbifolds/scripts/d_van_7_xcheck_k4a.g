@@ -1,34 +1,71 @@
-# d_van_7_xcheck_k4a.g — D-VAN-7 cross-validation against K-4b at m=5.
+# d_van_7_xcheck_k4a.g — WITHDRAWN: math conflation between ker(Tr) and
+#                       the detecting-family restriction kernel.
+#
+# Audit verdict (2026-06-06, PR #449 prerequisite audit): this harness's
+# core comparison — "D-VAN's per-generator trivial bit matches A-5b's
+# in_kernel_gens" — is mathematically wrong. The two flags test
+# different things:
+#
+#   * D-VAN's `r.trivial`: `true` iff `[ω] = 0` in `H^3(G; U(1))`. By
+#     AM04 IV.4-IV.5 + Quillen 1971 the restriction
+#     `H^3(G; U(1)) -> ⊕_{H in {EA, D_8, Q_8}} H^3(H; U(1))` is
+#     injective at every m ≥ 2, so the detecting-family kernel is
+#     `{0}` and `r.trivial = true ⟺ [ω] = 0`.
+#
+#   * A-5b's `in_kernel_gens`: indices `i` for which
+#     `e_i ∈ ker(Tr : H^3(G; U(1)) -> ⊕_g H^2(C_g; U(1)))`. This kernel
+#     is generally large (`|ker(Tr)(E_+(5))| = 2^52` per the A-5b
+#     production); the membership has nothing to do with `e_i = 0` in
+#     `H^3`.
+#
+# The two kernels are DIFFERENT kernels of DIFFERENT maps. At m=3 the
+# A-3a sweep found `ker(Tr) = full H^3`, so `in_kernel_gens = [1..35]`
+# while D-VAN reports `trivial = false` on every unit generator (each
+# is a non-zero class in H^3). The PR #416 test
+# `test_dvan_m5_anchor_vs_kernel.g` returned 55 FAIL / 0 PASS for
+# exactly this reason and was withdrawn (`ed5cc4a`).
+#
+# Replacement for D-VAN/K-4b cross-validation at m=5: see
+# `k4b_xcheck_d_van.g`, which limits itself to the trivial-trivial
+# axis (`K-4b RESULT.trivial = true ⟺ ResIsTrivialOnDetectingFamily(5, 0).trivial`)
+# and does NOT involve `kernel.g`.
+#
+# This file is preserved (without an early QUIT) as a historical
+# artefact of the conflated approach. The trivial-axis path it
+# implements at the bottom is mathematically harmless (both pipelines
+# agree on ω = 0); only the per-generator "agree" verdict is wrong.
+#
+# See: extraspecial_orbifolds/docs/superpowers/research/2026-06-06-ker-tr-detecting-family-audit.md
+#
+# === ORIGINAL DOC (preserved for reference) ===
 #
 # D-VAN-7 (issue #148) and K-4b (#189 / PR #227, sibling scaffold) are
 # two independent witnesses for Keller's question at m=5:
 #
 #   * D-VAN-7 derives its verdict from an algebraic restriction
-#     pipeline (`ResIsTrivialOnDetectingFamily`), cross-validated
-#     against A-5b's HAP-derived `computed/transgression/5/kernel.g`
-#     at every one of the 165 hom-basis unit generators of
-#     H^3(E_+(5); U(1)).
+#     pipeline (`ResIsTrivialOnDetectingFamily`); the original design
+#     was to compare per-generator against A-5b's HAP-derived
+#     `computed/transgression/5/kernel.g`. THIS COMPARISON IS WRONG;
+#     see the withdrawal notice above.
 #
 #   * K-4b orchestrates K4aClassify(5) on the modular-data side
 #     (KRR projector / CGR §5.2 detecting-family classifier).
 #
-# At m=3 both pipelines were already cross-validated and report trivial
-# (Keller's α = 0 expectation). This harness performs the m=5 cross-
-# validation under the same protocol.
+# At m=3 both pipelines were independently checked. This harness
+# attempted the m=5 analogue under the conflated protocol.
 #
 # Strategy (parallels K-4b's k4b_xcheck_d_van.g):
 #
 #   * Trivial-axis check (always available):
 #       - K-4b verdict = trivial             iff RESULT.trivial = true
-#       - D-VAN-7 verdict = "agree" + all-ker iff every D-VAN trivial
-#         bit matches A-5b's in_kernel_gens; that doesn't directly map
-#         to "ω = 0 in H^3" but if A-5b's in_kernel_gens = [1..165]
-#         AND half_vec_in_kernel = true (Keller's expectation), then
-#         per-generator triviality reduces to a per-generator coincidence
-#         with HAP's ker(Tr) — which D-VAN's restriction-to-detecting-
-#         family is independently confirming.
-#       - The cross-check fires only at the all-trivial coincidence,
-#         which is the expected outcome under Keller's conjecture.
+#       - D-VAN-7 verdict = "agree" was originally computed as "every
+#         D-VAN trivial bit matches A-5b's in_kernel_gens". THIS IS THE
+#         CONFLATED FRAMING. The two flags genuinely test different
+#         maps' kernels and should not be expected to agree on
+#         per-generator bits.
+#       - The trivial-axis check (both pipelines on ω=0) IS sound, but
+#         provides only a single bit of confirmation, not a per-generator
+#         sweep.
 #
 #   * Per-generator non-triviality detection (richer, requires K-4b
 #     to expose per-generator restriction data which it currently does

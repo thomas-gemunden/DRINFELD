@@ -66,8 +66,14 @@ KellerSEntry(m, omega_vec, i, j) -> matrix entry;
 ### Two-phase rollout
 
 **Phase 1 — HAP-based, m ∈ {2, 3, 5}.** Restriction matrices via HAP on
-`G = E_+(m)`'s resolution. Empirical anchors: matches HAP per-generator
-kernel-of-Tr at m = 2, 3, 5. Ships first; independent of Q-int.
+`G = E_+(m)`'s resolution. Empirical anchors: every unit basis vector
+of `H³(E_+(m); U(1))` reports `trivial = false` (by AM04+Quillen
+injectivity of restriction); zero classes report `trivial = true`. (An
+earlier draft said "matches HAP per-generator kernel-of-Tr"; that
+framing is a math conflation between `ker(Tr)` and the detecting-family
+restriction kernel — see the 2026-06-06 audit at
+`extraspecial_orbifolds/docs/superpowers/research/2026-06-06-ker-tr-detecting-family-audit.md`.)
+Ships first; independent of Q-int.
 
 **Phase 2 — Quillen-based, m = 7.** Restriction matrices computed
 analytically from the canonical Quillen presentation (`quillen_canonical_presentation.g`,
@@ -221,17 +227,33 @@ tractable.
 | Rung | Group       | Anchor                                                | What it proves                                                                                                |
 | ---- | ----------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | 1    | D_8 (m=1)   | `_QH3S_TORSION_TABLE.m1 = [2, 2, 4]`                 | D-VAN degenerates correctly: detecting family `= {D_8}` itself; sanity check.                                |
-| 2    | E_+(2)      | `computed/transgression/2/kernel.g`; `[(Z/2)^9, Z/8]` | Matches HAP per-generator vanishing on 10 generators. **Z/8 generator is the critical case** for D_8-section. |
-| 3    | E_+(3)      | `computed/transgression/3/kernel.g`; `[(Z/2)^34, Z/4]` | Matches HAP per-generator on 35 generators; exercises larger F_2 part.                                       |
-| 4    | E_+(5)      | `computed/transgression/5/kernel.g` (A-5b output, blocked on #47) | Matches A-5b empirical kernel; validates Phase 1 at scale.                                                    |
+| 2    | E_+(2)      | torsion `[(Z/2)^9, Z/8]` from HAP UCT                 | Every unit basis vector reports `trivial=false`; Z/8 generator's D_8 row is non-zero. (Originally framed as "matches HAP kernel" — withdrawn 2026-06-06 audit.) |
+| 3    | E_+(3)      | torsion `[(Z/2)^34, Z/4]` from HAP UCT                | Every unit basis vector reports `trivial=false`; Q_8 catches `2 * e_{order-4 gen}`. |
+| 4    | E_+(5)      | torsion from `kernel.g` (only its `torsion` field is used; `in_kernel_gens` is NOT a verdict oracle) | Every unit basis vector reports `trivial=false`; half-vector for the Z/4 generator likewise. |
 | 5    | E_+(7)      | (no ground truth; Phase 2 produces it)                | Phase 2 verdict on chosen ω; m = 7 unlock delivered.                                                          |
 
 ### Phase 1 acceptance gates
 
-- **Gate 1A.** For m = 2 and m = 3, every per-generator vanishing verdict
-  from D-VAN agrees with the HAP-computed kernel:
-  `e_i ∈ ker(Tr) ⟺ ResIsTrivialOnDetectingFamily(m, e_i).trivial`.
-  (10 + 35 = 45 cases.)
+> **AUDIT NOTE (2026-06-06):** The original Gate 1A formulation as
+> `e_i ∈ ker(Tr) ⟺ ResIsTrivialOnDetectingFamily(m, e_i).trivial` is
+> a **math conflation** between `ker(Tr)` (kernel of transgression to
+> centraliser 2-cocycles) and the detecting-family restriction kernel
+> (which is `{0}` by AM04+Quillen). The biconditional is false in
+> general — at `m=3`, `ker(Tr) = full H^3` while every unit gen is
+> non-zero in `H^3` so D-VAN must return `trivial = false` on every
+> one of them. See `extraspecial_orbifolds/docs/superpowers/research/
+> 2026-06-06-ker-tr-detecting-family-audit.md` for the audit.
+>
+> The actually-shipped test (`tests/test_detecting_family_vanish.g`
+> Tasks 2.4, 3.1) uses the corrected gate below (Gate 1A revised).
+> Gate 1E (m=5 anchor) is similarly revised.
+
+- **Gate 1A (revised).** For m = 2 and m = 3, every unit basis vector
+  `e_i` is a non-zero class in `H^3(E_+(m); U(1))`, so the
+  detecting-family restriction is non-zero on it (AM04+Quillen
+  injectivity at degree 3 ≥ 2m-1). Therefore
+  `ResIsTrivialOnDetectingFamily(m, e_i).trivial = false` for every
+  unit basis vector. (10 + 35 = 45 cases.)
 - **Gate 1B.** For m = 2, the Z/8 generator (order-8 invariant factor) is
   correctly identified as non-trivial when its restriction to D_8 is
   non-trivial — the case where elementary-abelian-only would fail.
@@ -239,8 +261,9 @@ tractable.
   `(i, j)` at m = 2.
 - **Gate 1D.** `KellerSEntry(m, ω, i, j) = SKellerEntry(m, ω, i, j)` for
   one chosen non-trivial ω at m = 3.
-- **Gate 1E** *(soft, gated on A-5b)*. Per-generator vanishing at m = 5
-  matches A-5b's empirical kernel.
+- **Gate 1E (revised, self-contained).** Per-generator vanishing at m = 5
+  is a 165/165 `trivial = false` sweep on the unit basis (analog of
+  Gate 1A at m=3). It does NOT depend on A-5b's `kernel.g`.
 
 ### Phase 2 acceptance gates (separate PR after Q-int A2/A3)
 
