@@ -381,7 +381,9 @@ TranslateSpectralDataToEPlus := function(arg)
     local m, eu_group, ep_group, tr_rec, idx_EP, idx_EU, transport_EP,
           ep_to_eu_class, k_ep, rep_ep, rep_eu, k_eu, j, eu_classes,
           trace_on_W_translated, epsilon_translated, out, spectral_data_eu,
-          target_EP;
+          target_EP, use_closed_form, num_classes_eu, ep_reps, ep_classes,
+          ep_centralisers, ep_class_sizes, ep_class_types, cl, ep_num_irreps,
+          ep_global_offset, ep_global_to_local, ep_rank, i;
     if Length(arg) < 1 then
         Error("TranslateSpectralDataToEPlus: requires at least one ",
               "argument (the spectral_data_eu record).");
@@ -421,41 +423,152 @@ TranslateSpectralDataToEPlus := function(arg)
         fi;
     fi;
     ep_group := tr_rec.EP;
-
-    # Build the EP-side index. We use the LAZY variant
-    # (BuildSimpleIndexLazy) which builds .classes / .reps eagerly
-    # but defers per-class CharacterTable + Irr builds until accessed.
-    # RestrictTraceOnWToSubgroup only needs .classes / .reps eagerly
-    # (for `_RTS_FindGClassOf`); CharacterTables are materialised
-    # on-demand via `_EnsureClassData` if the consumer touches them.
-    # At m = 5, this cuts the parent-side build from ~30 s eager
-    # to ~1 s lazy.
-    idx_EP := BuildSimpleIndexLazy(ep_group);
-
-    # Build the EP -> EU class index map.
     idx_EU := spectral_data_eu.idx;
-    eu_classes := idx_EU.classes;
-    ep_to_eu_class := [];
-    for k_ep in [1..Length(idx_EP.reps)] do
-        rep_ep := idx_EP.reps[k_ep];
-        rep_eu := Image(tr_rec.psi_inv, rep_ep);
-        # Find which EU class contains rep_eu.
-        k_eu := fail;
-        for j in [1..Length(eu_classes)] do
-            if rep_eu in eu_classes[j] then
-                k_eu := j;
-                break;
+
+    # Issue #449 #456 B2: closed-form class-index bijection.
+    #
+    # When the EU-side idx was built via `BuildSimpleIndexEPlusClosedForm`
+    # (signaled by `idx_EU.is_closed_form = true`), the generic
+    # `BuildSimpleIndexLazy(ep_group)` triggers the SAME `ConjugacyClasses`
+    # OOM cliff at m=7 that A1 dodged for the EU side. Since psi: EU -> EP
+    # is an isomorphism, the set {psi(rep_eu_i) : i in 1..|idx_EU|} is a
+    # complete set of EP-class representatives -- we can construct idx_EP
+    # directly without invoking `ConjugacyClasses(EP)` at all.
+    #
+    # FAST PATH (identity psi): if `Source(psi) = Range(psi)` (only
+    # possible when the caller passed an EU spectral record whose group
+    # is already EP-shaped, e.g. a degenerate test scenario), the
+    # bijection is identity and we just reuse `idx_EU` directly. The K-4
+    # pipeline always has EU=EmUnimod, EP=EPlusGroup so this branch is
+    # not taken; it's structural completeness.
+    #
+    # CLOSED-FORM PATH (default for m >= 5 when idx_EU is closed-form):
+    # build idx_EP class-by-class from EU reps via psi. The bijection
+    # is the identity permutation `[1..n]` by construction.
+    use_closed_form := IsBound(idx_EU.is_closed_form)
+                       and idx_EU.is_closed_form = true
+                       and Source(tr_rec.psi) <> Range(tr_rec.psi);
+
+    if use_closed_form then
+        # B2 closed-form construction: bypass BuildSimpleIndexLazy(ep_group).
+        num_classes_eu := Length(idx_EU.reps);
+        ep_reps := EmptyPlist(num_classes_eu);
+        ep_classes := EmptyPlist(num_classes_eu);
+        ep_centralisers := EmptyPlist(num_classes_eu);
+        ep_class_sizes := EmptyPlist(num_classes_eu);
+        if IsBound(idx_EU.class_types) then
+            ep_class_types := EmptyPlist(num_classes_eu);
+        fi;
+        for i in [1..num_classes_eu] do
+            rep_ep := Image(tr_rec.psi, idx_EU.reps[i]);
+            cl := ConjugacyClass(ep_group, rep_ep);
+            SetSize(cl, idx_EU.class_sizes[i]);
+            Add(ep_reps, rep_ep);
+            Add(ep_classes, cl);
+            Add(ep_class_sizes, idx_EU.class_sizes[i]);
+            # Centraliser: ep_group for central classes (where
+            # idx_EU.centralisers is the whole EU group); `fail`
+            # (lazy) for non-central classes, matching
+            # `BuildSimpleIndexEPlusClosedForm`'s convention. The
+            # `_EPlusCentraliserOf` accessor materialises on first
+            # access via `Centralizer(idx.group, idx.reps[i])`.
+            if IsBound(idx_EU.centralisers[i])
+               and idx_EU.centralisers[i] = idx_EU.group then
+                Add(ep_centralisers, ep_group);
+            else
+                Add(ep_centralisers, fail);
+            fi;
+            if IsBound(idx_EU.class_types) then
+                Add(ep_class_types, idx_EU.class_types[i]);
             fi;
         od;
-        if k_eu = fail then
-            Error("TranslateSpectralDataToEPlus: rep_ep of EP-class ",
-                  k_ep, " (= ", rep_ep, ") pulls back to ", rep_eu,
-                  " which is not in any EU conjugacy class. This should ",
-                  "not happen if psi is an isomorphism and the EU idx ",
-                  "covers every conjugacy class.");
+        # Memoise ConjugacyClasses(ep_group) -> OUR list, so any
+        # downstream call to `ConjugacyClasses(ep_group)` or
+        # `NrConjugacyClasses(ep_group)` uses our enumeration without
+        # triggering GAP's generic search.
+        if not HasConjugacyClasses(ep_group) then
+            SetConjugacyClasses(ep_group, ep_classes);
         fi;
-        Add(ep_to_eu_class, k_eu);
-    od;
+        # num_irreps mirrors the EU side directly (same per-class
+        # value, since the per-class centraliser is isomorphic via
+        # psi^{-1}).
+        ep_num_irreps := ShallowCopy(idx_EU.num_irreps);
+        ep_rank := idx_EU.rank;
+        ep_global_offset := ShallowCopy(idx_EU.global_offset);
+        ep_global_to_local := ShallowCopy(idx_EU.global_to_local);
+        # Note: we do NOT set `is_closed_form := true` on idx_EP, even
+        # though the EU-side was closed-form. The reason: the closed-form
+        # irrep evaluator `EPlusBuildAllCharacterRows` requires class
+        # representatives to be MATRICES (it does `h mod 2` to extract
+        # symplectic bits), but our `ep_reps` are PC group elements (EP
+        # = `EPlusGroup(m)` = an `ExtraspecialGroup` PC realisation, not
+        # a matrix group). Setting `is_closed_form := true` would route
+        # `_EnsureClassData` at the central class through the matrix-only
+        # closed-form path and crash. Instead, we leave it as a plain
+        # lazy idx: the per-class CT is built generically via
+        # `CharacterTable(C)` on first access, which is acceptable for
+        # the central class (single CT build, dominated by other costs).
+        # The B2 win is in skipping `ConjugacyClasses(ep_group)`, which
+        # is independent of the per-class CT decision.
+        idx_EP := rec(
+            group := ep_group,
+            order := idx_EU.order,
+            classes := ep_classes,
+            reps := ep_reps,
+            class_sizes := ep_class_sizes,
+            centralisers := ep_centralisers,
+            ct_centraliser := List([1..num_classes_eu], _ -> fail),
+            cc_centraliser := List([1..num_classes_eu], _ -> fail),
+            irreps         := List([1..num_classes_eu], _ -> fail),
+            irrep_dims     := List([1..num_classes_eu], _ -> fail),
+            num_irreps := ep_num_irreps,
+            global_offset := ep_global_offset,
+            global_to_local := ep_global_to_local,
+            rank := ep_rank,
+            is_lazy := true,
+            source := "translated-closed-form-eplus"
+        );
+        if IsBound(idx_EU.class_types) then
+            idx_EP.class_types := ep_class_types;
+        fi;
+        if IsBound(idx_EU.per_type_counts) then
+            idx_EP.per_type_counts := idx_EU.per_type_counts;
+        fi;
+        # Bijection is the identity permutation: psi maps EU-class k
+        # to EP-class k by construction.
+        ep_to_eu_class := [1..num_classes_eu];
+    else
+        # Legacy path: BuildSimpleIndexLazy(ep_group) triggers
+        # ConjugacyClasses(ep_group). Acceptable at m <= 3, but
+        # eats memory at m >= 5 (the OOM cliff #449 A1 fixes for
+        # the EU side; B2 fixes for the EP side via `use_closed_form`
+        # above).
+        idx_EP := BuildSimpleIndexLazy(ep_group);
+
+        # Build the EP -> EU class index map.
+        eu_classes := idx_EU.classes;
+        ep_to_eu_class := [];
+        for k_ep in [1..Length(idx_EP.reps)] do
+            rep_ep := idx_EP.reps[k_ep];
+            rep_eu := Image(tr_rec.psi_inv, rep_ep);
+            # Find which EU class contains rep_eu.
+            k_eu := fail;
+            for j in [1..Length(eu_classes)] do
+                if rep_eu in eu_classes[j] then
+                    k_eu := j;
+                    break;
+                fi;
+            od;
+            if k_eu = fail then
+                Error("TranslateSpectralDataToEPlus: rep_ep of EP-class ",
+                      k_ep, " (= ", rep_ep, ") pulls back to ", rep_eu,
+                      " which is not in any EU conjugacy class. This should ",
+                      "not happen if psi is an isomorphism and the EU idx ",
+                      "covers every conjugacy class.");
+            fi;
+            Add(ep_to_eu_class, k_eu);
+        od;
+    fi;
 
     # Now: trace_on_W_translated(class_idx_EP, irrep_idx, h_EP)
     #   = spectral_data_eu.trace_on_W(class_idx_EU, irrep_idx, h_EU)
