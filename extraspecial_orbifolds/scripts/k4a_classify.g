@@ -323,12 +323,13 @@ LoadDVANEAFamily := function(m)
        and not IsBound(dvan_result.ea_generators) then
         return fail;
     fi;
-    if not _K4A_LoadSibling("_DETF_BuildSetupG_LHS",
-                             "detecting_family_restriction.g") then
-        return fail;
-    fi;
-    setup_G := _DETF_BuildSetupG_LHS(m);
-    G := setup_G.group;
+    # Issue #449 routing fix: reconstruct EAs against a fresh
+    # `ExtraspecialGroup(2^(2m+1), "+")` rather than calling
+    # `_DETF_BuildSetupG_LHS(m)`. The persisted exponent vectors are
+    # against `FamilyPcgs(ExtraspecialGroup(2^(2m+1), "+"))` which is
+    # deterministic — we get the same PCGS without the heavy LHS
+    # resolution build (60+ sec at m=7).
+    G := ExtraspecialGroup(2^(2 * m + 1), "+");
     if IsBound(dvan_result.ea_generators_exp) then
         fam_pcgs := FamilyPcgs(G);
         gen_tuples := List(dvan_result.ea_generators_exp,
@@ -521,16 +522,16 @@ _K4A_ClassifySpectralEBranchMulti := function(opts, m, sparse_data, ea_family)
         h_ea_list := _DETF_AllMaxEAsIn(G_parent, m);
         restmats := rec(H_EA_list := h_ea_list);
     else
-        # m=7 subgroup-input path. Subgroups in ea_family live inside
-        # `_DETF_BuildSetupG_LHS(m).group` by construction
-        # (LoadDVANEAFamily reconstructs them via FamilyPcgs of this G).
-        if not _K4A_LoadSibling("_DETF_BuildSetupG_LHS",
-                                 "detecting_family_restriction.g") then
-            Error("_K4A_ClassifySpectralEBranchMulti: cannot locate ",
-                  "detecting_family_restriction.g for subgroup-input path");
-        fi;
-        setup_G := _DETF_BuildSetupG_LHS(m);
-        G_parent := setup_G.group;
+        # Subgroup-input path (m=7 currently; same path will apply if any
+        # future m uses pre-persisted subgroups). The subgroups in
+        # ea_family were reconstructed by LoadDVANEAFamily against
+        # `ExtraspecialGroup(2^(2m+1), "+")`, so use the SAME canonical
+        # group here. The spectral classification does NOT need the H^3
+        # cohomology context (resolution / UCT / cocyclebasis) of
+        # E_+(m) — those are only needed when the test consumes an
+        # explicit cocycle ω. At default opts (ω = 0 zero-cocycle stub
+        # surfaced per-EA), we only need the group object itself.
+        G_parent := ExtraspecialGroup(2^(2 * m + 1), "+");
         restmats := fail;
     fi;
     # Translate the parent-G spectral data ONCE to the EP-family of
