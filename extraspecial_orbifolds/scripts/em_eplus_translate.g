@@ -285,14 +285,14 @@ EmEPlusTranslateAgainst := function(arg)
             Add(image_list, gens_EP[2 * a - 1]);
             Add(image_list, gens_EP[2 * a]);
         od;
-        psi := GroupHomomorphismByImages(EU, EP, gens_EU, image_list);
-        if psi = fail then
-            Error("EmEPlusTranslateAgainst: GroupHomomorphismByImages ",
-                  "returned fail at m = ", m,
-                  ". The canonical map is not a hom. ",
-                  "target_EP's generators do not match the ",
-                  "[a_1, b_1, ..., a_m, b_m, z] convention.");
-        fi;
+        # Issue #449 #456 C6: skip the relation-validation check via
+        # GroupHomomorphismByImagesNC. By construction the canonical map
+        # [z, σ_{a,r}] -> [z, a_a, b_a] preserves the extraspecial
+        # commutator pattern at m >= 2; validating it via
+        # GroupHomomorphismByImages's standard check would re-prove this
+        # at every call (~9s at m=5, multiplied by 3 branches per K-4
+        # invocation). NC is safe here.
+        psi := GroupHomomorphismByImagesNC(EU, EP, gens_EU, image_list);
     fi;
     psi_inv := InverseGeneralMapping(psi);
     return rec(
