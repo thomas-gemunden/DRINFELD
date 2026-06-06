@@ -55,6 +55,13 @@
 #   qforms_f2.g, defect_rep_minus_id.g, defect_rep_minus_id_optim.g,
 #   untwisted_modular_data.g, krr_spectral_characters.g
 #     (we reuse EmUnimodGroup, NormaliseIntertwiner from the dense version).
+#
+# OPTIONAL (loaded by this file at the end if findable on a sibling path,
+# else gated out by `IsBoundGlobal` at the call site):
+#   eplus_classes_closed_form.g
+#     -> BuildSimpleIndexEPlusClosedForm(m) (issue #447 Change A).
+#     Skips GAP's slow `ConjugacyClasses(G)` at m >= 5 by using the
+#     four-type structural enumeration of E_+(m) conjugacy classes.
 
 
 # ============================================================
@@ -1106,7 +1113,15 @@ BuildKRRSpectralCharactersSparse := function(m)
     # trace_on_W EvalIrr fallback.
     useLazy := (m >= 5);
     t0 := Runtime();
-    if useLazy then
+    # Issue #447 Change A: at m >= 5, skip GAP's generic ConjugacyClasses(G)
+    # (which has been observed to run for 19+ hours on EmUnimodGroup(7))
+    # and use the closed-form four-type CC enumeration for E_+(m). The
+    # closed-form path also pre-populates ConjugacyClasses(G) via
+    # SetConjugacyClasses, so any downstream `CharacterTable(G)` /
+    # `NrConjugacyClasses(G)` call uses our enumeration too.
+    if m >= 5 and IsBoundGlobal("BuildSimpleIndexEPlusClosedForm") then
+        idx := BuildSimpleIndexEPlusClosedForm(m);
+    elif useLazy then
         idx := BuildSimpleIndexLazy(G);
     else
         idx := BuildSimpleIndex(G);
@@ -1114,7 +1129,11 @@ BuildKRRSpectralCharactersSparse := function(m)
     t1 := Runtime();
     Info(InfoWarning, 1,
          "  BuildKRRSpectralCharactersSparse: BuildSimpleIndex",
-         (function() if useLazy then return "Lazy"; else return ""; fi; end)(),
+         (function()
+              if m >= 5 and IsBoundGlobal("BuildSimpleIndexEPlusClosedForm") then
+                  return "EPlusClosedForm";
+              elif useLazy then return "Lazy"; else return ""; fi;
+          end)(),
          " built in ", (t1 - t0) / 1000., " s for m=", m,
          " (|G|=", idx.order, ", ", Length(idx.classes), " classes)");
     num_classes := Length(idx.classes);
@@ -1212,3 +1231,53 @@ BuildKRRSpectralCharactersSparse := function(m)
         source := "krr-sparse"
     );
 end;;
+
+
+# ============================================================
+# Issue #447 Change A: auto-load the closed-form CC enumeration sibling
+# if findable on the same directory as this file.
+#
+# Resolves the absolute path of the present file via INPUT_FILENAME() and
+# looks for `eplus_classes_closed_form.g` next to it. If absent or not
+# locatable, `BuildKRRSpectralCharactersSparse` falls back to the legacy
+# generic-ConjugacyClasses path via the `IsBoundGlobal` gate.
+# ============================================================
+_krrscs_self := INPUT_FILENAME();;
+if not IsBoundGlobal("BuildSimpleIndexEPlusClosedForm") then
+    # First try: resolve a sibling next to this file via INPUT_FILENAME.
+    # Works when the caller passed an absolute path to Read().
+    _krrscs_found := false;
+    if _krrscs_self <> fail and _krrscs_self <> "stream" then
+        _krrscs_basename := "krr_spectral_characters_sparse.g";
+        if Length(_krrscs_self) > Length(_krrscs_basename)
+           and _krrscs_self{[Length(_krrscs_self) - Length(_krrscs_basename) + 1
+                              .. Length(_krrscs_self)]} = _krrscs_basename then
+            _krrscs_sibling := Concatenation(
+                _krrscs_self{[1..Length(_krrscs_self) - Length(_krrscs_basename)]},
+                "eplus_classes_closed_form.g");
+            if IsExistingFile(_krrscs_sibling) then
+                Read(_krrscs_sibling);
+                _krrscs_found := true;
+            fi;
+            Unbind(_krrscs_sibling);
+        fi;
+        Unbind(_krrscs_basename);
+    fi;
+    # Fallback: relative-path search (mirrors em_eplus_translate.g's loader).
+    if not _krrscs_found then
+        for _krrscs_path in
+            [ "eplus_classes_closed_form.g",
+              "./eplus_classes_closed_form.g",
+              "../eplus_classes_closed_form.g",
+              "extraspecial_orbifolds/scripts/eplus_classes_closed_form.g" ] do
+            if IsExistingFile(_krrscs_path) then
+                Read(_krrscs_path);
+                _krrscs_found := true;
+                break;
+            fi;
+        od;
+        Unbind(_krrscs_path);
+    fi;
+    Unbind(_krrscs_found);
+fi;
+Unbind(_krrscs_self);
