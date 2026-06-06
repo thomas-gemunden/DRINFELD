@@ -110,7 +110,8 @@ end;;
 _BuildTraceCtx := function(h, m)
     local j, ctx, n, k, BPi, H, R, Mhh, A, AT, MhhSym, sht, RT, HT,
           hd, BPiT, augRows, r, c, i, A2, pivCols, pivRows, fullSol,
-          rowOfRREF, freeMask, sumLen, mhhSym, B;
+          rowOfRREF, freeMask, sumLen, mhhSym, B, rank, solveMap,
+          feasMat, A2row, idRow;
     # Identity-based cache lookup: we always pass the same matrix
     # object on repeat calls within a build, so IsIdenticalObj is
     # sufficient and avoids the O(n^2) matrix-equality fallback.
@@ -137,21 +138,33 @@ _BuildTraceCtx := function(h, m)
     # Row-reduce BPi.  We solve x * BPi = target by reducing the
     # augmented matrix [BPi^T | target^T]; pre-reduce the BPi^T side.
     # A2 starts as BPi^T augmented with identity for back-substitution.
+    # ----- Perf #449 A3: compile-primitive GF(2) RREF -----
+    # The old interpreted body did
+    #     A2[j] := List([1..2*n], i -> (A2[j][i] + A2[r][i]) mod 2)
+    # per elimination step (P3 anti-pattern: closure dispatch + mod-rat
+    # via IsRat).  At m=7 (n=128, n^2=16K row-add ops on length-256 rows)
+    # this dominates the per-h setup wall.  We tag A2 as a GF(2) matrix
+    # and use compiled `AddRowVector(A2[j], A2[r])` for row addition.
+    # Pivot-selection order is preserved byte-for-byte: for each column
+    # left-to-right, take the first row >= r with a 1, swap into row r,
+    # eliminate from every other row.  This produces the same final
+    # `solveMap` and `feasMat` rows as the interpreted code.
     BPiT := F2_Trans(BPi);  # n x n
     A2 := List([1..n], i -> Concatenation(BPiT[i], IdentityMat(n)[i]));
+    A2 := A2 * Z(2)^0;
+    ConvertToMatrixRep(A2, GF(2));
     r := 1;
     pivCols := [];
     pivRows := [];
     for c in [1..n] do
         if r > n then break; fi;
         i := r;
-        while i <= n and A2[i][c] = 0 do i := i + 1; od;
+        while i <= n and IsZero(A2[i][c]) do i := i + 1; od;
         if i > n then continue; fi;
         if i <> r then A2{[r, i]} := A2{[i, r]}; fi;
         for j in [1..n] do
-            if j <> r and A2[j][c] = 1 then
-                A2[j] := List([1..2 * n],
-                              i -> (A2[j][i] + A2[r][i]) mod 2);
+            if j <> r and not IsZero(A2[j][c]) then
+                AddRowVector(A2[j], A2[r]);
             fi;
         od;
         Add(pivCols, c);
@@ -171,20 +184,42 @@ _BuildTraceCtx := function(h, m)
     #     target ∈ Im(BPi).
     #   solveMap (rank, n) : x in F_2^n s.t. (x[pivCols[i]]) = (solveMap[i] . target^T)
     #     for i in 1..rank.  Other x[c] = 0.
+    #
+    # Convert solveMap / feasMat slices back to plain-integer lists so
+    # downstream code that multiplies them with integer matrices stays
+    # in the compiled integer-matmul path (no GF(2) <-> Int dispatches).
+    rank := Length(pivCols);
+    solveMap := EmptyPlist(rank);
+    for i in [1..rank] do
+        A2row := A2[i];
+        idRow := EmptyPlist(n);
+        for j in [n + 1 .. 2 * n] do
+            Add(idRow, Int(A2row[j]));
+        od;
+        Add(solveMap, idRow);
+    od;
+    feasMat := EmptyPlist(n - rank);
+    for i in [rank + 1 .. n] do
+        A2row := A2[i];
+        idRow := EmptyPlist(n);
+        for j in [n + 1 .. 2 * n] do
+            Add(idRow, Int(A2row[j]));
+        od;
+        Add(feasMat, idRow);
+    od;
     ctx := rec(
         h := h, m := m, n := n, k := k,
         BPi := BPi, H := H, HT := HT, R := R, RT := RT,
         Mhh := Mhh, MhhSym := MhhSym,
         A := A, AT := AT, kerLen := Length(A),
         sht := sht,
-        rank := Length(pivCols),
+        rank := rank,
         pivCols := pivCols,
         # solveMap[i] (length n): x[pivCols[i]] = solveMap[i] . target.
-        solveMap := List([1..Length(pivCols)], i -> A2[i]{[n+1..2*n]}),
+        solveMap := solveMap,
         # feasMat (rows n - rank): rows are linear functionals on target;
         # target feasible iff all evaluate to 0.
-        feasMat := List([Length(pivCols) + 1 .. n],
-                        i -> A2[i]{[n+1..2*n]})
+        feasMat := feasMat
     );
     Add(_traceHKeys, h);
     Add(_traceHVals, ctx);
@@ -529,7 +564,8 @@ end;;
 # list of length-cols vectors) so that the full affine solution set is
 #   { particular + sum_i e_i * kerBasis[i] : e_i in F_2 }.
 _F2_AffineSolveCols := function(A, b)
-    local rows, cols, M, r, c, i, j, k, pivCols, freeCols, x, kerBasis, v;
+    local rows, cols, M, r, c, i, j, k, pivCols, freeCols, x, kerBasis, v,
+          A_aug;
     rows := Length(A);
     if rows = 0 then
         # No constraints — any c is a solution, kernel is all of F_2^cols.
@@ -538,20 +574,34 @@ _F2_AffineSolveCols := function(A, b)
     fi;
     cols := Length(A[1]);
     # Augment A with b as the last column; row-reduce.
-    M := List([1..rows], i ->
-        Concatenation(List([1..cols], j -> A[i][j] mod 2), [b[i] mod 2]));
+    # ----- Perf #449 C4: compile-primitive GF(2) RREF -----
+    # The old interpreted body did
+    #     M[j] := List([1..cols+1], k -> (M[j][k] + M[r][k]) mod 2)
+    # per elimination step (P3 anti-pattern: closure dispatch + mod-rat
+    # via IsRat).  We tag M as a GF(2) matrix and use compiled
+    # `AddRowVector(M[j], M[r])` for row addition.  Pivot-selection
+    # order matches the interpreted code: leftmost column, first row
+    # >= r with a 1, swap into row r, eliminate from all other rows.
+    A_aug := EmptyPlist(rows);
+    for i in [1..rows] do
+        v := EmptyPlist(cols + 1);
+        for j in [1..cols] do Add(v, A[i][j] mod 2); od;
+        Add(v, b[i] mod 2);
+        Add(A_aug, v);
+    od;
+    M := A_aug * Z(2)^0;
+    ConvertToMatrixRep(M, GF(2));
     r := 1;
     pivCols := [];
     for c in [1..cols] do
         if r > rows then break; fi;
         i := r;
-        while i <= rows and M[i][c] = 0 do i := i + 1; od;
+        while i <= rows and IsZero(M[i][c]) do i := i + 1; od;
         if i > rows then continue; fi;
         if i <> r then M{[r, i]} := M{[i, r]}; fi;
         for j in [1..rows] do
-            if j <> r and M[j][c] = 1 then
-                M[j] := List([1..cols + 1],
-                              k -> (M[j][k] + M[r][k]) mod 2);
+            if j <> r and not IsZero(M[j][c]) then
+                AddRowVector(M[j], M[r]);
             fi;
         od;
         Add(pivCols, c);
@@ -559,23 +609,23 @@ _F2_AffineSolveCols := function(A, b)
     od;
     # Inconsistent if any row [0, 0, ..., 0 | 1] survives.
     for i in [r..rows] do
-        if M[i][cols + 1] = 1 then
+        if not IsZero(M[i][cols + 1]) then
             return rec(particular := fail, kerBasis := []);
         fi;
     od;
     # Particular solution: pivot cols get the RHS, free cols get 0.
-    x := List([1..cols], i -> 0);
+    x := ListWithIdenticalEntries(cols, 0);
     for i in [1..Length(pivCols)] do
-        x[pivCols[i]] := M[i][cols + 1];
+        x[pivCols[i]] := Int(M[i][cols + 1]);
     od;
     # Kernel basis: one vector per free column.
     freeCols := Filtered([1..cols], c -> not (c in pivCols));
     kerBasis := [];
     for c in freeCols do
-        v := List([1..cols], j -> 0);
+        v := ListWithIdenticalEntries(cols, 0);
         v[c] := 1;
         for i in [1..Length(pivCols)] do
-            v[pivCols[i]] := M[i][c];
+            v[pivCols[i]] := Int(M[i][c]);
         od;
         Add(kerBasis, v);
     od;
@@ -1022,9 +1072,19 @@ end;;
 
 # Return parallel lists (class_reps, class_sizes) for C such that
 # C = union of size class_sizes[i] orbits, each containing class_reps[i].
+#
+# Issue #449 A1': route the centraliser read through
+# `_EPlusCentraliserOf` so closed-form E_+(m) idxs with lazy non-central
+# centraliser slots materialise on first access. No-op for eager idxs
+# (the slot already holds a group) and for central classes where the
+# slot is G itself.
 CentraliserClassData := function(idx, class_idx)
     local C, cc;
-    C := idx.centralisers[class_idx];
+    if IsBoundGlobal("_EPlusCentraliserOf") then
+        C := _EPlusCentraliserOf(idx, class_idx);
+    else
+        C := idx.centralisers[class_idx];
+    fi;
     cc := ConjugacyClasses(C);
     return rec(
         classes := cc,
@@ -1055,7 +1115,15 @@ end;;
 CharacterMultiplicities := function(idx, class_idx, cls_data, traces)
     local C, order, irreps, num_irreps, mults, k, chi, total, j,
           cc_idx, ki, val, h, tr;
-    C := idx.centralisers[class_idx];
+    # Issue #449 A1': lazy centraliser materialisation. In the K-4b
+    # m=7 spectral pipeline this is only called for the central class
+    # (where the slot is G), so the materialisation path is never
+    # exercised; the routing is here for consistency.
+    if IsBoundGlobal("_EPlusCentraliserOf") then
+        C := _EPlusCentraliserOf(idx, class_idx);
+    else
+        C := idx.centralisers[class_idx];
+    fi;
     order := Size(C);
     irreps := idx.irreps[class_idx];
     num_irreps := idx.num_irreps[class_idx];
