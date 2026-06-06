@@ -159,24 +159,23 @@ end;;
 # Materialise the per-class CharacterTable data for class i. No-op if
 # already materialised, or if `idx` is the eager version (no `is_lazy`).
 #
-# Issue #449 A1''' + A1'''': when idx comes from
-# `BuildSimpleIndexEPlusClosedForm` AND class i is the central one
-# (centraliser = G = idx.group), bypass the expensive
-# `CharacterTable(EmUnimodGroup(m))` build entirely and instead
-# populate `idx.irreps[i]` via the closed-form evaluator
-# (`EPlusBuildAllCharacterRows` in `eplus_irreps_closed_form.g`).
-# This is the second OOM-cliff fix for K-4b m=7 (after #450 fixed
-# `ConjugacyClasses(G)`).
+# Issue #449 A1''' + A1'''' + A1':
+# - Central class of E_+(m) with `is_closed_form` flag: bypass
+#   `CharacterTable(EmUnimodGroup(m))` entirely via the closed-form
+#   evaluator (`EPlusBuildAllCharacterRows` in
+#   `eplus_irreps_closed_form.g`). Second OOM-cliff fix at m=7 (after
+#   #450 fixed `ConjugacyClasses(G)`).
+# - Non-central class with `is_closed_form` and lazy centraliser slot:
+#   materialise via `_EPlusCentraliserOf` (in `eplus_classes_closed_form.g`).
 _EnsureClassData := function(idx, i)
-    local ct, cc, irr, m_inferred, all_rows;
+    local ct, cc, irr, m_inferred, all_rows, C;
     if not IsBound(idx.is_lazy) or idx.is_lazy = false then
         return;
     fi;
     if idx.ct_centraliser[i] <> fail then
         return;
     fi;
-    # Closed-form dispatch for central class of E_+(m) (issue #449
-    # A1''' + A1''''). Only triggers when:
+    # Closed-form dispatch for central class of E_+(m). Only triggers when:
     #   (a) idx has `.is_closed_form = true` (set by
     #       `BuildSimpleIndexEPlusClosedForm`).
     #   (b) The centraliser is the ambient group itself (i.e. the
@@ -188,26 +187,21 @@ _EnsureClassData := function(idx, i)
        and IsBoundGlobal("EPlusBuildAllCharacterRows") then
         m_inferred := LogInt(idx.order, 2) - 1;  # |G| = 2^{2m+1} => 2m+1
         m_inferred := QuoInt(m_inferred, 2);
-        # `idx.cc_centraliser[i]` = `idx.classes`: for the central class
-        # the centraliser is G, so the centraliser's conjugacy classes
-        # are EXACTLY G's conjugacy classes (which we already have).
         idx.cc_centraliser[i] := idx.classes;
-        # Build the |Irr| = 4^m + 1 character rows via the closed-form
-        # evaluator. Each row is a length-|classes| list of integers
-        # supporting `chi[j]` indexing the same way GAP's Character
-        # objects do (so downstream consumers like
-        # `CharacterMultiplicities` need no change).
         all_rows := EPlusBuildAllCharacterRows(m_inferred, idx.reps);
         idx.irreps[i] := all_rows;
         idx.irrep_dims[i] := List(all_rows, chi -> chi[1]);
-        # `ct_centraliser[i]` is left as a sentinel string "closed-form"
-        # so the `idx.ct_centraliser[i] <> fail` guard above
-        # short-circuits future calls. We don't build an actual
-        # CharacterTable object here (that's the whole point).
         idx.ct_centraliser[i] := "closed-form";
         return;
     fi;
-    ct := CharacterTable(idx.centralisers[i]);
+    # Non-central path: route centraliser read through _EPlusCentraliserOf
+    # (A1') so lazy slots materialise on first access.
+    if IsBoundGlobal("_EPlusCentraliserOf") then
+        C := _EPlusCentraliserOf(idx, i);
+    else
+        C := idx.centralisers[i];
+    fi;
+    ct := CharacterTable(C);
     cc := ConjugacyClasses(ct);
     irr := Irr(ct);
     idx.ct_centraliser[i] := ct;
@@ -444,7 +438,13 @@ ComputeSBlock := function(idx, transport, i, j)
     elts_j := t_j.elements;
     ts_i := t_i.t_of;
     ts_j := t_j.t_of;
-    cen_i_elts := AsList(idx.centralisers[i]);
+    # Issue #449 A1': lazy centraliser materialisation for closed-form
+    # E_+(m) idxs. No-op for eager idxs (slot already holds a group).
+    if IsBoundGlobal("_EPlusCentraliserOf") then
+        cen_i_elts := AsList(_EPlusCentraliserOf(idx, i));
+    else
+        cen_i_elts := AsList(idx.centralisers[i]);
+    fi;
     elt_to_idx_j := t_j.elt_to_idx;
     ord := idx.order;
     if Length(elts_j) <= Length(cen_i_elts) then

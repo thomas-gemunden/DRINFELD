@@ -63,10 +63,19 @@ tic := Runtime();;
 for i in [1..Length(idx.classes)] do
     local_T := List([1..idx.num_irreps[i]],
         k -> T[idx.global_offset[i] + k]);
+    # Issue #449 A1': lazy centraliser materialisation. For closed-form
+    # E_+(m) idxs this materialises non-central centralisers on demand
+    # (acceptable here — this driver writes the full T vector). No-op
+    # for eager idxs.
+    if IsBoundGlobal("_EPlusCentraliserOf") then
+        cen_i := _EPlusCentraliserOf(idx, i);
+    else
+        cen_i := idx.centralisers[i];
+    fi;
     PrintTo(Concatenation(outdir, "/sector_", String(i), ".g"),
         "# Mod(D^1(E_+(7))) T, sector ", i, "\n",
         "# class size: ", idx.class_sizes[i], "\n",
-        "# centraliser order: ", Order(idx.centralisers[i]), "\n",
+        "# centraliser order: ", Order(cen_i), "\n",
         "# # irreps: ", idx.num_irreps[i], "\n",
         "# global index range: ", idx.global_offset[i] + 1, "..",
             idx.global_offset[i] + idx.num_irreps[i], "\n",

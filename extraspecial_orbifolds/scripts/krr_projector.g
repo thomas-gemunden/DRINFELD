@@ -182,7 +182,13 @@ ProjectorFormula := function(W_g1, W_g2, intertwiner_data)
     elts_j := t_j.elements;
     ts_i := t_i.t_of;
     ts_j := t_j.t_of;
-    cen_i_elts := AsList(idx.centralisers[i]);
+    # Issue #449 A1': lazy centraliser materialisation for closed-form
+    # E_+(m) idxs. No-op for eager idxs.
+    if IsBoundGlobal("_EPlusCentraliserOf") then
+        cen_i_elts := AsList(_EPlusCentraliserOf(idx, i));
+    else
+        cen_i_elts := AsList(idx.centralisers[i]);
+    fi;
     elt_to_idx_j := t_j.elt_to_idx;
     ord := idx.order;
     total := 0;

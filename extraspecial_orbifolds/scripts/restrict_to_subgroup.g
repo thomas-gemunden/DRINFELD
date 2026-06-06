@@ -413,7 +413,15 @@ RestrictedIrrepDecomposition := function(idx_G, idx_H, k_G, k_H, conj)
           cls_H, normaliser, cls_idx_G, decomposition_fn;
     _EnsureClassData(idx_G, k_G);
     _EnsureClassData(idx_H, k_H);
-    C_H := idx_H.centralisers[k_H];
+    # Issue #449 A1': lazy centraliser materialisation for closed-form
+    # E_+(m) idxs. idx_H is typically a subgroup (D_8 / Q_8 / EA) built
+    # via BuildSimpleIndexLazy so this is usually a no-op; routed here
+    # for safety in case a future caller passes a closed-form idx_H.
+    if IsBoundGlobal("_EPlusCentraliserOf") then
+        C_H := _EPlusCentraliserOf(idx_H, k_H);
+    else
+        C_H := idx_H.centralisers[k_H];
+    fi;
     ct_H := idx_H.ct_centraliser[k_H];
     cc_H := idx_H.cc_centraliser[k_H];
     irr_H := idx_H.irreps[k_H];
@@ -976,7 +984,13 @@ RestrictTraceOnWToSubgroupProjective := function(intertwiner_data_G, H)
         a_H_loc := idx_H.reps[k_H_arg];
         conj_loc := class_to_G[k_H_arg].conj;
         a_G_loc := idx_G.reps[class_to_G[k_H_arg].k_G];
-        C_H := idx_H.centralisers[k_H_arg];
+        # Issue #449 A1': lazy centraliser materialisation (no-op for
+        # non-closed-form idxs; see RestrictedIrrepDecomposition note).
+        if IsBoundGlobal("_EPlusCentraliserOf") then
+            C_H := _EPlusCentraliserOf(idx_H, k_H_arg);
+        else
+            C_H := idx_H.centralisers[k_H_arg];
+        fi;
         # Pullback closure: α_{a_H}^H(x_H, y_H) =
         #   α_{a_G}^G(conj · x_H · conj^{-1}, conj · y_H · conj^{-1}).
         # _KRRI_AlphaG takes g = a_G and the (already-G-conjugated) x, y.

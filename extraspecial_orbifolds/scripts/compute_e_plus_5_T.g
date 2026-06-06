@@ -65,10 +65,17 @@ Print("\nWriting per-sector chunks to ", outdir, "/sector_<i>.g ...\n");
 for i in [1..Length(idx.classes)] do
     local_T := List([1..idx.num_irreps[i]],
         k -> T[idx.global_offset[i] + k]);
+    # Issue #449 A1': lazy centraliser materialisation (no-op for
+    # eager idxs).
+    if IsBoundGlobal("_EPlusCentraliserOf") then
+        cen_i := _EPlusCentraliserOf(idx, i);
+    else
+        cen_i := idx.centralisers[i];
+    fi;
     PrintTo(Concatenation(outdir, "/sector_", String(i), ".g"),
         "# Mod(D^1(E_+(5))) T, sector ", i, "\n",
         "# class size: ", idx.class_sizes[i], "\n",
-        "# centraliser order: ", Order(idx.centralisers[i]), "\n",
+        "# centraliser order: ", Order(cen_i), "\n",
         "# # irreps: ", idx.num_irreps[i], "\n",
         "# global index range: ", idx.global_offset[i] + 1, "..",
             idx.global_offset[i] + idx.num_irreps[i], "\n",
