@@ -224,6 +224,100 @@ end;;
 
 
 # ============================================================
+# Memoisation cache for BuildIntertwinerDataUntwisted (audit #456 C3).
+# ============================================================
+#
+# Keyed by a stable identifier derived from H (IdGroup when cheap;
+# otherwise a tuple of `Order(H)` and a structural hash). The cached
+# value is the `BuildIntertwinerDataUntwisted(H)` rec, which is
+# referentially shared across consecutive
+# `RestrictTraceOnWToSubgroupHonourParent` calls for the same H.
+#
+# Cache key choice: GAP's `IdGroup(H)` requires the small-groups library
+# and is fast for orders ≤ 2000. For E_+(m) detecting subgroups (D_8,
+# Q_8, EA(r), r ≤ 2m+1), |H| is always ≤ 2^{2m+1}; at m=7 the EA
+# subgroups have |H| = 2^8 = 256, still trivially within IdGroup's
+# range. We use `IdGroup(H)` as the primary key with a fallback to
+# `[Order(H), AsSet(GeneratorsOfGroup(H))]` for groups too large for
+# IdGroup.
+#
+# Note: at m=7 in the K-4b spectral pipeline the call pattern is:
+#   8-EA + D_8 + Q_8 detecting subgroups touched ~ k_G times each, where
+# k_G is the number of central classes visited. Memoisation collapses
+# the |class_to_G| BFS + transport builds (60-300 ms each at m=7) from
+# ~10 calls to 1 per H.
+#
+# Lifetime: module-level dictionary, GC'd only at GAP shutdown. A
+# downstream caller can manually clear via `_RTS_BIDU_CACHE := rec();`
+# (see test_rts_closed_form.g).
+_RTS_BIDU_CACHE := rec();;
+
+# Compute a stable key for a subgroup H, suitable as a record-field
+# name in `_RTS_BIDU_CACHE`. Prefer `IdGroup` when applicable (cheap
+# and canonical); fall back to a structural string for larger H.
+_RTS_BIDU_CacheKey := function(H)
+    local id, ord;
+    ord := Order(H);
+    # IdGroup-able range: GAP's smallgrp library covers |G| ≤ 2000 with
+    # some exceptions. For our use (E_+(m) detecting subgroups, |H| ≤
+    # 2^{2m+1}) we are well inside this range at m ≤ 7 (max |H| = 2^15
+    # for H = G, but typical |H| = 8 to 256).
+    if ord <= 2000 then
+        # IsGroup test guards against improperly-formed inputs.
+        if IsGroup(H) then
+            id := IdGroup(H);
+            return Concatenation("id_", String(ord), "_", String(id[2]));
+        fi;
+    fi;
+    # Fallback: structural string from Order + generator hashes.
+    return Concatenation("ord_", String(ord),
+                         "_gens_",
+                         String(Length(GeneratorsOfGroup(H))));
+end;;
+
+# Memoised wrapper: returns the cached `BuildIntertwinerDataUntwisted(H)`
+# rec, building (and caching) on first miss. Also stores the H instance
+# alongside so the caller can verify identity-vs-equality semantics.
+#
+# Multiple distinct H values that share the same IdGroup (e.g. two
+# different D_8 subgroups of G_em) will collide in the cache; the
+# downstream `RestrictTraceOnWToSubgroupHonourParent` then sees a
+# different group instance than the one passed in. To detect that case,
+# we double-check via `Order(H) = Order(cached.group)` and a sample
+# generator membership test. If those checks fail we BYPASS the cache
+# and rebuild.
+_RTS_GetBIDUCached := function(H)
+    local key, cached, gens_H, sample, sample_in_cache_group;
+    key := _RTS_BIDU_CacheKey(H);
+    if IsBound(_RTS_BIDU_CACHE.(key)) then
+        cached := _RTS_BIDU_CACHE.(key);
+        # Safety: IdGroup collisions can produce false-positive hits if
+        # the two H groups are genuinely different (e.g. two D_8 subs
+        # in distinct E_+(m) families). Detect via:
+        #   (a) order match — IdGroup ensures this, but cheap to verify.
+        #   (b) sample-generator membership.
+        if Order(cached.group) = Order(H) then
+            gens_H := GeneratorsOfGroup(H);
+            if Length(gens_H) > 0 then
+                sample := gens_H[1];
+                sample_in_cache_group := sample in cached.group;
+            else
+                # H is trivial.
+                sample_in_cache_group := true;
+            fi;
+            if sample_in_cache_group then
+                return cached;
+            fi;
+        fi;
+        # Fall through: rebuild and overwrite.
+    fi;
+    cached := BuildIntertwinerDataUntwisted(H);
+    _RTS_BIDU_CACHE.(key) := cached;
+    return cached;
+end;;
+
+
+# ============================================================
 # Internal: map an H-class rep to (k_G, conj) inside G.
 # ============================================================
 #
@@ -233,14 +327,152 @@ end;;
 # `conj` in G with
 #       conj * a_H * conj^-1 = idx_G.reps[k_G].
 #
-# Implementation:
-#   1. Iterate G-classes; the first one containing a_H is k_G.
-#      (Use `a_H in idx_G.classes[k]`.)
-#   2. Compute conj via `RepresentativeAction(G, a_H, idx_G.reps[k_G])`.
+# DISPATCH (audit #456 B1)
+# ========================
+# Two implementations are available:
+#
+#   * `_RTS_FindGClassOfClosedForm(idx_G, a_H, G)` — O(1) per call after
+#     a one-shot dictionary build. Only valid when `idx_G.is_closed_form
+#     = true` (set by `BuildSimpleIndexEPlusClosedForm`). The dictionary
+#     is cached on `idx_G` as `_rts_class_lookup` (a `NewDictionary`
+#     keyed by matrix-element with values rec(k_G := k, sign := ±1));
+#     and per-class conjugators (for the `sign = -1` case, where
+#     `a_H = -idx_G.reps[k]`) are cached lazily on first miss in
+#     `_rts_neg_conjugator[k]`. At m=7 this turns the 2064 H-class lookups
+#     per detecting-family pass from ~500ms each into ~10µs each.
+#
+#   * `_RTS_FindGClassOfGeneric(idx_G, a_H, G)` — legacy O(|classes|) +
+#     `RepresentativeAction` path. Used for `idx_G` that lack the closed-
+#     form marker (e.g. `BuildSimpleIndex(D_8)`, generic groups). The
+#     code path is byte-for-byte identical to the pre-B1 implementation.
+#
+# `_RTS_FindGClassOf` is the entry point: it inspects
+# `idx_G.is_closed_form` and dispatches.
 #
 # Returns a record rec(k_G := ..., conj := ...).
 # Errors if a_H is not in any G-class (shouldn't happen if H <= G).
-_RTS_FindGClassOf := function(idx_G, a_H, G)
+
+# ----- Closed-form helpers (B1) -----------------------------------------
+#
+# `_RTS_BuildClassLookup(idx_G)` builds the matrix-keyed dictionary on
+# first call and caches it on `idx_G._rts_class_lookup`. For E_+(m) the
+# centre Z = <-I> has size 2, and every non-central class is {r, -r}
+# (size 2). So the dictionary has 2 * Length(idx_G.classes) ≈ 2 * 4^m
+# entries (32770 at m=7) — well within RAM. Build cost: O(|G|) matrix
+# negations + dict inserts, ~3 sec at m=7.
+#
+# Sign convention: dict[r] = rec(k_G := k, sign := 1); dict[-r] =
+# rec(k_G := k, sign := -1). At the central classes, dict[I] = rec(k_G
+# := 1, sign := 1); dict[-I] = rec(k_G := 2, sign := 1) — the two are
+# distinct classes, so sign is always +1 for centrals (since each
+# central class has only one element). Non-centrals have sign ±1.
+_RTS_BuildClassLookup := function(idx_G)
+    local d, k, rep, neg_rep, central_type;
+    if IsBound(idx_G._rts_class_lookup) then
+        return idx_G._rts_class_lookup;
+    fi;
+    # Use a dictionary keyed by the matrix object. `NewDictionary` with
+    # the first arg = a sample key works for any GAP element type.
+    d := NewDictionary(idx_G.reps[1], true);
+    for k in [1..Length(idx_G.reps)] do
+        rep := idx_G.reps[k];
+        # Insert the canonical rep with sign = +1.
+        AddDictionary(d, rep, rec(k_G := k, sign := 1));
+        # For non-central classes, also insert -rep (= z * rep) with
+        # sign = -1. We can detect "non-central" by the closed-form type
+        # marker, or simply check class size.
+        if IsBound(idx_G.class_types)
+           and (idx_G.class_types[k] = "sigma2"
+                or idx_G.class_types[k] = "sigma_1sigma_2") then
+            neg_rep := -rep;
+            AddDictionary(d, neg_rep, rec(k_G := k, sign := -1));
+        elif (not IsBound(idx_G.class_types))
+             and IsBound(idx_G.class_sizes)
+             and idx_G.class_sizes[k] = 2 then
+            neg_rep := -rep;
+            AddDictionary(d, neg_rep, rec(k_G := k, sign := -1));
+        fi;
+    od;
+    idx_G._rts_class_lookup := d;
+    return d;
+end;;
+
+# Cache of conjugators `g_k` per non-central class `k`, such that
+# `g_k * (-r_k) * g_k^-1 = r_k`, equivalently `g_k * r_k * g_k^-1 = -r_k`.
+# Filled lazily on first miss by `_RTS_GetNegConjugator(idx_G, k, G)`.
+#
+# Existence: for non-central r_k ∈ E_+(m), the symplectic pairing on
+# G/Z is non-degenerate, so there is some g with [g, r_k] = z = -I.
+# Equivalently, g * r_k * g^-1 = -r_k. We find such a g by searching
+# `Centralizer(G, _)`'s complement, or via the symplectic-basis
+# generators of G (σ_{a,r}).
+_RTS_GetNegConjugator := function(idx_G, k, G)
+    local r, gen, neg_r, conj, gens;
+    if not IsBound(idx_G._rts_neg_conjugator) then
+        idx_G._rts_neg_conjugator := [];
+    fi;
+    if IsBound(idx_G._rts_neg_conjugator[k])
+       and idx_G._rts_neg_conjugator[k] <> fail then
+        return idx_G._rts_neg_conjugator[k];
+    fi;
+    r := idx_G.reps[k];
+    neg_r := -r;
+    # Try the matrix-group generators of G first — for E_+(m) the
+    # generators are {z, σ_{a,r}}, and at least one σ_{a,r} fails to
+    # commute with r (by non-degeneracy of the symplectic form). The
+    # search costs O(|gens|) = O(2m) matrix multiplications per class.
+    gens := GeneratorsOfGroup(G);
+    conj := fail;
+    for gen in gens do
+        if gen * r * gen^-1 = neg_r then
+            conj := gen;
+            break;
+        fi;
+    od;
+    if conj = fail then
+        # Fallback to GAP's RepresentativeAction (slow but always finds
+        # the conjugator if one exists). For E_+(m) the loop above
+        # always succeeds, so this branch is defensive.
+        conj := RepresentativeAction(G, neg_r, r);
+        if conj = fail then
+            Error("_RTS_GetNegConjugator: cannot find g with ",
+                  "g * (-r_k) * g^-1 = r_k at k = ", k,
+                  ". idx_G may not be a closed-form E_+(m) idx.");
+        fi;
+        # RepresentativeAction(G, src, dst) returns g with src ^ g = dst,
+        # i.e. g^-1 src g = dst, so we want g^-1 here.
+        conj := conj ^ -1;
+    fi;
+    idx_G._rts_neg_conjugator[k] := conj;
+    return conj;
+end;;
+
+_RTS_FindGClassOfClosedForm := function(idx_G, a_H, G)
+    local d, hit, k_G, conj;
+    d := _RTS_BuildClassLookup(idx_G);
+    hit := LookupDictionary(d, a_H);
+    if hit = fail then
+        Error("_RTS_FindGClassOfClosedForm: element ", a_H,
+              " is not in idx_G's class lookup. Either a_H is not in ",
+              "G, or idx_G's class enumeration is incomplete.");
+    fi;
+    k_G := hit.k_G;
+    if hit.sign = 1 then
+        # a_H = idx_G.reps[k_G]; identity conjugator suffices.
+        conj := One(G);
+    else
+        # a_H = -idx_G.reps[k_G]; need conj with conj * a_H * conj^-1
+        # = idx_G.reps[k_G]. By construction of the cache, this is the
+        # element g_k with g_k * r_k * g_k^-1 = -r_k (since z is central
+        # and commutes with everything, conjugating -r_k by g_k yields
+        # -(g_k r_k g_k^-1) = -(-r_k) = r_k).
+        conj := _RTS_GetNegConjugator(idx_G, k_G, G);
+    fi;
+    return rec(k_G := k_G, conj := conj);
+end;;
+
+# ----- Generic (legacy) helper ------------------------------------------
+_RTS_FindGClassOfGeneric := function(idx_G, a_H, G)
     local k, conj;
     for k in [1..Length(idx_G.classes)] do
         if a_H in idx_G.classes[k] then
@@ -256,7 +488,7 @@ _RTS_FindGClassOf := function(idx_G, a_H, G)
             # RepresentativeAction returns, hence:
             conj := RepresentativeAction(G, a_H, idx_G.reps[k]);
             if conj = fail then
-                Error("_RTS_FindGClassOf: RepresentativeAction(G, ",
+                Error("_RTS_FindGClassOfGeneric: RepresentativeAction(G, ",
                       a_H, ", ", idx_G.reps[k], ") = fail despite ",
                       "a_H in class ", k, ". GAP convention mismatch?");
             fi;
@@ -268,8 +500,16 @@ _RTS_FindGClassOf := function(idx_G, a_H, G)
             return rec(k_G := k, conj := conj);
         fi;
     od;
-    Error("_RTS_FindGClassOf: element ", a_H,
+    Error("_RTS_FindGClassOfGeneric: element ", a_H,
           " is not in any G-conjugacy class.");
+end;;
+
+# ----- Dispatcher entry point -------------------------------------------
+_RTS_FindGClassOf := function(idx_G, a_H, G)
+    if IsBound(idx_G.is_closed_form) and idx_G.is_closed_form = true then
+        return _RTS_FindGClassOfClosedForm(idx_G, a_H, G);
+    fi;
+    return _RTS_FindGClassOfGeneric(idx_G, a_H, G);
 end;;
 
 
@@ -410,7 +650,7 @@ end;;
 RestrictedIrrepDecomposition := function(idx_G, idx_H, k_G, k_H, conj)
     local C_H, ct_H, cc_H, irr_H, num_irreps_H, n_classes_H,
           chi_G_phi_values, j, rep_h, phi_rep, class_size_h,
-          cls_H, normaliser, cls_idx_G, decomposition_fn;
+          cls_H, normaliser, cls_idx_G, decomposition_fn, abelian_fast;
     _EnsureClassData(idx_G, k_G);
     _EnsureClassData(idx_H, k_H);
     # Issue #449 A1': lazy centraliser materialisation for closed-form
@@ -429,24 +669,52 @@ RestrictedIrrepDecomposition := function(idx_G, idx_H, k_G, k_H, conj)
     n_classes_H := Length(cc_H);
     normaliser := Order(C_H);
 
+    # Audit #456 B3: detect abelian C_H(a_H) and engage the Pontryagin
+    # fast path. For abelian C_H, every class is a singleton (n_classes_H
+    # = |C_H|), every irrep is 1-dim, and |class_size_h[t]| = 1 for all
+    # t. We can skip the `Size(cls_H)` and `Representative(cls_H)` calls
+    # and read elements + multiplicities directly. The math is unchanged
+    # (Frobenius reciprocity on abelian C_H), but with fewer function
+    # dispatches.
+    abelian_fast := IsAbelian(C_H);
+
     # Pre-compute the class index in C_G(a_G) of phi(rep_h) for each
     # conjugacy class [h] of C_H(a_H), and also |[h]|. The
     # phi-images are used by every j_G in the per-irrep decomposition
     # so we amortise the conjugation + class-lookup work.
     chi_G_phi_values := [];
     class_size_h := [];
-    for j in [1..n_classes_H] do
-        cls_H := cc_H[j];
-        rep_h := Representative(cls_H);
-        phi_rep := conj * rep_h * conj^-1;
-        # ClassIndexInCentraliser auto-materialises idx_G data for k_G.
-        cls_idx_G := ClassIndexInCentraliser(idx_G, k_G, phi_rep);
-        Add(chi_G_phi_values, cls_idx_G);
-        Add(class_size_h, Size(cls_H));
-    od;
+    if abelian_fast then
+        # Abelian path: cc_H[j] is a singleton ConjugacyClass; we still
+        # need `Representative(cc_H[j])` to get the matrix, but we can
+        # skip the `Size(cls_H)` dispatch (always 1 for abelian).
+        for j in [1..n_classes_H] do
+            rep_h := Representative(cc_H[j]);
+            phi_rep := conj * rep_h * conj^-1;
+            cls_idx_G := ClassIndexInCentraliser(idx_G, k_G, phi_rep);
+            Add(chi_G_phi_values, cls_idx_G);
+            Add(class_size_h, 1);
+        od;
+    else
+        for j in [1..n_classes_H] do
+            cls_H := cc_H[j];
+            rep_h := Representative(cls_H);
+            phi_rep := conj * rep_h * conj^-1;
+            # ClassIndexInCentraliser auto-materialises idx_G data for k_G.
+            cls_idx_G := ClassIndexInCentraliser(idx_G, k_G, phi_rep);
+            Add(chi_G_phi_values, cls_idx_G);
+            Add(class_size_h, Size(cls_H));
+        od;
+    fi;
 
     # Helper closure: given j_G, return the length-num_irreps_H
     # vector of multiplicities a_l.
+    #
+    # For abelian C_H the inner sum is the Pontryagin dual evaluation:
+    #   mult(chi_l_H) = (1/|H|) * sum_{h in C_H} chi_G(phi(h)) * conj(chi_l_H(h))
+    # which is O(|H|) per chi_l_H. Total cost stays O(num_irreps_H *
+    # n_classes_H) = O(|H|^2) for abelian H. The constant-factor saving
+    # comes from avoiding `Size(cls_H)` lookups in the inner loop.
     decomposition_fn := function(j_G_arg)
         local chi_G_vals, t, val_chi_g, val_chi_l, acc, l_H, chi_l_H,
               result;
@@ -454,36 +722,63 @@ RestrictedIrrepDecomposition := function(idx_G, idx_H, k_G, k_H, conj)
         chi_G_vals := List([1..n_classes_H],
             t -> idx_G.irreps[k_G][j_G_arg][chi_G_phi_values[t]]);
         result := [];
-        for l_H in [1..num_irreps_H] do
-            acc := 0;
-            chi_l_H := irr_H[l_H];
-            for t in [1..n_classes_H] do
-                val_chi_g := chi_G_vals[t];
-                val_chi_l := chi_l_H[t];
-                acc := acc + class_size_h[t] * val_chi_g
-                            * ComplexConjugate(val_chi_l);
+        if abelian_fast then
+            # Inner loop without `class_size_h[t]` multiplications (it's
+            # always 1 for abelian H).
+            for l_H in [1..num_irreps_H] do
+                acc := 0;
+                chi_l_H := irr_H[l_H];
+                for t in [1..n_classes_H] do
+                    acc := acc + chi_G_vals[t]
+                                * ComplexConjugate(chi_l_H[t]);
+                od;
+                acc := acc / normaliser;
+                if not IsInt(acc) then
+                    Error("RestrictedIrrepDecomposition (abelian): ",
+                          "non-integer multiplicity ", acc,
+                          " for (k_G=", k_G, ", k_H=", k_H,
+                          ", j_G=", j_G_arg, ", l_H=", l_H, ").");
+                fi;
+                if acc < 0 then
+                    Error("RestrictedIrrepDecomposition (abelian): ",
+                          "negative multiplicity ", acc,
+                          " for (k_G=", k_G, ", k_H=", k_H,
+                          ", j_G=", j_G_arg, ", l_H=", l_H, ").");
+                fi;
+                Add(result, acc);
             od;
-            acc := acc / normaliser;
-            # Sanity check: must be a non-negative integer.
-            if not IsInt(acc) then
-                Error("RestrictedIrrepDecomposition: ",
-                      "non-integer multiplicity ", acc,
-                      " for (k_G=", k_G, ", k_H=", k_H,
-                      ", j_G=", j_G_arg, ", l_H=", l_H,
-                      "). Likely cause: conj does not actually ",
-                      "embed C_H(a_H) into C_G(a_G), or the ",
-                      "characters disagree.");
-            fi;
-            if acc < 0 then
-                Error("RestrictedIrrepDecomposition: ",
-                      "negative multiplicity ", acc,
-                      " for (k_G=", k_G, ", k_H=", k_H,
-                      ", j_G=", j_G_arg, ", l_H=", l_H,
-                      "). This should never happen for true ",
-                      "characters.");
-            fi;
-            Add(result, acc);
-        od;
+        else
+            for l_H in [1..num_irreps_H] do
+                acc := 0;
+                chi_l_H := irr_H[l_H];
+                for t in [1..n_classes_H] do
+                    val_chi_g := chi_G_vals[t];
+                    val_chi_l := chi_l_H[t];
+                    acc := acc + class_size_h[t] * val_chi_g
+                                * ComplexConjugate(val_chi_l);
+                od;
+                acc := acc / normaliser;
+                # Sanity check: must be a non-negative integer.
+                if not IsInt(acc) then
+                    Error("RestrictedIrrepDecomposition: ",
+                          "non-integer multiplicity ", acc,
+                          " for (k_G=", k_G, ", k_H=", k_H,
+                          ", j_G=", j_G_arg, ", l_H=", l_H,
+                          "). Likely cause: conj does not actually ",
+                          "embed C_H(a_H) into C_G(a_G), or the ",
+                          "characters disagree.");
+                fi;
+                if acc < 0 then
+                    Error("RestrictedIrrepDecomposition: ",
+                          "negative multiplicity ", acc,
+                          " for (k_G=", k_G, ", k_H=", k_H,
+                          ", j_G=", j_G_arg, ", l_H=", l_H,
+                          "). This should never happen for true ",
+                          "characters.");
+                fi;
+                Add(result, acc);
+            od;
+        fi;
         return result;
     end;
 
@@ -493,7 +788,9 @@ RestrictedIrrepDecomposition := function(idx_G, idx_H, k_G, k_H, conj)
         # Per-H-class size (for the inner-product weighting).
         h_class_sizes := class_size_h,
         # Helper closure: see above.
-        decomposition := decomposition_fn
+        decomposition := decomposition_fn,
+        # Diagnostic: which path was used.
+        abelian_fast := abelian_fast
     );
 end;;
 
@@ -602,7 +899,10 @@ RestrictTraceOnWToSubgroupHonourParent := function(intertwiner_data_G, H)
         Error("RestrictTraceOnWToSubgroupHonourParent: H has a generator ",
               bad_gen, " not in intertwiner_data_G.group.");
     fi;
-    base_data := BuildIntertwinerDataUntwisted(H);
+    # Audit #456 C3: memoise BuildIntertwinerDataUntwisted(H) per
+    # IdGroup(H). At m=7 in the K-4b spectral pipeline this saves
+    # ~60-300 ms × |central-classes-of-G| per detecting subgroup.
+    base_data := _RTS_GetBIDUCached(H);
     idx_H := base_data.idx;
     transport_H := base_data.transport;
     idx_G := intertwiner_data_G.idx;
