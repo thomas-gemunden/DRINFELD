@@ -1,10 +1,40 @@
 # D-VAN-7 m = 5 verdict — D-VAN matches A-5b empirical kernel
 
-**TEMPLATE STATUS:** Fill in the bracketed `[...]` fields after the
-D-VAN-7 m = 5 production run completes (`run_d_van_7_m5.sh`). Once
-filled, rename this file from `TEMPLATE-d_van_7_m5_verdict.md` to
-`YYYY-MM-DD-d_van_7_m5_verdict.md` (matching the
-`docs/superpowers/research/` date convention) and commit.
+**TEMPLATE STATUS: WITHDRAWN (2026-06-06).** The "D-VAN matches A-5b
+kernel.g per-generator" comparison is a **math conflation between
+ker(Tr) and the detecting-family restriction kernel**. The two are
+kernels of different maps:
+
+- `ker(Tr)`: kernel of transgression `H^3(G; U(1)) -> ⊕_g H^2(C_g; U(1))`.
+- Detecting-family kernel: kernel of `H^3(G; U(1)) -> ⊕_H H^3(H; U(1))`
+  for `H ∈ {EA, D_8, Q_8}`, which is `{0}` by AM04+Quillen.
+
+D-VAN's `r.trivial` decides `[ω] = 0` in `H^3` (via restriction
+injectivity); `(i in in_kernel_gens)` decides membership in `ker(Tr)`.
+These flags need not agree per-generator. At `m=3` every unit gen is
+in `ker(Tr)` while D-VAN reports `trivial=false` on every one.
+
+The corresponding test `test_dvan_m5_anchor_vs_kernel.g` (PR #416)
+was withdrawn in commit `ed5cc4a` after returning 55 FAIL / 0 PASS.
+
+See: `extraspecial_orbifolds/docs/superpowers/research/2026-06-06-ker-tr-detecting-family-audit.md`.
+
+If a D-VAN m=5 self-contained anchor is needed (issue #148 rewording
+required), the correct sweep is: each of the 165 unit basis vectors is
+a non-zero class in `H^3`, so `ResIsTrivialOnDetectingFamily(5, e_i)`
+must return `trivial = false` on all 165. The half-vector
+`2 * e_{exp_index}` is also a non-zero class (Q_8 detects it) so
+`trivial = false`. This is the m=5 analog of Task 3.1 in
+`tests/test_detecting_family_vanish.g` (m=3 case).
+
+The remainder of this template is preserved as a historical record of
+the withdrawn approach.
+
+---
+
+**TEMPLATE STATUS [HISTORICAL]:** Fill in the bracketed `[...]` fields
+after the D-VAN-7 m = 5 production run completes
+(`run_d_van_7_m5.sh`). [WITHDRAWN as above.]
 
 **Date:** [YYYY-MM-DD — fill in run date]
 **Issue:** #148 (D-VAN-7)

@@ -1,11 +1,37 @@
 #!/usr/bin/env bash
-# run_d_van_7_m5.sh — D-VAN-7 m=5 production driver (issue #148).
+# run_d_van_7_m5.sh — WITHDRAWN: math conflation (PR #449 prereq audit,
+#                    2026-06-06). DO NOT RUN — the cross-validation
+#                    semantic is wrong.
+#
+# This driver compares `r.trivial` (D-VAN's zero-class detector under
+# detecting-family restriction) against `(i in in_kernel_gens)` (A-5b's
+# transgression-kernel membership) on the 165 hom-basis generators of
+# H^3(E_+(5); U(1)). The two flags test DIFFERENT maps' kernels (see
+# extraspecial_orbifolds/docs/superpowers/research/2026-06-06-ker-tr-detecting-family-audit.md
+# and the earlier withdrawal commit `ed5cc4a`).
+#
+# The DETECTING-FAMILY restriction is injective on H^3 (AM04 + Quillen),
+# so `r.trivial = true ⟺ [ω] = 0 in H^3`. The TRANSGRESSION map has a
+# generally large kernel — at m=5 it is (Z/2)^52 inside (Z/2)^164 ⊕ Z/4.
+# Running this driver as written produces an "agree_per_gen" record but
+# the agreement is meaningless (at m=3 every unit gen is in ker(Tr) yet
+# D-VAN reports trivial=false on every one).
+#
+# What this driver SHOULD be (TBD work, not in scope for the audit):
+# the D-VAN m=5 anchor is a self-contained 165/165 trivial=false sweep
+# on the unit basis (each `e_i ≠ 0` in H^3, hence trivial=false by
+# injectivity of restriction). It does not need `kernel.g`.
+#
+# The original docstring is preserved below for context.
+#
+# === ORIGINAL DOC (preserved for reference) ===
 #
 # D-VAN-7 is the empirical anchor that cross-validates D-VAN's
 # detecting-family vanishing test against A-5b's HAP-derived
 # ker(Tr : H^3(E_+(5); U(1)) -> ⊕_g H^2(C_g; U(1))) at every one of the
 # 165 hom-basis unit generators of H^3(E_+(5); U(1)) and at the
-# half-vector for the unique order-4 generator.
+# half-vector for the unique order-4 generator. [THIS FRAMING IS WRONG;
+# see the withdrawal notice above.]
 #
 # Pipeline:
 #
@@ -64,6 +90,23 @@
 # A-5b lands the file, this driver runs in one command.
 
 set -euo pipefail
+
+# ---- WITHDRAWN guard --------------------------------------------------
+# This driver is withdrawn as of the 2026-06-06 ker(Tr) vs detecting-
+# family audit (PR #449 prerequisite). Refuse to run unless the caller
+# sets DVAN7_FORCE_WITHDRAWN_RUN=1 (intended only for archaeology /
+# reproducing the original conflated comparison numerically).
+if [[ -z "${DVAN7_FORCE_WITHDRAWN_RUN:-}" ]]; then
+    echo "[run_d_van_7] WITHDRAWN: math conflation between ker(Tr) and" >&2
+    echo "[run_d_van_7]            detecting-family restriction kernel." >&2
+    echo "[run_d_van_7]            See header comment for details, or:" >&2
+    echo "[run_d_van_7]            extraspecial_orbifolds/docs/superpowers/" >&2
+    echo "[run_d_van_7]              research/2026-06-06-ker-tr-detecting-family-audit.md" >&2
+    echo "[run_d_van_7]" >&2
+    echo "[run_d_van_7]   Override (for archaeology only):" >&2
+    echo "[run_d_van_7]     DVAN7_FORCE_WITHDRAWN_RUN=1 ./run_d_van_7_m5.sh" >&2
+    exit 64
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"

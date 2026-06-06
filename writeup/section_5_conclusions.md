@@ -245,14 +245,20 @@ specific named blockers:
   node (per spec
   `docs/superpowers/specs/2026-05-17-k4b-m5-production-spec.md`).
 
-- *D-VAN at \(m = 5\)* (Gate 1E, issue #148) is blocked on the
-  A-5b m = 5 kernel-of-\(\mathrm{Tr}\) sweep completion (issue #47).
-  The kernel-of-\(\mathrm{Tr}\) ground truth at \(m = 5\) is what
-  D-VAN cross-checks against on the basis sweep; without it, D-VAN
-  has no per-class falsification target. The A-5b sweep is currently
-  running with the optimisations of issue #177 (batched
-  back-substitution, the R2-3 round of patches in flight, projected
-  10–100× speedup over the original ≈ 11-day projection).
+- *D-VAN at \(m = 5\)* (Gate 1E, issue #148, revised) is a
+  self-contained 165/165 \texttt{trivial=false} sweep on the unit
+  basis of \(H^3(E_+(5); U(1))\), by direct analogy with the m=3
+  Task 3.1. It does \textbf{not} depend on A-5b's
+  \(\ker(\mathrm{Tr})\) computation. The earlier framing
+  ("kernel-of-Tr ground truth is what D-VAN cross-checks against")
+  was a math conflation between \(\ker(\mathrm{Tr})\) and the
+  detecting-family restriction kernel — kernels of different maps;
+  see \texttt{extraspecial\_orbifolds/docs/superpowers/research/
+  2026-06-06-ker-tr-detecting-family-audit.md} for the audit. The
+  A-5b sweep (kernel-of-Tr computation) is a separate workstream that
+  ran in production during 2026-05 to 2026-06 and produced
+  \(|\ker(\mathrm{Tr})(E_+(5))| = 2^{52}\); that result is structural
+  information about \(H^3(E_+(5); U(1))\) but is not a D-VAN oracle.
 
 - *K-4a / D-VAN at \(m = 7\)* depend on the Phase 2 Quillen restriction
   matrices (D-VAN) and on the analytical \(T_h\) computation (K-4a),
@@ -329,12 +335,14 @@ issue tracker entry; the cited PR numbers refer to in-flight work.
   (`docs/superpowers/specs/2026-05-17-k4b-m5-production-spec.md`).
 
 - *A-5b m = 5 kernel sweep completion* — issue #47 closed,
-  sweep running, with the optimisation rounds tracked at issue #177.
-  Batched back-substitution (the R2-3 patches, in flight) is
-  projected 10–100× over the current per-generator cost. Once the
-  sweep produces `computed/transgression/5/kernel.g`, the D-VAN m = 5
-  anchor (Gate 1E, issue #148) becomes a one-line replay against the
-  basis.
+  sweep completed 2026-06-03 with \(|\ker(\mathrm{Tr})| = 2^{52}\).
+  Batched back-substitution (the R2-3 patches) delivered the
+  projected 10–100× over the per-generator cost. The result is
+  recorded at `computed/transgression/5/kernel.g`. (Earlier text
+  asserted that the D-VAN m=5 anchor becomes a "one-line replay
+  against the basis" once `kernel.g` lands; that framing is a
+  math conflation. The D-VAN anchor is self-contained — see the
+  2026-06-06 audit.)
 
 - *Q-int C low-memory HAP resolution at \(m = 7\)* — issue #137. The
   HAP resolution at \(m = 7\) is the dominant remaining obstacle to
