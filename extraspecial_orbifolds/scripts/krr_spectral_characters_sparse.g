@@ -1060,6 +1060,56 @@ end;;
 
 
 # ============================================================
+# Issue #447 Change B helper: classify E_+(m)-conjugacy classes into
+# their BRW(m)-orbit types.
+#
+# Mirrors `brw_conjugacy_action.g::ClassifyEmConjugacyClasses` but
+# inlined here so that the spectral file has no load-order coupling
+# to brw_conjugacy_action.g.  Only depends on Order(rep) + Size(class),
+# both of which work for matrix or pc-group conjugacy classes.
+#
+# Returns a list of strings (one per class) with values in
+#   { "id", "minus_one", "sigma2", "sigma_1sigma_2", "UNKNOWN" }.
+#
+# IMPORTANT (issue #447 / 2026-06-06 finding): the original Change B
+# spec asserted that TraceOnOmega0(h, m) is BRW(m)-invariant.  This is
+# EMPIRICALLY FALSE at m=3: see
+# `tests/test_brw_orbit_trace_collapse.g`.  Inside the sigma2 BRW-orbit
+# type alone, Tr(T_h) at m=3 takes the values 8 and 0 across different
+# E_+(m)-conjugacy classes; inside the sigma_1sigma_2 type it takes
+# 4 and -4.  Tr(T_h) IS an E_+(m)-class function (verified across
+# all 65 classes) but it is NOT BRW(m)-invariant.
+# This helper is left in place so future agents can inspect the
+# data and design a correct collapse (e.g., refining BRW-orbit types
+# into Tr-value classes); the production trace loop in
+# `BuildKRRSpectralCharactersSparse` keeps its one-per-conjugacy-class
+# behaviour.
+# ============================================================
+_SparseClassifyEmBRWTypes := function(classes)
+    local types, i, cl, rep, ord, sz;
+    types := EmptyPlist(Length(classes));
+    for i in [1..Length(classes)] do
+        cl := classes[i];
+        rep := Representative(cl);
+        ord := Order(rep);
+        sz := Size(cl);
+        if sz = 1 and ord = 1 then
+            Add(types, "id");
+        elif sz = 1 and ord = 2 then
+            Add(types, "minus_one");
+        elif ord = 2 then
+            Add(types, "sigma2");
+        elif ord = 4 then
+            Add(types, "sigma_1sigma_2");
+        else
+            Add(types, "UNKNOWN");
+        fi;
+    od;
+    return types;
+end;;
+
+
+# ============================================================
 # BuildKRRSpectralCharactersSparse(m): top-level entry point.
 # Mirrors the dense `BuildKRRSpectralCharacters(m)` interface.
 # ============================================================
