@@ -329,7 +329,7 @@ BuildSimpleIndexEPlusClosedForm := function(m)
     Info(InfoWarning, 3,
          "BuildSimpleIndexEPlusClosedForm(", m,
          "): enumerated ", enum.num_classes, " classes in ",
-         (t1 - t0) / 1000.0, " s");
+         t1 - t0, " ms");
 
     num_classes := enum.num_classes;
     reps := enum.reps;

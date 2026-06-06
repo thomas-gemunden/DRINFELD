@@ -54,3 +54,17 @@ _LoadCompiledOrInterpreted("keller_twist_is_trivial", "keller/keller_twist_is_tr
 # Tier 4 — depend on all of the above.
 _LoadCompiledOrInterpreted("detecting_family_restriction", "detecting_family_restriction.g");
 _LoadCompiledOrInterpreted("keller_s_entry", "keller/keller_s_entry.g");
+
+# Tier 5 — K-4b m=7 #449 hot-path additions, including transitive deps
+# so that K4aClassify's `_K4A_LoadSibling` checks find every symbol it
+# expects (UnimodSigma, EmUnimodGroup, BuildKRRSpectralCharactersSparse,
+# TranslateSpectralDataToEPlus, etc.).
+_LoadCompiledOrInterpreted("twisted_group_algebra", "twisted_group_algebra.g");
+_LoadCompiledOrInterpreted("qforms_f2", "qforms_f2.g");
+_LoadCompiledOrInterpreted("defect_rep_minus_id", "defect_rep_minus_id.g");
+_LoadCompiledOrInterpreted("defect_rep_minus_id_optim", "defect_rep_minus_id_optim.g");
+_LoadCompiledOrInterpreted("krr_spectral_characters", "krr_spectral_characters.g");
+_LoadCompiledOrInterpreted("krr_spectral_characters_sparse", "krr_spectral_characters_sparse.g");
+_LoadCompiledOrInterpreted("eplus_classes_closed_form", "eplus_classes_closed_form.g");
+_LoadCompiledOrInterpreted("eplus_irreps_closed_form", "eplus_irreps_closed_form.g");
+_LoadCompiledOrInterpreted("em_eplus_translate", "em_eplus_translate.g");
