@@ -72,6 +72,20 @@ FILES=(
     # Tier 4
     detecting_family_restriction.g
     keller/keller_s_entry.g
+    # Tier 5 — K-4b m=7 #449 hot-path additions (PR #460 float-literal
+    # cleanup + #472 vectorisation made these gac-compatible). Includes
+    # transitive deps so the load_compiled.g chain self-satisfies all
+    # symbols K4aClassify expects (UnimodSigma, EmUnimodGroup,
+    # TranslateSpectralDataToEPlus, etc.).
+    twisted_group_algebra.g
+    qforms_f2.g
+    defect_rep_minus_id.g
+    defect_rep_minus_id_optim.g
+    krr_spectral_characters.g
+    krr_spectral_characters_sparse.g
+    eplus_classes_closed_form.g
+    eplus_irreps_closed_form.g
+    em_eplus_translate.g
 )
 
 echo "[compile_codebase.sh] compiling ${#FILES[@]} file(s) -> $OUT_DIR/"
