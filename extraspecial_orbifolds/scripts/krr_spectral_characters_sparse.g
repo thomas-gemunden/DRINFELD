@@ -1202,6 +1202,67 @@ end;;
 
 
 # ============================================================
+# Closed-form Tr(T_h | Omega_0) BRW-orbit bypass (issue #456).
+#
+# At m >= 5, the per-h trace Tr(T_h | Omega_0) is empirically
+# determined by the BRW orbit type of h, with NORMALISED value
+#
+#   Tr_norm(h, m) = 2^(k - d(type(h)))
+#
+# where k = 2^(m-1) and
+#
+#   d(id) = d(minus_one) = 0
+#   d(sigma2)            = 2^(m-3)
+#   d(sigma_1sigma_2)    = 2^(m-2).
+#
+# Verified at m=5 on all 1025 conjugacy classes, and at m=7 on a
+# sample of 40 non-central classes. At m=3 the formula matches the
+# MAJORITY class within each BRW orbit but FAILS for 10 sigma2 and
+# 1 sigma_1sigma_2 classes (Arf splits — see PR #448). Hence we
+# only engage the bypass for m >= 5; at m < 5 we keep the per-h
+# loop.
+#
+# Safety: every driver invocation that engages the bypass also runs
+# a 5-class random sanity check per orbit type (so ~15 trace calls
+# at m=7 instead of 16385). If any sample disagrees with the typed
+# prediction, the bypass aborts and falls back to the per-h loop.
+# ============================================================
+_TrNormPrediction := function(m, type)
+    local k, d;
+    k := 2^(m - 1);
+    if type = "id" or type = "minus_one" then
+        d := 0;
+    elif type = "sigma2" then
+        d := 2^(m - 3);
+    elif type = "sigma_1sigma_2" then
+        d := 2^(m - 2);
+    else
+        return fail;
+    fi;
+    return 2^(k - d);
+end;;
+
+
+# Pick `sample_size` evenly-spaced indices from `indices` (a list of
+# distinct class indices for one orbit type). Returns at most
+# Length(indices) indices; falls back to all of them if too few.
+_PickEvenlySpacedSample := function(indices, sample_size)
+    local len, picked, p, t;
+    len := Length(indices);
+    if len = 0 then return []; fi;
+    if len <= sample_size then return indices; fi;
+    # Pick evenly-spaced positions in [1..len]:
+    # floor((p - 1) * (len - 1) / (sample_size - 1)) + 1 for p in 1..sample_size.
+    picked := EmptyPlist(sample_size);
+    for p in [1..sample_size] do
+        t := QuoInt((p - 1) * (len - 1), sample_size - 1) + 1;
+        Add(picked, indices[t]);
+    od;
+    return picked;
+end;;
+
+
+# ============================================================
 # BuildKRRSpectralCharactersSparse(m): top-level entry point.
 # Mirrors the dense `BuildKRRSpectralCharacters(m)` interface.
 # ============================================================
@@ -1237,7 +1298,11 @@ BuildKRRSpectralCharactersSparse := function(m)
     local n, k, dim, G, idx, num_classes, character_match, multiplicities,
           centraliser_traces, trace_on_W, i, a, z, idMat, C, cls_data,
           traces, mults, em, j, h, t0, t1, useLazy,
-          t_mult_0, h_progress_step, h_progress_t, h_progress_last;
+          t_mult_0, h_progress_step, h_progress_t, h_progress_last,
+          bypass_active, bypass_class_types, bypass_predicted,
+          bypass_indices_by_type, bypass_sample, bypass_sample_size,
+          bypass_t, sidx, t_type, sample_tr, predicted_norm, bypass_ok,
+          bypass_failed_sample;
     n := 2^m;
     k := n / 2;
     dim := 2^k;
@@ -1309,31 +1374,126 @@ BuildKRRSpectralCharactersSparse := function(m)
               " conjugacy classes; building trace table ...\n");
         t0 := Runtime();
         traces := [];
-        # Periodic progress logging: emit every ceil(num/20) iterations
-        # so we get ~20 progress lines spread across the per-h loop.
-        h_progress_step := QuoInt(cls_data.num, 20);
-        if h_progress_step < 1 then
-            h_progress_step := 1;
-        fi;
-        h_progress_t := Runtime();
-        h_progress_last := 0;
-        for j in [1..cls_data.num] do
-            h := cls_data.reps[j];
-            Add(traces, TraceOnOmega0(h, m));
-            if j mod h_progress_step = 0 or j = cls_data.num then
-                Print("[BKRRSCS]   h ", j, "/", cls_data.num,
-                      " done (delta wall = ",
-                      Runtime() - h_progress_t,
-                      " ms for last ", j - h_progress_last,
-                      " h's; cum wall = ",
-                      Runtime() - t0, " ms)\n");
-                h_progress_t := Runtime();
-                h_progress_last := j;
+
+        # Issue #456: closed-form Tr(T_h | Omega_0) BRW-orbit bypass.
+        # At m >= 5, Tr_norm depends only on BRW orbit type of h.
+        # Gate the bypass at m >= 5 (m=3 has Arf splits — PR #448).
+        # Engage with a per-orbit-type sanity sample to guard against
+        # any sporadic counter-example.
+        bypass_active := false;
+        bypass_failed_sample := fail;
+        if m >= 5 then
+            # Classify each rep by BRW orbit type. Prefer idx.class_types
+            # (closed-form builder); fall back to the helper otherwise.
+            if IsBound(idx.class_types) then
+                bypass_class_types := idx.class_types;
+            else
+                bypass_class_types := _SparseClassifyEmBRWTypes(
+                    cls_data.classes);
             fi;
-        od;
+            # Compute the predicted Tr_norm per orbit type once.
+            bypass_predicted := rec();
+            bypass_predicted.id := _TrNormPrediction(m, "id");
+            bypass_predicted.minus_one := _TrNormPrediction(m, "minus_one");
+            bypass_predicted.sigma2 := _TrNormPrediction(m, "sigma2");
+            bypass_predicted.sigma_1sigma_2 :=
+                _TrNormPrediction(m, "sigma_1sigma_2");
+            # Group class indices by orbit type.
+            bypass_indices_by_type := rec(
+                id := [], minus_one := [],
+                sigma2 := [], sigma_1sigma_2 := []);
+            for j in [1..cls_data.num] do
+                t_type := bypass_class_types[j];
+                if IsBound(bypass_indices_by_type.(t_type)) then
+                    Add(bypass_indices_by_type.(t_type), j);
+                fi;
+            od;
+            # Sample up to 5 evenly-spaced class indices per orbit type.
+            bypass_sample_size := 5;
+            bypass_sample := [];
+            for t_type in ["id", "minus_one",
+                           "sigma2", "sigma_1sigma_2"] do
+                if Length(bypass_indices_by_type.(t_type)) > 0 then
+                    Append(bypass_sample,
+                           _PickEvenlySpacedSample(
+                               bypass_indices_by_type.(t_type),
+                               bypass_sample_size));
+                fi;
+            od;
+            Print("[BKRRSCS] Step 3/4: closed-form bypass active (m=", m,
+                  "); sanity-checking ", Length(bypass_sample),
+                  " sampled classes ...\n");
+            bypass_t := Runtime();
+            bypass_ok := true;
+            for sidx in bypass_sample do
+                h := cls_data.reps[sidx];
+                t_type := bypass_class_types[sidx];
+                predicted_norm := bypass_predicted.(t_type);
+                sample_tr := TraceOnOmega0(h, m);
+                if sample_tr <> predicted_norm then
+                    bypass_ok := false;
+                    bypass_failed_sample := rec(
+                        sidx := sidx, type := t_type,
+                        predicted := predicted_norm,
+                        got := sample_tr);
+                    Print("[BKRRSCS]   [WARN] bypass sanity FAILED at ",
+                          "class ", sidx, " type=", t_type,
+                          " predicted=", predicted_norm,
+                          " got=", sample_tr, "\n");
+                    break;
+                fi;
+            od;
+            if bypass_ok then
+                Print("[BKRRSCS] Step 3/4: sanity sample PASSED in ",
+                      Runtime() - bypass_t,
+                      " ms (", Length(bypass_sample),
+                      " TraceOnOmega0 calls); ",
+                      "expanding traces via typed lookup.\n");
+                bypass_active := true;
+            else
+                Print("[BKRRSCS] Step 3/4: bypass DISABLED; ",
+                      "falling back to per-h trace loop.\n");
+            fi;
+        fi;
+
+        if bypass_active then
+            # Closed-form expansion: lookup Tr_norm by orbit type for
+            # each of the cls_data.num classes. Avoid the P3 anti-pattern
+            # (List + lambda dispatch); use EmptyPlist + Add.
+            traces := EmptyPlist(cls_data.num);
+            for j in [1..cls_data.num] do
+                Add(traces, bypass_predicted.(bypass_class_types[j]));
+            od;
+        else
+            # Per-h trace loop (m < 5 path, or bypass sanity failed).
+            # Periodic progress logging: emit every ceil(num/20)
+            # iterations so we get ~20 progress lines spread across
+            # the per-h loop.
+            h_progress_step := QuoInt(cls_data.num, 20);
+            if h_progress_step < 1 then
+                h_progress_step := 1;
+            fi;
+            h_progress_t := Runtime();
+            h_progress_last := 0;
+            for j in [1..cls_data.num] do
+                h := cls_data.reps[j];
+                Add(traces, TraceOnOmega0(h, m));
+                if j mod h_progress_step = 0 or j = cls_data.num then
+                    Print("[BKRRSCS]   h ", j, "/", cls_data.num,
+                          " done (delta wall = ",
+                          Runtime() - h_progress_t,
+                          " ms for last ", j - h_progress_last,
+                          " h's; cum wall = ",
+                          Runtime() - t0, " ms)\n");
+                    h_progress_t := Runtime();
+                    h_progress_last := j;
+                fi;
+            od;
+        fi;
         t1 := Runtime();
         Print("[BKRRSCS] Step 3/4 done in ", t1 - t0,
-              " ms (", cls_data.num, " conjugacy classes)\n");
+              " ms (", cls_data.num, " conjugacy classes; bypass=",
+              bypass_active, ")\n");
         centraliser_traces[i] := rec(reps := cls_data.reps,
                                       sizes := cls_data.sizes,
                                       traces := traces);
