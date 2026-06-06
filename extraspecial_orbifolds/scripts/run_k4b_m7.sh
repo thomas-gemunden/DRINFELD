@@ -164,6 +164,12 @@ set +e
 gap -q -b -o 48g -c "
     Read(\"../../src/modular_data.g\");;
     Read(\"k4a_classify.g\");;
+    # B5 (#449 audit): route the post-spectral E branch through the
+    # closed-form q_omega + b_omega path (PR #437). At m = 7 the slow
+    # path is O(|H|^4) = 4e9 entries per EA; the fast path is O(|H|^2)
+    # = 65536 -- ~256x speedup across the 8-EA detecting family.
+    _K4A_USE_FAST_ABELIAN_BRANCH := true;;
+    Print(\"[run_k4b] _K4A_USE_FAST_ABELIAN_BRANCH = \", _K4A_USE_FAST_ABELIAN_BRANCH, \"\n\");;
     result := K4aClassify(7);;
 
     # Persist the result. The full record contains very heavy fields
