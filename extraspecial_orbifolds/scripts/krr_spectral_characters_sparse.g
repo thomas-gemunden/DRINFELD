@@ -599,9 +599,9 @@ end;;
 _BuildGaussCtx := function(h, m)
     local j, ctx, base, n, k, X_mat, ic_mat, feasMat, F_mat,
           solveMap, pivCols, Q1, Q2, Q3, L_mat, BT_mat, BT_radmat,
-          BT_npod, BT_npev, radLen, dimND, halfND, sht,
+          BT_T, radLen, dimND, halfND, sht,
           R, H, RT, HT, Mhh, MhhSym, AT, A, kerLen, t_rad,
-          row, col, i, t1, t2;
+          col, i, t1, t2, odd_col, even_col, feasLeft, feasRight;
     for j in [1..Length(_gaussCtxKeys)] do
         if IsIdenticalObj(_gaussCtxKeys[j], h) then
             return _gaussCtxVals[j];
@@ -625,7 +625,8 @@ _BuildGaussCtx := function(h, m)
     # ---- Build X_mat (k x n): x(c) = c * X_mat ----
     # x(c)[p_j] = solveMap[j] . (c, c) = c · (left+right halves of solveMap[j]).
     # x(c)[non-pivot col] = 0.
-    X_mat := List([1..k], i -> List([1..n], j -> 0));
+    # Perf #445 G1: NullMat is compiled.
+    X_mat := NullMat(k, n);
     for j in [1..Length(pivCols)] do
         col := pivCols[j];
         for i in [1..k] do
@@ -633,15 +634,21 @@ _BuildGaussCtx := function(h, m)
         od;
     od;
     # ---- ic_mat (k x n): ic(c) = c * ic_mat = (0_k, c) ----
-    ic_mat := List([1..k], i -> List([1..n], j -> 0));
+    ic_mat := NullMat(k, n);
     for i in [1..k] do
         ic_mat[i][k + i] := 1;
     od;
     # ---- F_mat (#feas x k): feasibility constraint F_mat * c^T = 0 ----
     # feasMat[r] . (c, c) = sum_i feasMat[r][i] * c[i] + feasMat[r][k+i] * c[i]
     #                   = sum_i (feasMat[r][i] + feasMat[r][k+i]) * c[i].
-    F_mat := List([1..Length(feasMat)], i ->
-        List([1..k], j -> (feasMat[i][j] + feasMat[i][k + j]) mod 2));
+    # Perf #445 G2: column-slice + compiled matrix add + mod.
+    if Length(feasMat) > 0 then
+        feasLeft  := feasMat{[1..Length(feasMat)]}{[1..k]};
+        feasRight := feasMat{[1..Length(feasMat)]}{[k + 1..2 * k]};
+        F_mat := (feasLeft + feasRight) mod 2;
+    else
+        F_mat := [];
+    fi;
     # ---- Q1 = X_mat * Mhh * X_mat^T (k x k) ----
     Q1 := F2_Mul(F2_Mul(X_mat, Mhh), F2_Trans(X_mat));
     # ---- Q2 = X_mat * H * R * ic_mat^T (k x k) ----
@@ -651,34 +658,39 @@ _BuildGaussCtx := function(h, m)
     if kerLen > 0 then
         t1 := F2_Mul(F2_Mul(X_mat, MhhSym), AT);
         t2 := F2_Mul(F2_Mul(F2_Mul(ic_mat, RT), HT), AT);
-        L_mat := List([1..k], i ->
-            List([1..kerLen], j -> (t1[i][j] + t2[i][j]) mod 2));
+        # Perf #445 G5: compiled matrix add + mod replaces nested closure.
+        L_mat := (t1 + t2) mod 2;
         # ---- BT_mat = L_mat * Sh^T (k x kerLen) ----
         BT_mat := F2_Mul(L_mat, sht.ShT);
+        # Perf #445 G6/G7: precompute BT_T = TransposedMat(BT_mat) once
+        # so column extracts (rows of BT_T) are O(1) reads instead of
+        # `List([1..k], j -> BT_mat[j][col])` closure dispatch per call.
+        BT_T := TransposedMat(BT_mat);
         # Radical-match constraint: BT_radmat * c^T = t_rad where
         # BT_radmat[r] = BT_mat[*, r] for r in [1..radLen].
-        BT_radmat := List([1..radLen], r -> List([1..k], i -> BT_mat[i][r]));
+        BT_radmat := BT_T{[1..radLen]};
         t_rad := sht.t{[1..radLen]};
         # hpair(c) sum: build Q3 = sum_i BT_odd[i] * BT_even[i]^T.
-        Q3 := List([1..k], i -> List([1..k], j -> 0));
+        # Perf #445 G3: outer-product accumulation via compiled matmul.
+        # OLD (k=64 at m=7): O(k^2 * halfND) interpreted mod-2 muls.
+        # NEW: halfND compiled k x 1 * 1 x k matmuls + one final mod 2.
+        # halfND = sht.nDimND / 2 -> sht.nDimND nonzero columns in pairs.
+        Q3 := NullMat(k, k);
         for i in [1..halfND] do
-            BT_npod := List([1..k], j -> BT_mat[j][radLen + 2 * i - 1]);
-            BT_npev := List([1..k], j -> BT_mat[j][radLen + 2 * i]);
-            for row in [1..k] do
-                for col in [1..k] do
-                    Q3[row][col] := (Q3[row][col]
-                        + BT_npod[row] * BT_npev[col]) mod 2;
-                od;
-            od;
+            odd_col := radLen + 2 * i - 1;
+            even_col := radLen + 2 * i;
+            Q3 := Q3 + TransposedMat([BT_T[odd_col]]) * [BT_T[even_col]];
         od;
+        Q3 := Q3 mod 2;
     else
         L_mat := [];
         BT_mat := [];
         BT_radmat := [];
         t_rad := [];
-        Q3 := List([1..k], i -> List([1..k], j -> 0));
+        Q3 := NullMat(k, k);
     fi;
     # ---- Q = Q1 + Q2 + Q3 (k x k) ----
+    # Perf #445 G4: compiled matrix add + mod replaces nested closure.
     ctx := rec(
         h := h, m := m, n := n, k := k,
         kerLen := kerLen,
@@ -688,8 +700,7 @@ _BuildGaussCtx := function(h, m)
         F_mat := F_mat,
         BT_radmat := BT_radmat,
         t_rad := t_rad,
-        Q := List([1..k], i ->
-            List([1..k], j -> (Q1[i][j] + Q2[i][j] + Q3[i][j]) mod 2))
+        Q := (Q1 + Q2 + Q3) mod 2
     );
     Add(_gaussCtxKeys, h);
     Add(_gaussCtxVals, ctx);
@@ -944,16 +955,17 @@ TraceOnOmega0Gauss := function(h, m)
     # Cross part: c_0 (Q + Q^T) (y B_W)^T = c_0 (Q + Q^T) B_W^T y^T.
     # As a linear form in y, L_y = c_0 (Q + Q^T) B_W^T  (row of length dimW).
     B_W_mat := B_W;   # dimW x k
-    Q_sym := List([1..k], i ->
-        List([1..k], j -> (Q[i][j] + Q[j][i]) mod 2));
+    # Perf #445: compiled matrix transpose + add + mod replaces O(k^2)
+    # nested closure for the symmetric part of Q.
+    Q_sym := (Q + TransposedMat(Q)) mod 2;
     # L_y = c_0 * Q_sym * B_W^T  (row of length dimW), reduce mod 2.
     L_y := F2_VMul(F2_VMul(c_0, Q_sym), F2_Trans(B_W_mat));
     # Q_psi (dimW x dimW): B_W * Q * B_W^T  + diag(L_y) (linear-in-y as
     # quadratic over F_2).
     BWQ := F2_Mul(B_W_mat, Q);     # dimW x k
     BW_QT_BWT := F2_Mul(BWQ, F2_Trans(B_W_mat));   # dimW x dimW
-    Q_psi := List([1..dimW], i ->
-        List([1..dimW], j -> BW_QT_BWT[i][j]));
+    # Perf #445: MutableCopyMat is compiled.
+    Q_psi := MutableCopyMat(BW_QT_BWT);
     for i in [1..dimW] do
         Q_psi[i][i] := (Q_psi[i][i] + L_y[i]) mod 2;
     od;
@@ -1151,7 +1163,8 @@ end;;
 BuildKRRSpectralCharactersSparse := function(m)
     local n, k, dim, G, idx, num_classes, character_match, multiplicities,
           centraliser_traces, trace_on_W, i, a, z, idMat, C, cls_data,
-          traces, mults, em, j, h, t0, t1, useLazy;
+          traces, mults, em, j, h, t0, t1, useLazy,
+          t_mult_0, h_progress_step, h_progress_t, h_progress_last;
     n := 2^m;
     k := n / 2;
     dim := 2^k;
@@ -1163,29 +1176,22 @@ BuildKRRSpectralCharactersSparse := function(m)
     # trace_on_W EvalIrr fallback.
     useLazy := (m >= 5);
     t0 := Runtime();
-    # Issue #447 Change A: at m >= 5, skip GAP's generic ConjugacyClasses(G)
-    # (which has been observed to run for 19+ hours on EmUnimodGroup(7))
-    # and use the closed-form four-type CC enumeration for E_+(m). The
-    # closed-form path also pre-populates ConjugacyClasses(G) via
-    # SetConjugacyClasses, so any downstream `CharacterTable(G)` /
-    # `NrConjugacyClasses(G)` call uses our enumeration too.
+    Print("[BKRRSCS] entry: m = ", m, ", n = ", n, ", k = ", k,
+          ", dim = 2^k = ", dim, "\n");
     if m >= 5 and IsBoundGlobal("BuildSimpleIndexEPlusClosedForm") then
+        Print("[BKRRSCS] Step 1/4: BuildSimpleIndexEPlusClosedForm(", m, ") ...\n");
         idx := BuildSimpleIndexEPlusClosedForm(m);
     elif useLazy then
+        Print("[BKRRSCS] Step 1/4: BuildSimpleIndexLazy(G) ...\n");
         idx := BuildSimpleIndexLazy(G);
     else
+        Print("[BKRRSCS] Step 1/4: BuildSimpleIndex(G) ...\n");
         idx := BuildSimpleIndex(G);
     fi;
     t1 := Runtime();
-    Info(InfoWarning, 1,
-         "  BuildKRRSpectralCharactersSparse: BuildSimpleIndex",
-         (function()
-              if m >= 5 and IsBoundGlobal("BuildSimpleIndexEPlusClosedForm") then
-                  return "EPlusClosedForm";
-              elif useLazy then return "Lazy"; else return ""; fi;
-          end)(),
-         " built in ", (t1 - t0) / 1000., " s for m=", m,
-         " (|G|=", idx.order, ", ", Length(idx.classes), " classes)");
+    Print("[BKRRSCS] Step 1/4 done in ", (t1 - t0) / 1000.0,
+          " s. |G| = ", idx.order,
+          ", num_classes = ", Length(idx.classes), "\n");
     num_classes := Length(idx.classes);
     z := -IdentityMat(n);
     idMat := IdentityMat(n);
@@ -1204,6 +1210,8 @@ BuildKRRSpectralCharactersSparse := function(m)
     centraliser_traces := [];
     character_match := [];
 
+    Print("[BKRRSCS] Step 2/4: per-class loop (", num_classes,
+          " classes; only the central class a = -I does real work) ...\n");
     for i in [1..num_classes] do
         a := idx.reps[i];
         if a <> z then
@@ -1220,29 +1228,54 @@ BuildKRRSpectralCharactersSparse := function(m)
             continue;
         fi;
         # Central class a = -I.  Use class-function trace computation.
+        Print("[BKRRSCS] Step 3/4: central class i = ", i,
+              " (a = -I); loading class data ...\n");
         _EnsureClassData(idx, i);    # ensure CT is loaded (no-op for eager idx).
         cls_data := CentraliserClassData(idx, i);
+        Print("[BKRRSCS] Step 3/4: central class has ", cls_data.num,
+              " conjugacy classes; building trace table ...\n");
         t0 := Runtime();
         traces := [];
+        # Periodic progress logging: emit every ceil(num/20) iterations
+        # so we get ~20 progress lines spread across the per-h loop.
+        h_progress_step := QuoInt(cls_data.num, 20);
+        if h_progress_step < 1 then
+            h_progress_step := 1;
+        fi;
+        h_progress_t := Runtime();
+        h_progress_last := 0;
         for j in [1..cls_data.num] do
             h := cls_data.reps[j];
             Add(traces, TraceOnOmega0(h, m));
+            if j mod h_progress_step = 0 or j = cls_data.num then
+                Print("[BKRRSCS]   h ", j, "/", cls_data.num,
+                      " done (delta wall = ",
+                      (Runtime() - h_progress_t) / 1000.0,
+                      " s for last ", j - h_progress_last,
+                      " h's; cum wall = ",
+                      (Runtime() - t0) / 1000.0, " s)\n");
+                h_progress_t := Runtime();
+                h_progress_last := j;
+            fi;
         od;
         t1 := Runtime();
-        Info(InfoWarning, 1,
-             "  BuildKRRSpectralCharactersSparse: central class trace ",
-             "table built in ", (t1 - t0) / 1000., " s ",
-             "(", cls_data.num, " conjugacy classes of |G|=",
-             idx.order, ")");
+        Print("[BKRRSCS] Step 3/4 done in ", (t1 - t0) / 1000.0,
+              " s (", cls_data.num, " conjugacy classes)\n");
         centraliser_traces[i] := rec(reps := cls_data.reps,
                                       sizes := cls_data.sizes,
                                       traces := traces);
+        Print("[BKRRSCS] Step 4/4: CharacterMultiplicities for class i = ",
+              i, " ...\n");
+        t_mult_0 := Runtime();
         mults := CharacterMultiplicities(idx, i, cls_data, traces);
+        Print("[BKRRSCS] Step 4/4 done in ",
+              (Runtime() - t_mult_0) / 1000.0, " s\n");
         multiplicities[i] := mults;
         character_match[i] := List([1..idx.num_irreps[i]], irrep_idx ->
             rec(standard_irrep_idx := irrep_idx,
                 mult := mults[irrep_idx]));
     od;
+    Print("[BKRRSCS] per-class loop complete\n");
 
     # ====================================================================
     # trace_on_W(class_idx, irrep_idx, h) =

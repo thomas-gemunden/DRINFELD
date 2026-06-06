@@ -940,10 +940,11 @@ K4aClassify := function(arg)
     #   sparse builder operates on the `EmUnimodGroup(m)` family which
     #   does not match the `EPlusGroup(m)` family carried by the
     #   detecting-subgroup constructors).
-    if m = 5 then
+    if m >= 5 then
         # Load sparse builder and its transitive deps. The sparse file
         # itself does not contain loader logic; we load the chain
-        # explicitly here.
+        # explicitly here. Issue #378 (PR #418) lifted the m=5 cap to
+        # m=7; the lazy-load + spectral build below is generic in m.
         if not IsBound(BuildKRRSpectralCharactersSparse) then
             if not _K4A_LoadSibling("EmGroup", "em_construction.g") then
                 Error("K4aClassify: cannot locate em_construction.g");
@@ -995,17 +996,19 @@ K4aClassify := function(arg)
                 Error("K4aClassify: cannot locate restrict_to_subgroup.g");
             fi;
         fi;
-        Print("\n[K4aClassify] m = 5: computing sparse KRR spectral data ",
-              "via BuildKRRSpectralCharactersSparse(5) ...\n");
+        Print("\n[K4aClassify] m = ", m,
+              ": computing sparse KRR spectral data ",
+              "via BuildKRRSpectralCharactersSparse(", m, ") ...\n");
         t_branch_0 := Runtime();
-        sparse_data := BuildKRRSpectralCharactersSparse(5);
+        sparse_data := BuildKRRSpectralCharactersSparse(m);
         t_spectral := _K4A_SecsSince(t_branch_0);
         spectral_data := rec(
             source                := "krr-sparse",
             rationale             := Concatenation(
-                "At m = 5 (K-4b production target), Keller alpha is ",
-                "unverified. We compute the sparse spectral data via ",
-                "BuildKRRSpectralCharactersSparse(5) to actually ",
+                "At m = ", String(m), " (K-4b production target), ",
+                "Keller alpha is unverified. We compute the sparse ",
+                "spectral data via BuildKRRSpectralCharactersSparse(",
+                String(m), ") to actually ",
                 "exercise the KRR trace machinery and record the ",
                 "character multiplicities of the central twist's defect ",
                 "rep Omega_0. Under the T4a downscope (epsilon = 1), ",

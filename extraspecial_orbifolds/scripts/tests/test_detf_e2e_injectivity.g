@@ -92,6 +92,8 @@ Read(Concatenation(_DETFE2E_SCRIPTSDIR, "/d8_classifier.g"));
 Read(Concatenation(_DETFE2E_SCRIPTSDIR, "/q8_classifier.g"));
 Read(Concatenation(_DETFE2E_SCRIPTSDIR, "/detecting_family_restriction.g"));
 Read(Concatenation(_DETFE2E_SCRIPTSDIR, "/abelian_branch_fast.g"));
+# Issue #151: LoadDVANEAFamily lives in k4a_classify.g; needed for m=7.
+Read(Concatenation(_DETFE2E_SCRIPTSDIR, "/k4a_classify.g"));
 
 # ---- Locate the modular_data tree and chdir to a symlink dir ----------
 #
