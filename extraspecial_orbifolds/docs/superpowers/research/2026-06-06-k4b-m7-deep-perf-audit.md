@@ -7,19 +7,28 @@
 
 ## TL;DR
 
-The K-4b m=7 pipeline has **one strict blocker** (Tier-A) and a stack of large opportunistic wins below it. Issue #447 Change A (the closed-form CC enumerator) IS the Tier-A blocker — m=7 is infeasible until `ConjugacyClasses(EmUnimodGroup(7))` is replaced by a direct enumeration based on `predict_e_plus_m.g` / `compute_e_plus_7_T_analytical.g`'s sector structure. Issue #447 Change B (BRW-orbit Tr collapse, already in flight on this branch) drops Step 3/4 from 16385 trace evals to 4. After both land the call chain has another **eight 5×–500× wins** sitting in the `BuildSimpleIndexLazy` / `_BuildTraceCtx` / restriction / matcher layers that compound to make m=7 production not just feasible but quick.
+The K-4b m=7 pipeline has **multiple strict blockers** stacked along the entire `BuildSimpleIndexLazy` → `CharacterMultiplicities` → `EvalIrr` path. Issue #447's Change A as currently drafted (closed-form CC enumeration only) is **not sufficient** to unblock m=7 — it removes ONE of the 16385× GAP-generic-call layers (`ConjugacyClasses(G)`) but leaves four siblings right behind it on the same loop: `Centralizer(G, x)` per rep, `NrConjugacyClasses` per centraliser, `CharacterTable(C)` for the central class, plus `ConjugacyClasses(C)` recall inside `CentraliserClassData` and `EvalIrr → ClassIndexInCentraliser` linear scan per query. Each of those is independently capable of OOM-ing or stalling the m=7 run. **The audit's primary recommendation is to widen #447 Change A into a "Change A'" that delivers a fully closed-form `idx` record — closed-form classes + centralisers + irrep counts + a closed-form `EvalIrr` — in a single coherent PR.** Issue #447 Change B (BRW-orbit Tr collapse) remains needed and complementary. After A' + B land, the call chain has another **eight 5×–500× wins** sitting in the restriction / matcher / `_BuildTraceCtx` layers.
 
-### Top 5 findings
+### Top findings (updated)
 
-1. **A1 — `ConjugacyClasses(EmUnimodGroup(7))` OOM** (the #447 Change A target) — must be replaced by a closed-form sector enumerator based on `compute_e_plus_7_T_analytical.g`. Without this, m=7 is impossible at any budget.
-2. **A2 — `BuildSimpleIndexLazy` calls `Centralizer(G, x)` per class rep** (~16385 calls at m=7). Closed-form: centralisers of `E_+(m)` elements are determined by the BRW orbit type and m alone (`id/-id` → G itself; `sigma2` → `Z_2 × E_+(m-1)`; `sigma_1 sigma_2` → `Z_4 ∘ E_+(m-1)`). Three groups total, computed once.
-3. **A3 — `_BuildTraceCtx`'s `BPi^T` row reduction is a P5/P3 hot mess.** The augmented-matrix RREF at line 134-153 uses `List([1..2*n], i -> ...)` per pivot row over 2n=256 columns at m=7, in interpreted bytecode. Should use compiled `TriangulizeMat` on a GF(2)-tagged matrix. Already flagged as **A-K4-2** in the 2026-06-02 audit but NOT shipped.
-4. **B1 — `_RTS_FindGClassOf` does `RepresentativeAction(G, a_H, idx_G.reps[k_G])` per H-class.** For the D_8/Q_8/EA detecting subgroups this calls into GAP's pc-group orbit-stabiliser machinery on degree-128 matrices once per H-class. Closed-form: for `E_+(m)`, every conjugator either is `1` (central class) or has order 2 in `BRW(m)/E_+(m)` and can be found by a single explicit BRW generator lookup.
-5. **B2 — `TranslateSpectralDataToEPlus` rebuilds another `BuildSimpleIndexLazy(EPlusGroup(7))`** on the EP-side and a `BuildSimpleIndexLazy` for each detecting subgroup H. The EP-side is the SAME conjugacy class structure as the EU-side (psi-equivariant); a class-permutation map suffices. Net: 3 additional copies of the 16385-class enumeration get built on the K-4b m=7 path after the EU-side bypass lands.
+1. **A1 — `ConjugacyClasses(EmUnimodGroup(7))` OOM** (the #447 Change A target) — must be replaced by a closed-form sector enumerator based on `compute_e_plus_7_T_analytical.g`. Without this, m=7 is impossible at any budget. SUFFICIENT BY ITSELF? **No** — see A1', A1'', A1'''.
+2. **A1' — `BuildSimpleIndexLazy` calls `Centralizer(G, x)` per class rep** (line 122, ~16385 calls at m=7). Closed-form: centralisers of `E_+(m)` elements are determined by the BRW orbit type and m alone (`id/-id` → G itself; `sigma2` → `Z_2 × E_+(m-1)`; `sigma_1 sigma_2` → `Z_4 ∘ E_+(m-1)`). Three group objects total, constructed once.
+3. **A1'' — `num_irreps := List(centralisers, NrConjugacyClasses)`** (line 125, 16385 implicit character-table builds at m=7). Closed-form: irrep counts per type are constants (`4^m + 1` for E_+(m), `2·(4^{m-1} + 1)` for `Z_2 × E_+(m-1)`, `2·4^{m-1} + 2` for `Z_4 ∘ E_+(m-1)`).
+4. **A1''' — `_EnsureClassData → CharacterTable(EmUnimodGroup(7))`** (line 169, central-class CT build). At m=7 this is the `4^7 + 1 = 16385`-irrep table of E_+(7). Closed-form: all irreps of E_+(m) are structurally known — `4^m` one-dimensional irreps factor through `G/Z = (Z/2)^{2m}` as F_2-linear forms; the unique faithful `2^m`-dim irrep satisfies `χ(h) = 0` for non-central h, `χ(e) = 2^m`, `χ(z) = -2^m`. No table build needed.
+5. **A1'''' — `EvalIrr(idx, class_idx, irrep_idx, h)`** (`untwisted_modular_data.g:191`, called thousands of times per `CharacterMultiplicities` and per `trace_on_W`). Currently routes through `ClassIndexInCentraliser` (linear scan, O(num_classes)) and `CharacterTable` lookup. Closed-form: O(2m) per evaluation given `h mod Z` (a length-`2m` F_2 vector). At m=7 this is O(14) per call vs the indirect path.
+6. **A2 — `ConjugacyClasses(C)` in `CentraliserClassData`** for `C = G` at the central class (`krr_spectral_characters_sparse.g:1009`) — a SECOND OOM cliff hiding behind A1. After A1 ships, `idx.centralisers[central_class] = G` but `ConjugacyClasses(C)` is a FRESH call into GAP's generic enumerator. Must be intercepted to return `idx.classes` directly when `C ≡ idx.group`.
+7. **A3 — `_BuildTraceCtx`'s `BPi^T` row reduction is a P5/P3 hot mess.** The augmented-matrix RREF at line 134-153 uses `List([1..2*n], i -> ...)` per pivot row over 2n=256 columns at m=7, in interpreted bytecode. Should use compiled `TriangulizeMat` on a GF(2)-tagged matrix. Already flagged as **A-K4-2** in the 2026-06-02 audit but NOT shipped.
+8. **B1 — `_RTS_FindGClassOf` does `RepresentativeAction(G, a_H, idx_G.reps[k_G])` per H-class.** For the D_8/Q_8/EA detecting subgroups this calls into GAP's pc-group orbit-stabiliser machinery on degree-128 matrices once per H-class. Closed-form: for `E_+(m)`, every conjugator either is `1` (central class) or has order 2 in `BRW(m)/E_+(m)` and can be found by a single explicit BRW generator lookup.
+9. **B2 — `TranslateSpectralDataToEPlus` rebuilds another `BuildSimpleIndexLazy(EPlusGroup(7))`** on the EP-side and a `BuildSimpleIndexLazy` for each detecting subgroup H. The EP-side is the SAME conjugacy class structure as the EU-side (psi-equivariant); a class-permutation map suffices. Net: 3 additional copies of the 16385-class enumeration get built on the K-4b m=7 path after the EU-side bypass lands.
 
 ### Other Tier-A blockers found (beyond closed-form CC)?
 
-**Yes — one.** Finding **A3** (the manual `BPi^T` row-reduction in `_BuildTraceCtx`) is on the m=7 hot path: at 4 trace evaluations per `BuildKRRSpectralCharactersSparse(7)` (after #447 Change B), each calls `_BuildTraceCtx` once, each row-reduction is a 128×256 augmented matrix in interpreted GAP. This is not OOM-level but is the new dominant cost after Changes A+B; the audit found this is a 5–10× slowdown vs `TriangulizeMat`-with-GF(2)-tagging. Already a Tier-A finding in the 2026-06-02 audit (A-K4-2) but NOT shipped — I am marking it as a Tier-A here too because the cost surfaces visibly at m=7.
+**Yes — FIVE**, not one. The original #447 spec covers Change A (= A1 above) and Change B (BRW-orbit Tr collapse). The audit shows that A1 alone shifts the bottleneck rather than removing it: the very next lines in `BuildSimpleIndexLazy` (`Centralizer` per rep, `NrConjugacyClasses` per centraliser, `CharacterTable` for the central class, `ConjugacyClasses` AGAIN inside `CentraliserClassData`, `EvalIrr → ClassIndexInCentraliser` per query) are each independently capable of stalling or OOMing the m=7 run. They must all be replaced with closed-form bypasses in the same PR wave.
+
+Recommendation: **rename / widen #447 Change A from "closed-form CC enumeration" to "closed-form `idx` record"**, and bundle A1, A1', A1'', A1''', A1'''', and A2 into the same PR. (Change B from #447 stays as-is, in flight on this branch.)
+
+Plus, as before:
+- **A3** (the manual `BPi^T` row-reduction in `_BuildTraceCtx`) is on the m=7 hot path: at 4 trace evaluations per `BuildKRRSpectralCharactersSparse(7)` (after #447 Change B), each calls `_BuildTraceCtx` once, each row-reduction is a 128×256 augmented matrix in interpreted GAP. This is not OOM-level but is the new dominant cost after Changes A+B; the audit found this is a 5–10× slowdown vs `TriangulizeMat`-with-GF(2)-tagging. Already a Tier-A finding in the 2026-06-02 audit (A-K4-2) but NOT shipped.
 
 The OTHER post-spectral Tier-A surfaces in the **detecting-subgroup E branch** at m=7: `_K4A_ClassifyEBranchMulti` iterates the 8 EAs from `LoadDVANEAFamily(7)` and calls `ComputeModularData(H_EA, omega_H_fn, val, expon)` per EA, which under default opts is the |H|^4 = 65536 S-matrix build PER EA. PR #437's `_K4A_USE_FAST_ABELIAN_BRANCH = true` switches this to `ClassifyAbelianBranchFast` (the q_ω + b_ω closed form, O(|H|^2) = 16384) but is OPT-IN and the K-4b m=7 driver does NOT set it. That's a missing one-line config that unblocks ~256× speedup on the E branch.
 
@@ -37,13 +46,14 @@ run_k4b_m7.sh                                            (shell driver)
           ├─ BuildKRRSpectralCharactersSparse(7)         (krr_spectral_characters_sparse.g:1142)
           │   ├─ EmUnimodGroup(7)                        (krr_spectral_characters.g:100)
           │   ├─ BuildSimpleIndexLazy(G)                 ★ OOM HERE ★
-          │   │   ├─ ConjugacyClasses(G)                 — A1 (Change A) #447
-          │   │   ├─ List(reps, x -> Centralizer(G, x))  — A2
-          │   │   ├─ List(centralisers, NrConjugacyClasses) — A2 (transitively cheap)
+          │   │   ├─ ConjugacyClasses(G)                 — A1 (★ OOM; #447 Change A scope)
+          │   │   ├─ List(reps, x -> Centralizer(G, x))  — A1'
+          │   │   ├─ List(centralisers, NrConjugacyClasses) — A1''
           │   │   └─ build offset / lookup tables        — fine
           │   ├─ for i in [1..16385] do
           │   │     if reps[i] = z then
-          │   │         CentraliserClassData(idx, i)     — calls ConjugacyClasses(G) AGAIN
+          │   │         _EnsureClassData(idx, i)         — A1''' (CharacterTable(G) for central class)
+          │   │         CentraliserClassData(idx, i)     — A2 (calls ConjugacyClasses(G) AGAIN)
           │   │         _SparseClassifyEmBRWTypes(...)   — Change B (shipped on branch)
           │   │         for each of 4 orbit-types:
           │   │             TraceOnOmega0(h_rep, 7)
@@ -58,9 +68,11 @@ run_k4b_m7.sh                                            (shell driver)
           │   │                     ├─ _F2_AffineSolveCols(F + BT, ...)    — interp RREF, B0
           │   │                     └─ _F2_FastSymplecticBasis(B_psi)      — already O(d^3) closed form
           │   │         CharacterMultiplicities(idx, i, cls_data, traces)  — Step 4
+          │   │             ├─ List(cls_data.reps, h -> ClassIndexInCentraliser(idx, i, h)) — A1'''' (16385² IN-tests)
+          │   │             └─ chi[cc_idx[j]] × ComplexConjugate ...        — A1'''' (table lookup)
           │   │     fi
           │   │   od
-          │   └─ build trace_on_W closure
+          │   └─ build trace_on_W closure                 — A1'''' on every per-call EvalIrr
           ├─ MaximalElementaryAbelian_E_plus(7)
           │   └─ BuildElementaryAbelianDirect_E_plus(G, 7) — Comm() + greedy
           ├─ TranslateSpectralDataToEPlus(sparse, ea_rec.parent)
@@ -145,7 +157,7 @@ Both of these are exactly what `BuildSimpleIndexLazy` needs.
 
 ---
 
-## A2 — `Centralizer(G, x)` called per class rep ⟶ orbit-type-keyed cache
+## A1' — `Centralizer(G, x)` called per class rep ⟶ orbit-type-keyed cache
 
 **Location:**
 - `extraspecial_orbifolds/scripts/untwisted_modular_data.g:122` (`BuildSimpleIndexLazy`):
@@ -160,15 +172,17 @@ Even after A1 ships and `reps` is the closed-form list of 16385 class representa
 
 **Closed-form replacement:**
 
-There are only **three** distinct centralisers across the 16385 classes:
+There are only **three** distinct centralisers across the 16385 classes (per `compute_e_plus_7_T_analytical.g` header lines 13–46):
 1. `id` and `minus_one` classes (2 classes): `Centralizer(G, x) = G`.
-2. `sigma2`-type non-central classes (`2^{2m-1} + 2^{m-1} - 1` classes): `Centralizer(G, x) ≅ Z_2 × E_+(m-1)`. Construct ONCE.
-3. `sigma_1 sigma_2`-type non-central classes (`2^{2m-1} - 2^{m-1}` classes): `Centralizer(G, x) ≅ Z_4 ∘ E_+(m-1)`. Construct ONCE.
+2. `sigma2`-type non-central classes (`2^{2m-1} + 2^{m-1} - 1` classes): `Centralizer(G, x) ≅ Z_2 × E_+(m-1)` where `Z_2 = ⟨z⟩`. Construct ONCE.
+3. `sigma_1 sigma_2`-type non-central classes (`2^{2m-1} - 2^{m-1}` classes): `Centralizer(G, x) ≅ Z_4 ∘ E_+(m-1)` (central product over `⟨z⟩ = ⟨h^2⟩`). Construct ONCE.
+
+Each of these subgroup objects can be built directly from the symplectic-basis generators (see `defect_rep_minus_id.g::BasisForN` for the symplectic-basis machinery; `em_construction.g::Sigma_ar` for the canonical matrix-side generators).
 
 But the BSi/lazy machinery only uses the centraliser for:
-- `NrConjugacyClasses(centralisers[i])` — these are pre-determined: `4^m + 1` for cases 1, `2*4^{m-1} + 2` for cases 2-3.
-- (Later) `CharacterTable(centralisers[i])` — only for the central class, lazy.
-- (Later) `ConjugacyClasses(C)` for class-function evaluation (called by `CentraliserClassData` at krr_spectral_characters_sparse.g:1018).
+- `NrConjugacyClasses(centralisers[i])` — see A1'' for the closed-form bypass.
+- (Later) `CharacterTable(centralisers[i])` — see A1''' for the closed-form bypass.
+- (Later) `ConjugacyClasses(C)` for class-function evaluation (called by `CentraliserClassData` at krr_spectral_characters_sparse.g:1018) — see A2 for the closed-form bypass.
 
 So for the K-4b m=7 spectral path, the only centraliser that gets materialised is `G itself` (since only the central class -I is processed in the per-class loop). The other 16384 entries of `idx.centralisers` are NEVER touched — but `BuildSimpleIndexLazy` builds them all eagerly anyway.
 
@@ -179,7 +193,192 @@ So for the K-4b m=7 spectral path, the only centraliser that gets materialised i
 - Saves 16384 `Centralizer(G, x)` calls. At even ~10 ms each = ~3 minutes wall savings AND the memory cost (each non-trivial centraliser is ~10-100 MB at m=7) that contributes to the OOM cliff.
 - Without this, even the closed-form CC enumerator might OOM on the centraliser build.
 
-**Cross-ref:** This is closely related to but NOT redundant with A1 — A1 fixes the class enumeration; A2 fixes the centraliser build. Both must ship together for m=7 to finish.
+**Cross-ref:** This is closely related to but NOT redundant with A1 — A1 fixes the class enumeration; A1' fixes the centraliser build. Both must ship together for m=7 to finish.
+
+---
+
+## A1'' — `num_irreps := List(centralisers, NrConjugacyClasses)` ⟶ closed-form constants per orbit type
+
+**Location:**
+- `extraspecial_orbifolds/scripts/untwisted_modular_data.g:125` (`BuildSimpleIndexLazy`):
+
+```gap
+num_irreps := List(centralisers, NrConjugacyClasses);
+```
+
+**Why it's a perf hit even after A1 + A1':**
+
+`NrConjugacyClasses` on a permutation/pc group implicitly drives a (fragment of a) character-table build inside GAP. At m=7, even after A1 provides the class list and A1' provides the three distinct centraliser objects, this line still launches 16385 `NrConjugacyClasses` calls. For `Centralizer = G = E_+(7)` (the two central classes) the cost is identical to A1''' (a full `Irr(E_+(7))` table). For the two non-central centraliser types (`Z_2 × E_+(m-1)`, `Z_4 ∘ E_+(m-1)`), the cost is comparable.
+
+**Closed-form replacement:**
+
+Irrep counts per orbit type are constants, derivable from extraspecial-group theory + Clifford theory:
+
+| Orbit type | Centraliser C | `Length(Irr(C))` | At m=7 |
+|---|---|---|---|
+| id | E_+(m) | `4^m + 1` (= 4^m linear + 1 faithful) | 16385 |
+| minus_one | E_+(m) | `4^m + 1` | 16385 |
+| sigma2 | Z_2 × E_+(m-1) | `2 · (4^{m-1} + 1)` = `4^m + 2` (per `compute_e_plus_7_T_analytical.g:32` "Total simples per sector: 2 · (4^{m-1} + 1)") | 8194 |
+| sigma_1sigma_2 | Z_4 ∘ E_+(m-1) | per the central-product constraint, per `compute_e_plus_7_T_analytical.g:36–44`: `4^{m-1} + 4^{m-1} + 1 + 1` = `2 · 4^{m-1} + 2` | 8194 |
+
+Assign directly — no GAP call required.
+
+**Effort:** ~5 LOC. Inside the closed-form `BuildSimpleIndexEPlusLazy`, after the class-type classification, write `num_irreps[i] := IRREP_COUNT_PER_TYPE.(class_types[i])`.
+
+**Estimated win at m=7:**
+- Avoids 16385 `NrConjugacyClasses` calls. Each call's cost scales like a partial CharacterTable on a centraliser of order up to 32768. Cumulatively comparable to A1''' in absolute wall.
+
+**Cross-ref:** Bundled with A1' as the same closed-form-record PR.
+
+---
+
+## A1''' — `_EnsureClassData → CharacterTable(EmUnimodGroup(7))` for the central class ⟶ closed-form irreps of E_+(m)
+
+**Location:**
+- `extraspecial_orbifolds/scripts/untwisted_modular_data.g:169` (`_EnsureClassData`):
+
+```gap
+ct := CharacterTable(idx.centralisers[i]);
+cc := ConjugacyClasses(ct);
+irr := Irr(ct);
+```
+
+**Why it's a perf hit even after A1 + A1':**
+
+For the central class (the ONLY class processed in the spectral loop at m=7 — see `krr_spectral_characters_sparse.g:1138-1153`), `idx.centralisers[i] = G = E_+(7)`. This line is `CharacterTable(EmUnimodGroup(7))` — the full `4^7 + 1 = 16385`-irrep character table of E_+(7). GAP's generic algorithm builds this via Schreier–Sims + Burnside-counting / orbit-stabiliser; on a 32K-element matrix group it consumes significant time AND memory. There is no need to do this work: the irreps of E_+(m) are structurally known.
+
+**Closed-form replacement:**
+
+E_+(m) has exactly two flavours of irreps (standard extraspecial-group theory; see also `compute_e_plus_7_T_analytical.g:32` and `closed_form_central.g:10-18`):
+
+  - **`4^m` one-dimensional irreps.** Each factors through `G/Z = (Z/2)^{2m}` and is determined by an F_2-linear form `ℓ: (Z/2)^{2m} → F_2`. The character is `χ_ℓ(h) = (-1)^{ℓ(h mod Z)}`. To represent: a 2m-bit vector. To evaluate at h: read off `h mod Z` (a length-`2m` F_2 vector from the symplectic-basis projection — see `defect_rep_minus_id.g::HinSympBasis`), take the F_2 inner product with `ℓ`, raise `-1` to that bit. O(m) per call.
+
+  - **One faithful `2^m`-dim irrep.** Acts as `2^m` times an irreducible representation of the Heisenberg-style extension. Character values: `χ_faith(e) = 2^m`, `χ_faith(z) = -2^m`, `χ_faith(h) = 0` for any non-central h. (Standard extraspecial-group theory: the faithful irrep is induced from any maximal abelian subgroup with non-trivial central character; its character vanishes off the centre.)
+
+No CharacterTable build is needed at all. The structural data is encoded as:
+```
+Irr(E_+(m)) := rec(
+    linear_form_coefficients := <list of 4^m length-(2m) F_2 vectors, all of them>,
+    faithful_dim := 2^m
+);
+```
+Each `χ_ℓ` is recovered as a function pointer; the faithful is a single rec with a 3-line conditional.
+
+The same structural data applies to:
+- `Z_2 × E_+(m-1)`: irreps are tensor products `χ_a ⊗ ρ_b` with `χ_a ∈ Irr(Z_2)`, `ρ_b ∈ Irr(E_+(m-1))`. By induction on m, both factors are closed-form.
+- `Z_4 ∘ E_+(m-1)`: irreps from compatible pairs `(χ_a ∈ Irr(Z_4), ρ_b ∈ Irr(E_+(m-1)))` with `χ_a(g^2) = ρ_b(z)` (see `compute_e_plus_7_T_analytical.g:36–44`).
+
+So the entire `idx.irreps` table can be replaced with a structural lookup. The recursion bottoms out at m=2 where E_+(2) has 17 irreps — could be hardcoded once or computed once via a one-time `CharacterTable(EmUnimodGroup(2))` call.
+
+**Effort:** ~150 LOC in a new file `e_plus_irreps_closed_form.g`:
+- `EPlusLinearIrrepCoefficients(m)` returning the `4^m` linear forms.
+- `EPlusEvalIrr(m, irrep_idx, h)` returning the character value (dispatching on `irrep_idx ≤ 4^m` for linear vs `= 4^m + 1` for faithful).
+- Plus the analogous Clifford-twisted versions for `Z_2 × E_+(m-1)` and `Z_4 ∘ E_+(m-1)`.
+
+**Estimated win at m=7:**
+- Avoids the full `CharacterTable(EmUnimodGroup(7))` build entirely.
+- Cumulatively this is one of the dominant savings: the central-class CT build alone is in the same time-and-memory range as `ConjugacyClasses(G)` itself.
+
+**Cross-ref:**
+- The closed-form irrep structure is documented in `compute_e_plus_7_T_analytical.g` lines 32–44 and `closed_form_central.g` lines 10–18, but those modules currently produce only the T-multiset / S-row, not a drop-in replacement for `idx.irreps`. Lift them into a callable form.
+- This must ship together with A1' since `num_irreps` and `irreps` are populated in the same record.
+
+---
+
+## A1'''' — `EvalIrr` linear scan + character-table indirection ⟶ closed-form O(m) per call
+
+**Location:**
+- `extraspecial_orbifolds/scripts/untwisted_modular_data.g:191` (`EvalIrr`):
+
+```gap
+EvalIrr := function(idx, i, k, x)
+    _EnsureClassData(idx, i);
+    return idx.irreps[i][k][ClassIndexInCentraliser(idx, i, x)];
+end;;
+```
+
+  And `ClassIndexInCentraliser` (line 180):
+```gap
+ClassIndexInCentraliser := function(idx, i, x)
+    local cc, j;
+    _EnsureClassData(idx, i);
+    cc := idx.cc_centraliser[i];
+    for j in [1..Length(cc)] do
+        if x in cc[j] then return j; fi;
+    od;
+    ...
+end;;
+```
+
+**Why it's a perf hit even after A1 + A1' + A1'' + A1''':**
+
+`EvalIrr` is called per (class_idx, irrep_idx, h) triple, thousands of times per K-4b classifier query:
+  - Inside `CharacterMultiplicities` line 1047 once per `cls_data.reps[j]` (16385 calls at the central class for m=7).
+  - Inside the inner double loop at line 1048–1057, an additional `num_irreps × cls_data.num` = 16385 × 16385 ≈ 2.7×10^8 character lookups via `chi[cc_idx[j]]` (this is the post-lookup data access, not a fresh `EvalIrr`, but the `cc_idx` build above is the linear scan).
+  - Inside `trace_on_W` at lines 1189 and 1198 once per (class_idx, irrep_idx, h) query from downstream K-4b consumers.
+
+Each `EvalIrr` call triggers `ClassIndexInCentraliser`, which does up to 16385 set-membership checks (`x in cc[j]`). For the central class (C = G = E_+(7)), this is 16385 generic-GAP `IN` tests per call — totalling 16385² ≈ 2.7×10^8 IN-tests for the single `cc_idx` build in `CharacterMultiplicities`.
+
+**Closed-form replacement:**
+
+Given the closed-form irrep structure from A1''':
+  - **For a linear irrep `χ_ℓ`** (irrep_idx in [1..4^m]): `EvalIrr_closed(m, irrep_idx, h)` = `(-1)^{ℓ · (h mod Z)}` where `ℓ` is the irrep's coefficient vector. O(m) per call (project h to (Z/2)^{2m}, take F_2 inner product). No class-index lookup needed.
+  - **For the faithful irrep** (irrep_idx = 4^m + 1): a 3-line conditional on whether h is identity, -I, or other. O(1) per call.
+  - **For the non-central centraliser types** (`Z_2 × E_+(m-1)`, `Z_4 ∘ E_+(m-1)`): tensor / central-product formula on (χ_a, ρ_b), each evaluated by the same closed-form recursion bottoming at E_+(2).
+
+Total cost: O(m) per `EvalIrr` call at m=7, i.e. O(14). vs the current O(num_classes) ≈ O(16385).
+
+**Effort:** Lift the structural irrep data from A1''' into a callable interface. Replace `EvalIrr` (and `ClassIndexInCentraliser`) with a dispatcher that:
+  - Detects whether `idx.is_eplus_closed_form` is set.
+  - If yes: route to `EPlusEvalIrr(m, irrep_idx, h)` (which does NOT need `ClassIndexInCentraliser`).
+  - If no: fall back to the existing generic `EvalIrr`.
+
+~40 LOC dispatcher; the bulk of the work is in the A1''' lift.
+
+**Estimated win at m=7:**
+- Per call: O(m) vs O(num_classes) = ~1000× speedup.
+- Per `CharacterMultiplicities` build at the central class: avoids the 16385² ≈ 2.7×10^8 IN-tests for the cc_idx build. Cumulatively the difference between "seconds" and "many hours" for the multiplicity loop.
+
+**Cross-ref:**
+- The closed-form is the same content as A1''' but applied at the point of evaluation, not at the point of table construction. A1''' provides the data structure; A1'''' uses it.
+- After A1'''' lands, `_EnsureClassData` may be skipped entirely for E_+(m) centralisers. Adjust the guards accordingly.
+
+---
+
+## A2 — `ConjugacyClasses(C)` in `CentraliserClassData` for `C = G` ⟶ closed-form, return `idx.classes`
+
+**Location:**
+- `extraspecial_orbifolds/scripts/krr_spectral_characters_sparse.g:1006-1015` (`CentraliserClassData`):
+
+```gap
+CentraliserClassData := function(idx, class_idx)
+    local C, cc;
+    C := idx.centralisers[class_idx];
+    cc := ConjugacyClasses(C);                  # ★ at m=7, C = E_+(7), SAME OOM as A1 ★
+    return rec(
+        classes := cc,
+        reps := List(cc, Representative),
+        sizes := List(cc, Size),
+        num := Length(cc)
+    );
+end;;
+```
+
+**Why it's a perf hit even after A1:**
+
+For the central class (the ONLY class processed in the spectral loop), `C = idx.centralisers[class_idx] = G = E_+(m)`. So this is calling `ConjugacyClasses(E_+(7))` AGAIN — same OOM as A1, but on a fresh call (the closure of `BuildSimpleIndexLazy(G)` returns `idx.classes` but `ConjugacyClasses(C)` for `C = idx.centralisers[i] = G` is a fresh call to GAP).
+
+**Closed-form replacement:**
+
+After A1, `idx.classes` already holds the closed-form class list for G. Since `C = G` for the central class, `CentraliserClassData(idx, central_class_idx)` can return `rec(classes := idx.classes, reps := idx.reps, sizes := idx.class_sizes, num := Length(idx.classes))` directly.
+
+For non-central classes (NOT processed in the K-4b spectral loop, but kept for interface compatibility), `C` is one of the two non-central centraliser types — closed-form CC structure for those is the same orbit-type machinery applied to E_+(m-1).
+
+**Effort:** ~20 LOC special-case in `CentraliserClassData`: when `idx.centralisers[class_idx]` is identical to `idx.group`, return the cached class data instead of recomputing. Bundle with A1 / A1'.
+
+**Estimated win at m=7:** Same magnitude as A1 (OOM avoidance). Without this, A1 only fixes the first OOM cliff; the SECOND OOM cliff is at `ConjugacyClasses(C)` here.
+
+**This is a Tier-A-equivalent finding — promoted from the Tier-B section (where it appeared in the initial draft as B7) to make the dependency on A1 explicit.**
 
 ---
 
@@ -490,34 +689,9 @@ od;
 
 ---
 
-## B7 — `ConjugacyClasses(C)` in `CentraliserClassData` ⟶ closed-form for `C = E_+(m)`
+## B7 — (promoted to Tier-A as **A2**)
 
-**Location:** `extraspecial_orbifolds/scripts/krr_spectral_characters_sparse.g:1018-1028`.
-
-**Current shape:**
-```gap
-CentraliserClassData := function(idx, class_idx)
-    local C, cc;
-    C := idx.centralisers[class_idx];
-    cc := ConjugacyClasses(C);                  # ★ at m=7, C = E_+(7), same OOM ★
-    return rec(
-        classes := cc,
-        ...
-    );
-end;;
-```
-
-For the central class (the ONLY class processed in the spectral loop), `C = idx.centralisers[class_idx] = G = E_+(m)`. So this is calling `ConjugacyClasses(E_+(7))` AGAIN — same OOM as A1, but on a fresh call (the closure of `BuildSimpleIndexLazy(G)` returns `idx.classes` but `ConjugacyClasses(C)` for `C = idx.centralisers[i] = G` is a fresh call to GAP).
-
-**Closed-form replacement:**
-
-After A1, `idx.classes` already holds the closed-form class list for G. Since `C = G` for the central class, `CentraliserClassData(idx, central_class_idx)` can return `rec(classes := idx.classes, reps := idx.reps, sizes := idx.class_sizes, num := Length(idx.classes))` directly.
-
-**Effort:** ~20 LOC special-case in `CentraliserClassData`: when `idx.centralisers[class_idx]` is identical to `idx.group`, return the cached class data instead of recomputing.
-
-**Estimated win at m=7:** Same magnitude as A1 (OOM avoidance). Without this, A1 only fixes the first OOM cliff; the SECOND OOM cliff is at `ConjugacyClasses(C)` here.
-
-**This is a Tier-A-equivalent finding hiding in Tier-B because it'd OOM without it.** Promoted in priority.
+`ConjugacyClasses(C)` in `CentraliserClassData` for the central class `C = G = E_+(7)` was originally drafted here as B7. Promoted to **A2** in Section 2 because it would OOM independently of A1. See A2 above.
 
 ---
 
@@ -595,7 +769,25 @@ For rank-22 inputs (D_8, Q_8 branches) the matcher is fast. For rank-4096 inputs
 
 ---
 
-# 5. What we're already doing right
+# 5. Existing closed-form assets NOT linked into the K-4b m=7 path
+
+The repo already contains closed-form alternatives to most of the layers this audit calls out. The K-4b m=7 spectral pipeline does NOT use them. The Change A' wave below is fundamentally a question of plumbing — lifting these into the path-of-computation that runs at m=7.
+
+| Asset | Path | Provides | Status in K-4b m=7 path |
+|---|---|---|---|
+| `closed_form_central.g` | `extraspecial_orbifolds/scripts/closed_form_central.g` | O(1) `ClosedFormCentralS(idx, central_class, ...)` for central-row S-matrix entries | **NOT USED** — K-4b builds the multiplicity decomposition densely via `CharacterMultiplicities`. The per-irrep formula `mult_chi · χ(h)` for central rows is the same content. |
+| `quillen_h3_structure.g` | `extraspecial_orbifolds/scripts/quillen_h3_structure.g` | H^3(E_+(m); U(1)) shape without HAP `ResolutionFiniteGroup` (HAP OOMs at m=7) | **NOT USED in K-4b spectral path** (used in D-VAN m=7 since PR #326). H^3 isn't needed inside the spectral build, but the same Quillen presentation underwrites the closed-form irreps proposed in A1'''. |
+| `compute_e_plus_7_T_analytical.g` | `extraspecial_orbifolds/scripts/compute_e_plus_7_T_analytical.g` | Analytical T-multiset per 4-type orbit structure; sector counts; per-sector irrep counts | **NOT USED** — file header literally says "no call to ConjugacyClasses(E_+(m)) needed; no character-table computation on E_+(m) needed", but K-4b calls both anyway. The structural content of A1 + A1' + A1'' is sitting in this file. |
+| `fusion_coefficient.g`, `s_entry.g` | `extraspecial_orbifolds/scripts/{fusion_coefficient,s_entry}.g` | Single-entry Verlinde / S via `SEntry(m, i, j)`, blocked dispatch | **NOT USED** — K-4b builds modular data densely via `_CTComputeSBlock`. Could be a follow-up if K-4b ever needs a single-entry S query. |
+| `defect_rep_minus_id_optim.g` | `extraspecial_orbifolds/scripts/defect_rep_minus_id_optim.g` | Closed-form F_2 (`HardCodeShortComputeInterTwineref`) — per-entry intertwiner formula | **USED** inside `_BuildGaussCtx` (post PR #446). This is the asset we DO link in — the analog of what A1''' needs to deliver for the irrep side. |
+| `brw_conjugacy_action.g` | `extraspecial_orbifolds/scripts/brw_conjugacy_action.g` | `ClassifyEmConjugacyClasses(G, classes)`, `OrbitPartitionFromTypes`, `BuildElementToClassIndexDict` (O(1) element→class lookup) | **NOT USED in K-4b spectral path**. Would be needed to package Change B without rebuilding `ConjugacyClasses(G)`. |
+| `predict_e_plus_m.g` | `extraspecial_orbifolds/scripts/predict_e_plus_m.g` | Class structure + centraliser types + T-eigenvalue counts as a sanity oracle | **USED** for cross-validation (called by `compute_e_plus_7_T_analytical.g::CheckAgainstPredictor`) but NOT linked into `BuildSimpleIndexLazy`. Same content as A1 + A1'. |
+| `abelian_branch_fast.g` | `extraspecial_orbifolds/scripts/abelian_branch_fast.g` (PR #437) | Fast q_ω + b_ω direct cocycle evaluation, ~500× faster than building the S-matrix | **NOT USED** at m=7 — driver doesn't set `_K4A_USE_FAST_ABELIAN_BRANCH := true`. Documented as B5 below. |
+| `eplus_classes_closed_form.g` | `extraspecial_orbifolds/scripts/eplus_classes_closed_form.g` (untracked in branch as of 2026-06-06) | Closed-form CC enumeration scaffolding | **NEW** — appears in the untracked files list; if active, would be the locus of A1. Audit should confirm whether this is the in-progress A1 implementation. |
+
+**Implication for priorities:** the closed-form work is HALF-DONE. The trace function itself is already closed-form (`TraceOnOmega0Gauss`). The per-entry intertwiner is closed-form (`HardCodeShortComputeInterTwineref`). What's MISSING is the wrapping infrastructure (class enumeration → A1; centraliser objects → A1'; irrep counts → A1''; irrep evaluator → A1''' + A1''''; centraliser-CC alias → A2) that calls these closed-form leaves. The audit's Tier-A findings are all on this wrapping layer.
+
+# 5b. What we're already doing right
 
 These are existing wins that frame the priorities:
 
@@ -627,22 +819,41 @@ These are existing wins that frame the priorities:
 
 The findings have dependencies; here's the order I'd ship them as separate PRs.
 
+**Key revision vs the original issue #447 plan:** #447 Change A as drafted (closed-form CC enumeration only) is **insufficient**. The same `BuildSimpleIndexLazy` loop has FOUR more 16385×-generic-GAP-call sites (`Centralizer`, `NrConjugacyClasses`, `CharacterTable` for the central class, `EvalIrr → ClassIndexInCentraliser` per query) sitting immediately after the CC enumeration; each is independently capable of stalling or OOMing m=7. They MUST land in the same PR wave as the CC enumerator to unblock m=7. The recommendation below renames "Change A" to "Change A'" and folds A1, A1', A1'', A1''', A1'''', A2 into a single coherent closed-form-`idx` PR.
+
 ### Stage 0 — Already in flight
 
 - **PR (Change B from #447 = current branch):** BRW-orbit Tr collapse in `BuildKRRSpectralCharactersSparse`. Drops Step 3/4 from 16385 trace evals to 4.
 
 ### Stage 1 — Strict unblock (must merge before m=7 production can finish)
 
-1. **#447 Change A — closed-form CC enumerator for E_+(m)**
-   - Files: new `extraspecial_orbifolds/scripts/e_plus_conjugacy_classes_closed_form.g`. Hook into `BuildSimpleIndexLazy` via a flag `is_eplus := IsEPlusGroup(G)` or via a new `BuildSimpleIndexEPlusLazy(G, m)` and route `BuildKRRSpectralCharactersSparse` to it.
-   - Tests: m=3 against `BuildSimpleIndex(EmUnimodGroup(3))` round-trip; m=5 against the known-good path; m=7 smoke (only the central class needs full materialisation per the spectral path).
-   - Depends on: nothing. Independent of in-flight #447 Change B.
-   - **A2** is bundled into this PR — once we have the closed-form enumerator, the lazy centraliser thunk is trivial.
+1. **#447 Change A' — closed-form `idx` record for E_+(m).** **(supersedes the old Change A)**
 
-2. **B7 — closed-form `CentraliserClassData` for C = G** (~20 LOC special case in `krr_spectral_characters_sparse.g`).
-   - Trivially small; can land alongside Change A or as a follow-up. Without this, Change A doesn't actually unblock m=7 (second OOM cliff).
+   The PR delivers ONE coherent closed-form replacement for `BuildSimpleIndexLazy(EmUnimodGroup(m))` covering all six Tier-A wrap-layer findings: A1 + A1' + A1'' + A1''' + A1'''' + A2. The shape:
 
-3. **B5 — enable `_K4A_USE_FAST_ABELIAN_BRANCH := true` in `run_k4b_m7.sh`**.
+   - **Files:**
+     - New: `extraspecial_orbifolds/scripts/eplus_idx_closed_form.g` providing `BuildSimpleIndexEPlusClosedForm(m)` returning an `idx` record with the same shape as `BuildSimpleIndexLazy(G)` (so all `idx.*` accessors elsewhere keep working) but populated from the 4-type structure with no generic GAP calls.
+     - New: `extraspecial_orbifolds/scripts/eplus_irreps_closed_form.g` providing `EPlusEvalIrr(m, irrep_idx, h)` (for E_+(m) and the two non-central centraliser types).
+     - Modified: `extraspecial_orbifolds/scripts/untwisted_modular_data.g` — replace `EvalIrr` and `ClassIndexInCentraliser` bodies with a dispatcher that routes E_+(m) cases to the closed-form evaluator.
+     - Modified: `extraspecial_orbifolds/scripts/krr_spectral_characters_sparse.g:1006-1015` — `CentraliserClassData` special-case `C = idx.group → return idx.classes` directly (A2).
+     - Modified: `extraspecial_orbifolds/scripts/krr_spectral_characters_sparse.g:1102-1113` — `BuildKRRSpectralCharactersSparse(m)` calls `BuildSimpleIndexEPlusClosedForm(m)` for m ≥ 5.
+
+   - **Contents per finding:**
+     - A1 — closed-form `classes`, `reps`, `class_sizes` per the 4-type structure (referencing `compute_e_plus_7_T_analytical.g` math).
+     - A1' — closed-form `centralisers` (three group objects: G, Z_2 × E_+(m-1), Z_4 ∘ E_+(m-1)) cached and shared across like-type classes.
+     - A1'' — closed-form `num_irreps` constants per type.
+     - A1''' — structural irrep data (linear-form coefficients + faithful-irrep flag) instead of `idx.irreps[i]` being an `Irr(CharacterTable(...))` list. Keep the same `idx.irreps[i][k]` interface but back it with a closure / record dispatching to the closed-form evaluator.
+     - A1'''' — `EvalIrr` and `ClassIndexInCentraliser` dispatch routing E_+(m) cases to `EPlusEvalIrr(m, irrep_idx, h)`, falling back to the generic path otherwise.
+     - A2 — `CentraliserClassData` short-circuit for `C ≡ idx.group`.
+
+   - **Tests:**
+     - m=3 anchor: full record equality between `BuildSimpleIndexEPlusClosedForm(3)` and `BuildSimpleIndex(EmUnimodGroup(3))` (rank, num_irreps per class, class_sizes, sample EvalIrr values on 50 random (class_idx, irrep_idx, h) triples).
+     - m=5 anchor: K-4b m=5 verdict reproduces PR #421's TRIVIAL.
+     - m=7 smoke: `BuildSimpleIndexEPlusClosedForm(7)` runs in seconds and produces the expected 16385 classes and 16385 num_irreps for the central class.
+
+   - **Depends on:** nothing. Independent of in-flight #447 Change B.
+
+2. **B5 — enable `_K4A_USE_FAST_ABELIAN_BRANCH := true` in `run_k4b_m7.sh`**.
    - 3 lines in the driver.
    - Gated by Stage 2 (cross-validation at m=5) per the job-graph.
    - Without this, the post-spectral E branch is the next bottleneck after the spectral build.
@@ -674,9 +885,9 @@ The findings have dependencies; here's the order I'd ship them as separate PRs.
 
 ### Risk / interaction notes
 
-- **A1 + B7 must ship together** to avoid the second OOM cliff at `CentraliserClassData`.
-- **A1 + B2 should ship together** to avoid the EP-side OOM cliff at `BuildSimpleIndexLazy(EPlusGroup(7))`.
-- **A1 + B5 is the minimum for m=7 to finish in any wall budget.**
+- **A1 + A1' + A1'' + A1''' + A1'''' + A2 MUST ship together** as Change A'. Any subset is insufficient: shipping only A1 leaves m=7 stuck at A1' (`Centralizer` per rep) or A1''' (`CharacterTable` for the central class) or A2 (second `ConjugacyClasses` cliff).
+- **Change A' + B2 should ship close together** to avoid the EP-side OOM cliff at `BuildSimpleIndexLazy(EPlusGroup(7))`. If Change A' is published as a `BuildSimpleIndexEPlusClosedForm` keyed by element-of-`EmUnimodGroup`, B2 needs the same function callable on `EPlusGroup`-side elements (the `psi` iso preserves the orbit-type structure, so the math is identical).
+- **Change A' + B5 is the minimum for m=7 to finish in any wall budget.** Stage 1.
 - B1 / B4 / B3 are pure speedups, no correctness risk. They can land independently.
 - A3 has a regression-test requirement (the m=3 / m=5 trace values must match) but no correctness risk if the test passes.
 
@@ -685,7 +896,8 @@ The findings have dependencies; here's the order I'd ship them as separate PRs.
 | Stage | Wall | Memory |
 |---|---|---|
 | Pre-Stage 1 (current) | OOM at `BuildSimpleIndexLazy` | OOM > 48 GB |
-| Stage 1 (#447 A+B + B5 + B7) | ~30-60 min | <4 GB |
+| Hypothetical: #447 Change A as drafted (only A1, no A1'/A1''/A1'''/A1''''/A2) | OOM at A1' or A1''' or A2 — second cliff | Still > 48 GB |
+| Stage 1 (Change A' + Change B + B5) | ~30-60 min | <4 GB |
 | Stage 2 (+A3 + B1 + B2) | ~5-10 min | <2 GB |
 | Stage 3 (+B3 + B4 + B6 + C1-C6) | ~2-5 min | <2 GB |
 
@@ -707,12 +919,13 @@ This audit's findings map against the existing 2026-06-02 audit (`2026-06-02-ort
 | C-K4-1 | (fsi at small G) | Not on m=7 critical path |
 
 This audit identifies:
-- **8 new Tier-A/B findings** (A1, A2, A3 [duplicate], B1, B2, B3, B4 [duplicate], B5, B6, B7)
-- **6 new Tier-C findings** (C1-C6)
+- **11 Tier-A findings** (A1, A1', A1'', A1''', A1'''', A2, A3 [duplicate of A-K4-2]) plus the post-spectral E-branch enablement
+- **6 Tier-B findings** (B1, B2, B3, B4 [duplicate of A-K4-4], B5, B6)
+- **6 Tier-C findings** (C1-C6)
 
 The interactions with existing in-flight work:
 - **Change B from #447** (current branch) collapses the per-class trace loop — addressed.
-- **Change A from #447** (the closed-form CC bypass) — this is A1.
+- **Change A from #447** (the closed-form CC bypass) — this is A1. Audit recommends **widening to Change A'** to cover A1 + A1' + A1'' + A1''' + A1'''' + A2 in one PR.
 - **PR #437** (fast abelian branch) — B5 is "use the existing opt-in flag".
 
 ---
@@ -737,7 +950,9 @@ The interactions with existing in-flight work:
 - Did NOT propose new mathematical content — every closed-form replacement cited here already exists in the codebase as a reference implementation or a comment in `compute_e_plus_7_T_analytical.g` / `predict_e_plus_m.g`.
 
 **Confidence levels:**
-- **A1, A2, B7**: HIGH (the OOM is reproduced in the production logs; the closed-form structure is documented and tested at lower m).
+- **A1, A1', A1''**: HIGH (the OOM is reproduced in the production logs; the closed-form CC + centraliser + irrep-count structure is documented and tested at lower m).
+- **A1''', A1''''**: HIGH on the math (extraspecial-group irrep theory is standard); MEDIUM on the integration — `idx.irreps[i][k]` is accessed by downstream code as a GAP `ClassFunction`, the closed-form replacement must preserve that interface or update every consumer. Audit `CharacterMultiplicities` line 1053 (`chi[cc_idx[j]]`) and `trace_on_W` line 1198 (`EvalIrr(...)`).
+- **A2**: HIGH (a direct `ConjugacyClasses(G)` recall that would OOM independently of A1).
 - **A3**: HIGH (already a Tier-A finding in the 2026-06-02 audit with measured impact at m=5).
 - **B1, B2**: HIGH on the correctness side, NEEDS-REVIEW on the per-call cost estimate — the symplectic conjugator search is novel and would benefit from prototyping.
 - **B3, B4**: HIGH on correctness; the speedup magnitude is conservatively estimated.
@@ -756,6 +971,15 @@ The interactions with existing in-flight work:
 4. **A3 / C4**: `TriangulizeMat` works on GF(2)-tagged matrices but loses the augmented-matrix structure (we need to track back-substitution rows to recover `solveMap` / `feasMat`). A potential intermediate: keep the augmented matrix as integer, then `ConvertToMatrixRep(M, GF(2))` after building, then row-reduce. Test that the recovered `pivCols` / `solveMap` matches the existing m=3 outputs byte-for-byte.
 
 5. **Composition with #447 Change B**: the in-flight Change B uses `_SparseClassifyEmBRWTypes(cls_data.classes)` which iterates `cls_data.classes` — these need to come from the closed-form CC enumerator (A1) or this Change B step itself hits the OOM. Verify that A1's `cls_data.classes` provides a `Size(cl)` and `Representative(cl)` interface compatible with what `_SparseClassifyEmBRWTypes` expects.
+
+6. **`idx.irreps[i][k]` interface preservation under A1''' + A1''''**: the closed-form irreps are NOT GAP `ClassFunction` objects. Downstream code that accesses `idx.irreps[i][k][cc_idx]` (e.g. `CharacterMultiplicities` line 1053) needs to either:
+   - (a) Continue using the existing `[cc_idx]`-style indexing, with `idx.irreps[i][k]` being a callable / record that overloads `\[\]` (GAP supports this via `MakeFunctionalOperation`), or
+   - (b) Be refactored to call `EPlusEvalIrr_at_class(idx, i, k, cc_idx)` explicitly.
+   Option (b) is cleaner but touches every callsite. Option (a) is invisible to callers but requires care. Recommend (b) for A1''' + A1'''' to keep the math transparent; the affected callsites are limited (`CharacterMultiplicities`, `trace_on_W`, the central-row closed-form S formula in `closed_form_central.g::EvalIrr` line 58).
+
+7. **Audit consumer code for `idx` field-of-record assumptions**: B1 / B2 / B3 / B4 all consume the `idx` record produced by `BuildSimpleIndexLazy`. After Change A' the `idx` shape is conceptually identical but the per-field semantics differ (lazy vs structural). Run a regression: `BuildSimpleIndexEPlusClosedForm(m)` vs `BuildSimpleIndexLazy(EmUnimodGroup(m))` at m ∈ {3, 5} on every consumer entry point. PASS condition: same K-4b verdict at m=5, same K-4a anchor at m=3.
+
+8. **Is the `eplus_classes_closed_form.g` (untracked) file the in-progress A1?**: This file appears in the untracked files list in the working tree. The audit recommends confirming whether it's the active Change A implementation. If so, the audit's recommendation is to grow it into the full Change A' (closed-form `idx`) before merging.
 
 ---
 
