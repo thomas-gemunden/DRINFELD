@@ -383,7 +383,8 @@ TranslateSpectralDataToEPlus := function(arg)
           trace_on_W_translated, epsilon_translated, out, spectral_data_eu,
           target_EP, use_closed_form, num_classes_eu, ep_reps, ep_classes,
           ep_centralisers, ep_class_sizes, ep_class_types, cl, ep_num_irreps,
-          ep_global_offset, ep_global_to_local, ep_rank, i;
+          ep_global_offset, ep_global_to_local, ep_rank, i,
+          psi_gens_flat, psi_z, ei, k_ei, bit_idx, bit, a, r;
     if Length(arg) < 1 then
         Error("TranslateSpectralDataToEPlus: requires at least one ",
               "argument (the spectral_data_eu record).");
@@ -459,8 +460,57 @@ TranslateSpectralDataToEPlus := function(arg)
         if IsBound(idx_EU.class_types) then
             ep_class_types := EmptyPlist(num_classes_eu);
         fi;
+        # Issue #449 perf: bits-driven psi computation.
+        #
+        # `Image(tr_rec.psi, idx_EU.reps[i])` is slow at m >= 5 because GAP
+        # decomposes each 2^m x 2^m matrix as a word in EU generators via
+        # Schreier-Sims (~100-200 ms per call at m=7). At m=7 this is
+        # 16385 classes ~= 30-35 min.
+        #
+        # The closed-form EU class reps from `_EnumerateEPlusClassReps`
+        # are structured:
+        #   class 1: identity I_n
+        #   class 2: -I_n (the central element z)
+        #   class i >= 3: product of UnimodSigma(m, a, r) generators
+        #                 selected by the bit-decode of ei := i - 2:
+        #     bits[idx] := (ei >> (idx-1)) & 1  for idx in 1..2m
+        #     rep := prod_{a,r: bits[2*(a-1)+r] = 1} UnimodSigma(m, a, r)
+        # Since psi is a homomorphism,
+        #     psi(rep) = prod psi(UnimodSigma(m, a, r))
+        # and psi(UnimodSigma) values come directly from tr_rec.image_list
+        # (set in EmEPlusTranslateAgainst): image_list = [z_EP, a_1, b_1,
+        # ..., a_m, b_m] at m >= 2, so psi(sigma_{a,r}) = image_list[2*(a-1)+r+1].
+        # m = 1 also lands here via IsomorphismGroups + List-built image_list,
+        # so the same indexing convention holds (image_list[1] = psi(z),
+        # image_list[2*(a-1)+r+1] = psi(sigma_{a,r})).
+        #
+        # Cost: 2m+1 generator lookups (~free) + at most 2m PC-group
+        # multiplications per class (cheap, since EP is a pc group).
+        # At m=7: 16385 classes * ~14 quick PC multiplies = ~1 sec total.
+        psi_gens_flat := EmptyPlist(2 * m);
+        for a in [1..m] do
+            for r in [1..2] do
+                Add(psi_gens_flat, tr_rec.image_list[2 * (a - 1) + r + 1]);
+            od;
+        od;
+        psi_z := tr_rec.image_list[1];
         for i in [1..num_classes_eu] do
-            rep_ep := Image(tr_rec.psi, idx_EU.reps[i]);
+            if i = 1 then
+                rep_ep := One(ep_group);
+            elif i = 2 then
+                rep_ep := psi_z;
+            else
+                ei := i - 2;
+                rep_ep := One(ep_group);
+                k_ei := ei;
+                for bit_idx in [1..2 * m] do
+                    bit := k_ei mod 2;
+                    k_ei := QuoInt(k_ei, 2);
+                    if bit = 1 then
+                        rep_ep := rep_ep * psi_gens_flat[bit_idx];
+                    fi;
+                od;
+            fi;
             cl := ConjugacyClass(ep_group, rep_ep);
             SetSize(cl, idx_EU.class_sizes[i]);
             Add(ep_reps, rep_ep);
