@@ -367,13 +367,24 @@ end;;
 # distinct classes, so sign is always +1 for centrals (since each
 # central class has only one element). Non-centrals have sign ±1.
 _RTS_BuildClassLookup := function(idx_G)
-    local d, k, rep, neg_rep, central_type;
+    local d, k, rep, neg_rep, central_type, z, use_matrix_neg;
     if IsBound(idx_G._rts_class_lookup) then
         return idx_G._rts_class_lookup;
     fi;
-    # Use a dictionary keyed by the matrix object. `NewDictionary` with
-    # the first arg = a sample key works for any GAP element type.
+    # Use a dictionary keyed by the matrix/element object. `NewDictionary`
+    # with the first arg = a sample key works for any GAP element type.
     d := NewDictionary(idx_G.reps[1], true);
+    # Determine how to compute the "negation" of a class rep:
+    # for matrix reps, neg(x) = -x (matrix negation); for PC-group
+    # reps (e.g. EP-side translated idx — issue #449), there is no
+    # additive inverse, so we use neg(x) = z * x where z is the
+    # central involution. In the closed-form CC enumeration the
+    # central class i = 2 always holds {z}, so we can read z from
+    # `idx_G.reps[2]` (= Representative(idx_G.classes[2])).
+    use_matrix_neg := IsMatrix(idx_G.reps[1]);
+    if not use_matrix_neg then
+        z := idx_G.reps[2];
+    fi;
     for k in [1..Length(idx_G.reps)] do
         rep := idx_G.reps[k];
         # Insert the canonical rep with sign = +1.
@@ -384,12 +395,20 @@ _RTS_BuildClassLookup := function(idx_G)
         if IsBound(idx_G.class_types)
            and (idx_G.class_types[k] = "sigma2"
                 or idx_G.class_types[k] = "sigma_1sigma_2") then
-            neg_rep := -rep;
+            if use_matrix_neg then
+                neg_rep := -rep;
+            else
+                neg_rep := z * rep;
+            fi;
             AddDictionary(d, neg_rep, rec(k_G := k, sign := -1));
         elif (not IsBound(idx_G.class_types))
              and IsBound(idx_G.class_sizes)
              and idx_G.class_sizes[k] = 2 then
-            neg_rep := -rep;
+            if use_matrix_neg then
+                neg_rep := -rep;
+            else
+                neg_rep := z * rep;
+            fi;
             AddDictionary(d, neg_rep, rec(k_G := k, sign := -1));
         fi;
     od;
@@ -416,7 +435,14 @@ _RTS_GetNegConjugator := function(idx_G, k, G)
         return idx_G._rts_neg_conjugator[k];
     fi;
     r := idx_G.reps[k];
-    neg_r := -r;
+    # Compute "negation" — for matrix reps, neg_r = -r; for PC-group
+    # reps (translated EP-side idx), neg_r = z * r where z is the
+    # central involution (= idx_G.reps[2], the minus_one class rep).
+    if IsMatrix(r) then
+        neg_r := -r;
+    else
+        neg_r := idx_G.reps[2] * r;
+    fi;
     # Try the matrix-group generators of G first — for E_+(m) the
     # generators are {z, σ_{a,r}}, and at least one σ_{a,r} fails to
     # commute with r (by non-degeneracy of the symplectic form). The
