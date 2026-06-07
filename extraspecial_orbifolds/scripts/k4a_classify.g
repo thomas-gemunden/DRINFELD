@@ -522,16 +522,17 @@ _K4A_ClassifySpectralEBranchMulti := function(opts, m, sparse_data, ea_family)
         h_ea_list := _DETF_AllMaxEAsIn(G_parent, m);
         restmats := rec(H_EA_list := h_ea_list);
     else
-        # Subgroup-input path (m=7 currently; same path will apply if any
-        # future m uses pre-persisted subgroups). The subgroups in
+        # Subgroup-input path (m=7 currently). The subgroups in
         # ea_family were reconstructed by LoadDVANEAFamily against
-        # `ExtraspecialGroup(2^(2m+1), "+")`, so use the SAME canonical
-        # group here. The spectral classification does NOT need the H^3
-        # cohomology context (resolution / UCT / cocyclebasis) of
-        # E_+(m) — those are only needed when the test consumes an
-        # explicit cocycle ω. At default opts (ω = 0 zero-cocycle stub
-        # surfaced per-EA), we only need the group object itself.
-        G_parent := ExtraspecialGroup(2^(2 * m + 1), "+");
+        # a specific `ExtraspecialGroup(2^(2m+1), "+")` instance. We
+        # MUST use the SAME instance here — `ExtraspecialGroup(...)`
+        # is non-cached in GAP and returns a fresh group object on
+        # every call, so a fresh `ExtraspecialGroup(...)` here would
+        # be a DISTINCT object from the one ea_family's subgroups
+        # live inside, breaking the H ⊆ G generator-membership tests
+        # in `RestrictTraceOnWToSubgroupHonourParent`. We extract
+        # G_parent from the EA subgroups themselves via Parent().
+        G_parent := Parent(ea_family[1]);
         restmats := fail;
     fi;
     # Translate the parent-G spectral data ONCE to the EP-family of
