@@ -194,6 +194,202 @@ else
                    EAC_K4A_RES.verdict, "trivial");
 fi;
 
+# ---- Anchor 4: (q, b) extraction agrees with cocycle (q, b) (#490) -----
+# For (Z/2)^k k in {1, 2, 3}, build a non-trivial cocycle, run both the
+# FORWARD direction (cocycle → q, b via ClassifyAbelianBranchFast) and
+# the INVERSE direction (modular data → q, b via ExtractQBFromModularData).
+# Assert q vectors agree mod N and b matrices agree mod N.
+Print("\nAnchor 4: (q, b) extraction agrees with cocycle (q, b) (PR #490).\n");
+
+if not IsBound(ComputeAbelianModularDataFactored) then
+    Read(Concatenation(EAC_SCRIPTSDIR, "/abelian_modular_data_closed_form.g"));
+fi;
+if not IsBound(ClassifyAbelianBranchFast) then
+    Read(Concatenation(EAC_SCRIPTSDIR, "/abelian_branch_fast.g"));
+fi;
+EACAssertTrue("A4: ExtractQBFromModularData bound",
+              IsBound(ExtractQBFromModularData));
+EACAssertTrue("A4: ComputeAbelianModularDataFactored bound",
+              IsBound(ComputeAbelianModularDataFactored));
+EACAssertTrue("A4: ClassifyAbelianBranchFast bound",
+              IsBound(ClassifyAbelianBranchFast));
+
+EAC_A4_GROUPS := [
+    [ "(Z/2)^1", ElementaryAbelianGroup(IsPcGroup, 2) ],
+    [ "(Z/2)^2", ElementaryAbelianGroup(IsPcGroup, 4) ],
+    [ "(Z/2)^3", ElementaryAbelianGroup(IsPcGroup, 8) ]
+];;
+for EAC_PAIR in EAC_A4_GROUPS do
+    EAC_LBL := EAC_PAIR[1];
+    EAC_HA4 := EAC_PAIR[2];
+    EAC_SETUP_A4 := SetupCohomology3(EAC_HA4);
+    EAC_K_A4 := EAC_SETUP_A4.num_generators;
+    Print("  ", EAC_LBL, ": k = ", EAC_K_A4,
+          ", exponent = ", EAC_SETUP_A4.exponent, "\n");
+    # Try a couple of unit vectors (anchor + e_1 + e_2).
+    for EAC_I_A4 in [0, 1, 2] do
+        if EAC_I_A4 > EAC_K_A4 then continue; fi;
+        EAC_GV_A4 := ListWithIdenticalEntries(EAC_K_A4, 0);
+        if EAC_I_A4 >= 1 then
+            EAC_GV_A4[EAC_I_A4] := 1;
+        fi;
+        EAC_OMEGA_A4 := StandardCocycleOf(EAC_SETUP_A4, EAC_GV_A4);
+        EAC_VAL_A4 := Maximum(
+            Gcd(Gcd(EAC_GV_A4), EAC_SETUP_A4.exponent), 1);
+        EAC_EXPON_A4 := EAC_SETUP_A4.exponent / EAC_VAL_A4;
+        if EAC_GV_A4 = ListWithIdenticalEntries(EAC_K_A4, 0) then
+            EAC_N_A4 := 1;
+        else
+            EAC_N_A4 := EAC_EXPON_A4;
+        fi;
+
+        EAC_MDF_A4 := ComputeAbelianModularDataFactored(
+            EAC_HA4, EAC_OMEGA_A4, EAC_N_A4);
+        EAC_QB_A4 := ExtractQBFromModularData(EAC_MDF_A4);
+        EAC_FAST_A4 := ClassifyAbelianBranchFast(
+            EAC_HA4, EAC_OMEGA_A4, EAC_N_A4);
+
+        # Compare q mod N (extraction is mod 2N; fast is mod N).
+        EAC_Q_EX_MODN := List(EAC_QB_A4.q, x -> x mod EAC_N_A4);
+        EAC_Q_FAST_MODN := List(EAC_FAST_A4.q_omega, x -> x mod EAC_N_A4);
+        EACAssertEqual(
+            Concatenation("A4: ", EAC_LBL, " gv=", String(EAC_GV_A4),
+                          ": q mod N agrees (extraction vs fast)"),
+            EAC_Q_EX_MODN, EAC_Q_FAST_MODN);
+        # Compare b mod N.
+        EAC_B_EX_MODN := List(EAC_QB_A4.b,
+            r -> List(r, x -> x mod EAC_N_A4));
+        EAC_B_FAST_MODN := List(EAC_FAST_A4.b_omega,
+            r -> List(r, x -> x mod EAC_N_A4));
+        EACAssertEqual(
+            Concatenation("A4: ", EAC_LBL, " gv=", String(EAC_GV_A4),
+                          ": b mod N agrees (extraction vs fast)"),
+            EAC_B_EX_MODN, EAC_B_FAST_MODN);
+        # Classifier verdict agrees with fast path.
+        EAC_CF_A4 := ClassifyEAFromModularData(
+            EAC_HA4, EAC_MDF_A4, EAC_MDF_A4.T_vec);
+        EACAssertEqual(
+            Concatenation("A4: ", EAC_LBL, " gv=", String(EAC_GV_A4),
+                          ": classify.is_trivial = fast.is_coboundary"),
+            EAC_CF_A4.is_trivial, EAC_FAST_A4.is_coboundary);
+        EACAssertEqual(
+            Concatenation("A4: ", EAC_LBL, " gv=", String(EAC_GV_A4),
+                          ": method = qb_extraction"),
+            EAC_CF_A4.method, "qb_extraction");
+    od;
+od;
+
+# ---- Anchor 5: factored input at (Z/2)^8 (PR #490 main use case) ------
+# Build factored modular data for Z^omega(Vec_(Z/2)^8) with a non-trivial
+# cocycle and assert is_trivial = false. The full S matrix at this scale
+# is 65536 x 65536 (~4.3e9 entries) — infeasible. The factored path
+# extracts (q, b) in O(|H|^2) S_at queries.
+Print("\nAnchor 5: factored input at (Z/2)^8 with non-trivial omega.\n");
+EAC_H_A5 := ElementaryAbelianGroup(IsPcGroup, 256);;  # (Z/2)^8
+EAC_SETUP_A5 := SetupCohomology3(EAC_H_A5);;
+EAC_K_A5 := EAC_SETUP_A5.num_generators;;
+Print("  H = (Z/2)^8, |H| = ", Order(EAC_H_A5),
+      ", setup.num_generators = ", EAC_K_A5,
+      ", exponent = ", EAC_SETUP_A5.exponent, "\n");
+EACAssertTrue("A5: setup.num_generators >= 1", EAC_K_A5 >= 1);
+
+# Pick a unit basis vector e_1; this is a non-trivial element of
+# H^3((Z/2)^8; U(1)) by construction.
+EAC_GV_A5 := ListWithIdenticalEntries(EAC_K_A5, 0);;
+EAC_GV_A5[1] := 1;;
+EAC_OMEGA_A5 := StandardCocycleOf(EAC_SETUP_A5, EAC_GV_A5);;
+EAC_VAL_A5 := Maximum(
+    Gcd(Gcd(EAC_GV_A5), EAC_SETUP_A5.exponent), 1);;
+EAC_EXPON_A5 := EAC_SETUP_A5.exponent / EAC_VAL_A5;;
+Print("  omega = e_1, val = ", EAC_VAL_A5, ", expon = ", EAC_EXPON_A5, "\n");
+
+EAC_T0 := Runtime();;
+EAC_MDF_A5 := ComputeAbelianModularDataFactored(
+    EAC_H_A5, EAC_OMEGA_A5, EAC_EXPON_A5);;
+Print("  factored build wall: ", (Runtime() - EAC_T0) / 1000., " s\n");
+
+EAC_T0 := Runtime();;
+EAC_CF_A5 := ClassifyEAFromModularData(
+    EAC_H_A5, EAC_MDF_A5, EAC_MDF_A5.T_vec);;
+EAC_WALL_A5 := (Runtime() - EAC_T0) / 1000.;;
+Print("  classify wall: ", EAC_WALL_A5, " s\n");
+Print("  is_trivial = ", EAC_CF_A5.is_trivial,
+      ", method = ", EAC_CF_A5.method,
+      ", is_q_trivial = ", EAC_CF_A5.is_q_trivial,
+      ", is_b_trivial = ", EAC_CF_A5.is_b_trivial, "\n");
+
+EACAssertEqual("A5: (Z/2)^8 e_1 non-trivial: is_trivial = false",
+               EAC_CF_A5.is_trivial, false);
+EACAssertEqual("A5: method = qb_extraction",
+               EAC_CF_A5.method, "qb_extraction");
+EACAssertTrue("A5: classify wall < 60 sec (feasibility)",
+              EAC_WALL_A5 < 60.0);
+
+# Cross-validation: fast path should agree.
+EAC_FAST_A5 := ClassifyAbelianBranchFast(
+    EAC_H_A5, EAC_OMEGA_A5, EAC_EXPON_A5);;
+EACAssertEqual("A5: is_trivial agrees with ClassifyAbelianBranchFast",
+               EAC_CF_A5.is_trivial, EAC_FAST_A5.is_coboundary);
+
+# ---- Anchor 6: backward compat at (Z/2)^k for k <= 4 (PR #486 path) ---
+# At k <= 4 the full (S, T) matrix is tractable; the legacy
+# `ClassifyEAFromModularData(H, S, T)` path (PATH B / JointPermutationMatcher)
+# must give the same triviality verdict as the new factored path (PATH A).
+Print("\nAnchor 6: backward compat — legacy full-(S,T) path agrees with ",
+      "factored path on (Z/2)^k k <= 4.\n");
+EAC_A6_GROUPS := [
+    [ "(Z/2)^2", ElementaryAbelianGroup(IsPcGroup, 4) ],
+    [ "(Z/2)^3", ElementaryAbelianGroup(IsPcGroup, 8) ],
+    [ "(Z/2)^4", ElementaryAbelianGroup(IsPcGroup, 16) ]
+];;
+for EAC_PAIR in EAC_A6_GROUPS do
+    EAC_LBL := EAC_PAIR[1];
+    EAC_H_A6 := EAC_PAIR[2];
+    EAC_SETUP_A6 := SetupCohomology3(EAC_H_A6);
+    EAC_K_A6 := EAC_SETUP_A6.num_generators;
+    # Test untwisted + first non-trivial unit vector.
+    for EAC_TWIST in [0, 1] do
+        EAC_GV_A6 := ListWithIdenticalEntries(EAC_K_A6, 0);
+        if EAC_TWIST = 1 and EAC_K_A6 >= 1 then
+            EAC_GV_A6[1] := 1;
+        fi;
+        EAC_OMEGA_A6 := StandardCocycleOf(EAC_SETUP_A6, EAC_GV_A6);
+        EAC_VAL_A6 := Maximum(
+            Gcd(Gcd(EAC_GV_A6), EAC_SETUP_A6.exponent), 1);
+        EAC_EXPON_A6 := EAC_SETUP_A6.exponent / EAC_VAL_A6;
+        if EAC_GV_A6 = ListWithIdenticalEntries(EAC_K_A6, 0) then
+            EAC_N_A6 := 1;
+        else
+            EAC_N_A6 := EAC_EXPON_A6;
+        fi;
+
+        # PATH A: factored.
+        EAC_MDF_A6 := ComputeAbelianModularDataFactored(
+            EAC_H_A6, EAC_OMEGA_A6, EAC_N_A6);
+        EAC_CF_FAC_A6 := ClassifyEAFromModularData(
+            EAC_H_A6, EAC_MDF_A6, EAC_MDF_A6.T_vec);
+
+        # PATH B: legacy full (S, T) via ComputeModularData. Untwisted
+        # via ComputeUntwistedModularData.
+        if EAC_TWIST = 0 then
+            EAC_MD_FULL_A6 := ComputeUntwistedModularData(EAC_H_A6);
+            EAC_CF_FULL_A6 := ClassifyEAFromModularData(
+                EAC_H_A6, EAC_MD_FULL_A6.S, EAC_MD_FULL_A6.T);
+        else
+            EAC_MD_FULL_A6 := ComputeModularData(
+                EAC_H_A6, EAC_OMEGA_A6, EAC_VAL_A6, EAC_EXPON_A6);
+            EAC_CF_FULL_A6 := ClassifyEAFromModularData(
+                EAC_H_A6, EAC_MD_FULL_A6.S, EAC_MD_FULL_A6.T);
+        fi;
+
+        EACAssertEqual(
+            Concatenation("A6: ", EAC_LBL,
+                          " twist=", String(EAC_TWIST),
+                          ": is_trivial agrees (factored vs full-matrix)"),
+            EAC_CF_FAC_A6.is_trivial, EAC_CF_FULL_A6.is_trivial);
+    od;
+od;
+
 # ---- Final summary -----------------------------------------------------
 Print("\n=== Final summary ===\n");
 Print("  passes:   ", EAC_PASSES, "\n");

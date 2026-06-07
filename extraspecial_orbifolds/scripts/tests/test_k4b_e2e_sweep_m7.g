@@ -1,6 +1,12 @@
 # test_k4b_e2e_sweep_m7.g
 #
 # Issue #489: e2e classifier-correctness sweep at m=7 (production scale).
+# Issue #490: retrofitted to exercise the modular-data classifier
+# `ClassifyEAFromModularData` via the factored modular-data path
+# (PR #487 + PR #490) instead of the cocycle-level
+# `ClassifyAbelianBranchFast`. This is the K-4b production path —
+# modular data in, triviality verdict out — per user directive
+# 2026-06-07 "K-4b should test modular data and not cocycles".
 #
 # For each non-zero basis vector v of H^3(E_+(7); U(1)) (454 order-2
 # generators + 1 order-4 generator + 1 "half-vector" 2 * order-4_gen
@@ -13,10 +19,15 @@
 #        a. If v|_H = 0 in H^3(H; U(1)), this branch cannot detect v
 #           and we mark it skipped (other branches must pick it up).
 #        b. Otherwise:
-#             EA H = (Z/2)^8: use the q_omega + b_omega cocycle-eval
-#                path `ClassifyAbelianBranchFast(H, omega_cocycle,
-#                expon)` (PR #437). The S-matrix synthesis is
-#                infeasible at |H|^4 = 4.3e9 entries.
+#             EA H = (Z/2)^8: synthesise factored modular data via
+#                `ComputeAbelianModularDataFactored(H, ω, N)` (PR #487)
+#                — O(|H|^2) memory with O(1) per-entry S accessor —
+#                then classify via
+#                `ClassifyEAFromModularData(H, mdf, mdf.T_vec)` which
+#                dispatches to the `qb_extraction` method (PR #490):
+#                extract q_ω from T_vec and b_ω from |H|^2 S_at queries,
+#                test `(q, b) ≡ (0, 0)`. The pre-PR-490 full S synthesis
+#                is infeasible at |H|^4 = 4.3e9 entries.
 #             D_8 / Q_8: synthesise (S, T) via the generic
 #                `ComputeModularData(H, omega_cocycle, val, expon)`
 #                (sub-second at |H| = 8) and classify via
@@ -29,30 +40,35 @@
 # to some H. A false positive (every branch trivial on a non-zero v) is
 # a K-4b classifier bug.
 #
-# Why `ClassifyAbelianBranchFast` is the right choice on EA at m=7
+# Why `ClassifyEAFromModularData` via the factored path is correct on
+# EA at m=7
 # ----------------------------------------------------------------
 # `ComputeAbelianModularDataClosedForm` (PR #487) materialises the full
 # |H|^2 x |H|^2 S-matrix; at H = (Z/2)^8 that is 65536 x 65536 cyclotomic
 # entries = 4.3e9 cells, which is INFEASIBLE in memory. The factored
-# variant `ComputeAbelianModularDataFactored` is O(|H|^2) memory but
-# would need a different classifier (no full S matrix to feed
-# `JointPermutationMatcher`).
+# variant `ComputeAbelianModularDataFactored` is O(|H|^2) memory plus an
+# O(1) `S_at(global_i, global_j)` accessor closure.
 #
-# `ClassifyAbelianBranchFast` (`abelian_branch_fast.g`, PR #437) checks
-# the cocycle-level predicate:
+# `ClassifyEAFromModularData` (PR #486 + PR #490) accepts factored
+# modular data via `rec(is_factored := true, S_at := ..., T_vec := ...,
+# chi_at := ..., modulus := N, ...)`. The PR #490 `qb_extraction` path
+# extracts (q_ω, b_ω) directly from the modular data:
 #
-#     q_omega(a)    := omega(a, a, a) mod N                (quadratic)
-#     b_omega(a, b) := q_omega(a*b) - q_omega(a) - q_omega(b) (polarisation)
-#     is_coboundary <=> q_omega ≡ 0  AND  b_omega ≡ 0  (mod N)
+#     q_ω(i_a)        = DiscreteLog(T_{(a, χ_triv)}, base E(2N))
+#     b_ω(i_a, i_b)   = -DiscreteLog(|H| · S_{(a, χ_triv), (b, χ_triv)},
+#                                     base E(2N)) mod 2N
 #
-# For ABELIAN H this is mathematically equivalent to triviality of [ω]
-# in H^3(H; U(1)) (Naidu-Nikshych / DGNO: H^3(H abelian; U(1)) ≅
-# {quadratic forms H -> Q/Z}). It runs in O(|H|^2) cocycle calls —
-# 65536 calls at H = (Z/2)^8 — and consumes O(|H|^2) memory.
+# then tests `(q, b) ≡ (0, 0)`. By DGNO 2010 / Naidu-Nikshych 2008,
+# H^3(H abelian; U(1)) ≅ {quadratic forms H -> Q/Z}; the (q, b) form
+# is trivial iff [ω] is the zero class. Complexity: O(|H|) for q from
+# T_vec + O(|H|^2) for b from S_at queries — feasible at |H| = 256.
 #
-# Same path used by the K-4a production classifier
-# (`k4a_classify.g::_K4A_ClassifyEBranchMulti` when
-# `_K4A_USE_FAST_ABELIAN_BRANCH = true`) at m=7.
+# Same path could be used by the K-4a production classifier
+# (`k4a_classify.g::_K4A_ClassifyEBranchMulti`); currently that file
+# uses `ClassifyAbelianBranchFast` directly when
+# `_K4A_USE_FAST_ABELIAN_BRANCH = true`. Both routes give equivalent
+# triviality verdicts (see anchor 4 of
+# `tests/test_classify_ea_from_modular_data.g`).
 #
 # m=7 architecture
 # ----------------
@@ -156,6 +172,16 @@ Read(Concatenation(_K4B7_SCRIPTSDIR, "/joint_permutation_matcher.g"));
 Read(Concatenation(_K4B7_SCRIPTSDIR, "/d8_classifier.g"));
 Read(Concatenation(_K4B7_SCRIPTSDIR, "/q8_classifier.g"));
 Read(Concatenation(_K4B7_SCRIPTSDIR, "/detecting_family_restriction.g"));
+# PR #490 retrofit: the EA branch now uses ClassifyEAFromModularData via
+# the factored modular-data path (ComputeAbelianModularDataFactored ->
+# ExtractQBFromModularData). The cocycle-level ClassifyAbelianBranchFast
+# remains loaded for cross-validation only.
+if not IsBound(ComputeAbelianModularDataFactored) then
+    Read(Concatenation(_K4B7_SCRIPTSDIR, "/abelian_modular_data_closed_form.g"));
+fi;
+if not IsBound(ClassifyEAFromModularData) then
+    Read(Concatenation(_K4B7_SCRIPTSDIR, "/ea_modular_data_classifier.g"));
+fi;
 # k4a_classify.g brings in LoadDVANEAFamily; we don't need it directly
 # (we read the persisted result.g ourselves to get exp vectors), but
 # loading it is harmless. Omitted to keep the load chain shorter.
@@ -306,9 +332,21 @@ fi;
 # synthesise (S^v|_H, T^v|_H) and run the appropriate K-4b classifier.
 # Returns rec(skipped, detected_nontrivial, branch_label, reason,
 # class_idx/match).
+#
+# PR #490 retrofit: the EA branch now uses `ClassifyEAFromModularData`
+# via the factored modular-data path (PR #487 + PR #490). The cocycle
+# is fed to `ComputeAbelianModularDataFactored(H, ω, N)` to produce a
+# factored modular-data record `rec(S_at, T_vec, chi_at, ...)`, which
+# `ClassifyEAFromModularData` consumes via the `qb_extraction` method:
+# extract `q_ω` and `b_ω` from T_vec and O(|H|^2) S_at queries, test
+# `(q, b) ≡ (0, 0)`. This is the K-4b production path — modular data
+# in, triviality verdict out — and is feasible at H = (Z/2)^8 (the
+# pre-PR-490 `JointPermutationMatcher` path materialised the
+# 65536 x 65536 full S matrix and was infeasible).
 
 _K4B7_BranchDispatch := function(H, setup_H, v_H, branch_label)
-    local omega_cocycle, val, expon, modular_ct, class_res;
+    local omega_cocycle, val, expon, modular_ct, class_res,
+          mdf, ea_class;
 
     if ForAll(v_H, x -> x = 0) then
         return rec(skipped := true, detected_nontrivial := false,
@@ -339,19 +377,36 @@ _K4B7_BranchDispatch := function(H, setup_H, v_H, branch_label)
                    class_idx := class_res.class_idx,
                    all_matches := class_res.all_matches);
     else
-        # EA branch. |H_EA| = 256 = 2^8 at m=7. The closed-form
-        # ComputeAbelianModularDataClosedForm materialises a 65536 x
-        # 65536 cyclotomic S matrix (4.3e9 entries — infeasible). Use
-        # the cocycle-level q_omega + b_omega path ClassifyAbelianBranchFast
-        # (PR #437): O(|H|^2) cocycle calls = 65536 at |H| = 256.
-        # Mathematically equivalent for triviality detection by
-        # H^3(H abelian; U(1)) ≅ {quadratic forms H -> Q/Z}.
-        class_res := ClassifyAbelianBranchFast(H, omega_cocycle, expon);
+        # EA branch (PR #490): production modular-data classifier path.
+        # `ComputeAbelianModularDataFactored(H, ω, expon)` materialises
+        # the |H|-sized factor tables (chi_at, T_vec, b_omega) in
+        # O(|H|^2) memory plus an O(1) S_at(i, j) accessor. At
+        # H = (Z/2)^8 the full S matrix is 65536 x 65536 (~4.3e9
+        # entries) — infeasible to materialise; the factored variant
+        # is the only viable representation.
+        #
+        # `ClassifyEAFromModularData(H, mdf, mdf.T_vec)` then dispatches
+        # to the `qb_extraction` method (PR #490): extract q_ω from
+        # T_vec (one entry per a in H, total O(|H|) reads) and b_ω
+        # from O(|H|^2) S_at queries, test `(q, b) ≡ (0, 0) mod 2N`.
+        # By DGNO 2010 / Naidu-Nikshych 2008 this is the triviality
+        # test of [ω] in H^3(H; U(1)) for abelian H.
+        #
+        # Architecture: modular data in, triviality verdict out (the
+        # K-4b user directive 2026-06-07: "K-4b should test modular
+        # data and not cocycles"). The pre-PR-490 version of this
+        # sweep used `ClassifyAbelianBranchFast(H, omega_cocycle,
+        # expon)` directly — that's the cocycle-level fast path
+        # (`q_ω(a) = ω(a,a,a) mod N`); it's NOT modular-data-driven.
+        mdf := ComputeAbelianModularDataFactored(H, omega_cocycle, expon);
+        ea_class := ClassifyEAFromModularData(H, mdf, mdf.T_vec);
         return rec(skipped := false,
-                   detected_nontrivial := (class_res.is_coboundary = false),
+                   detected_nontrivial := (ea_class.is_trivial = false),
                    branch_label := branch_label,
-                   is_q_trivial := class_res.is_q_trivial,
-                   is_b_trivial := class_res.is_b_trivial);
+                   is_trivial := ea_class.is_trivial,
+                   method := ea_class.method,
+                   is_q_trivial := ea_class.is_q_trivial,
+                   is_b_trivial := ea_class.is_b_trivial);
     fi;
 end;;
 
