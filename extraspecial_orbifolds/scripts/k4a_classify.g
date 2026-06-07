@@ -933,7 +933,7 @@ K4aClassify := function(arg)
           restricted_Q8, E_class, D8_class, Q8_class, trivial, verdict,
           spectral_data, sparse_data, t_branch_0, t_E_branch,
           t_D8_branch, t_Q8_branch, t_total, t_spectral, fld,
-          t_dvan, wall_dvan, is_trivial;
+          t_dvan, wall_dvan, is_trivial, modular_ct_untwisted;
 
     # ---- Argument validation -----------------------------------------
     if Length(arg) < 1 then
@@ -1361,7 +1361,28 @@ K4aClassify := function(arg)
     t_branch_0 := Runtime();
     d8_rec := D8Section_E_plus(m);
     Print("  |D_8| = ", Order(d8_rec.subgroup), " (expected 8)\n");
-    if m >= 3 then
+    # Issue #449 skip-restriction for D_8/Q_8 (extending PR #483 to the
+    # non-abelian branches). At default opts (lattice_source = false
+    # AND omega = 0), the spectral data restricted to H structurally
+    # equals the untwisted H modular data (the T4a downscope ε = 1
+    # plus ω = 0 implies the per-H trace functional is just the
+    # untwisted character). So we can compute untwisted modular data
+    # for H directly (small group, |H| = 8) and pass it as a
+    # `modular_ct_override` on a minimal restricted stub, skipping the
+    # expensive TranslateSpectralDataToEPlus + RestrictTraceOnW...
+    # call chain (which at m=7 cost ~265 s for D_8 + ~268 s for Q_8).
+    if m >= 3
+       and not opts.lattice_source
+       and _K4A_OmegaIsZero(opts.omega_vec) then
+        # Default-opts fast path: |H| = 8 modular data is small.
+        modular_ct_untwisted := ComputeUntwistedModularData(d8_rec.subgroup);
+        restricted_D8 := rec(
+            modular_ct_override := rec(
+                S := modular_ct_untwisted.S,
+                T := DiagonalMat(modular_ct_untwisted.T)
+            )
+        );
+    elif m >= 3 then
         data_D8 := TranslateSpectralDataToEPlus(sparse_data, d8_rec.parent);
         restricted_D8 := RestrictTraceOnWToSubgroupHonourParent(
             data_D8, d8_rec.subgroup);
@@ -1381,7 +1402,18 @@ K4aClassify := function(arg)
     t_branch_0 := Runtime();
     q8_rec := Q8Section_E_plus(m);
     Print("  |Q_8| = ", Order(q8_rec.subgroup), " (expected 8)\n");
-    if m >= 3 then
+    if m >= 3
+       and not opts.lattice_source
+       and _K4A_OmegaIsZero(opts.omega_vec) then
+        # Same skip-restriction fast path as D_8.
+        modular_ct_untwisted := ComputeUntwistedModularData(q8_rec.subgroup);
+        restricted_Q8 := rec(
+            modular_ct_override := rec(
+                S := modular_ct_untwisted.S,
+                T := DiagonalMat(modular_ct_untwisted.T)
+            )
+        );
+    elif m >= 3 then
         data_Q8 := TranslateSpectralDataToEPlus(sparse_data, q8_rec.parent);
         restricted_Q8 := RestrictTraceOnWToSubgroupHonourParent(
             data_Q8, q8_rec.subgroup);
