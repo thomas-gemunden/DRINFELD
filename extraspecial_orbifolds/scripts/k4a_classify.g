@@ -345,15 +345,25 @@ end;;
 _K4A_GetDVANEAFamily := function(m)
     local key, loaded;
     key := String(m);
-    if IsBound(_K4A_DVAN_EA_FAMILIES.(key)) then
-        return _K4A_DVAN_EA_FAMILIES.(key);
-    fi;
-    # No hardcoded index family for this m — try the loader. The loader
-    # returns a list of subgroups (not indices). `_K4A_ClassifyEBranchMulti`
-    # dispatches on the input shape (integer indices vs subgroups).
+    # Issue #449 unified dispatch: PREFER the persisted on-disk family
+    # (LoadDVANEAFamily returns SUBGROUP objects) over the legacy
+    # hardcoded integer indices. The persisted family lives against
+    # `FamilyPcgs(ExtraspecialGroup(2^(2m+1), "+"))` and produces
+    # PC-group subgroups — matching the m=7 codepath. With the
+    # m∈{2,3,5} persistence (PR landing this) the loader returns
+    # non-fail for every supported m, eliminating the matrix-rep /
+    # PC-rep dispatch branch.
     loaded := LoadDVANEAFamily(m);
     if loaded <> fail then
         return loaded;
+    fi;
+    # Loader fallback: legacy hardcoded indices (only used if the on-disk
+    # file is missing or corrupted). Returned shape: list of integer
+    # indices into `BuildRestrictionMatrices(m, "hap").H_EA_list`.
+    # `_K4A_ClassifySpectralEBranchMulti` dispatches on the input shape
+    # (integers vs subgroups) for backward compat.
+    if IsBound(_K4A_DVAN_EA_FAMILIES.(key)) then
+        return _K4A_DVAN_EA_FAMILIES.(key);
     fi;
     return fail;
 end;;
@@ -1112,19 +1122,22 @@ K4aClassify := function(arg)
     G_em := EmGroup(m);
 
     # ---- spectral_data: choose source per m -------------------------
-    # m in {2, 3}: Keller alpha = 0 verified, untwisted_baseline is
-    #   observationally identical to the KRR spectral characters; use
-    #   the cheap path for speed.
-    # m = 5: K-4b production target, Keller alpha unverified. Compute
-    #   the sparse spectral data via `BuildKRRSpectralCharactersSparse`
-    #   to genuinely exercise the KRR trace machinery and record the
-    #   actual character multiplicities for downstream documentation.
-    #   The per-branch CT modular data still uses H's own untwisted
-    #   baseline (per T4a's epsilon = 1 downscope, and because the
-    #   sparse builder operates on the `EmUnimodGroup(m)` family which
-    #   does not match the `EPlusGroup(m)` family carried by the
-    #   detecting-subgroup constructors).
-    if m >= 5 then
+    # Unified m-independent dispatch (PR #449/#481): at m >= 3 we always
+    # compute the sparse KRR spectral data so the codepath is identical
+    # across m. This surfaces any path-specific bugs (matrix vs PC reps,
+    # closed-form vs eager CT, etc.) at the smallest m where they're
+    # cheap to debug, rather than only at the m=7 production scale.
+    #
+    # m = 2: BuildKRRSpectralCharactersSparse(2) is blocked by a known
+    #   SymplecticBasisF2 degeneracy in the closed-form irrep optim
+    #   (form becomes degenerate when k = 2). Fall back to the
+    #   untwisted_baseline path — Keller alpha = 0 is verified at m = 2,
+    #   so the per-branch CT modular data is observationally identical
+    #   to the sparse-spectral path.
+    # m >= 3: sparse KRR spectral data via
+    #   `BuildKRRSpectralCharactersSparse(m)`. Branches run through the
+    #   spectral-multi-EA path with `_K4A_ClassifySpectralEBranchMulti`.
+    if m >= 3 then
         # Load sparse builder and its transitive deps. The sparse file
         # itself does not contain loader logic; we load the chain
         # explicitly here. Issue #378 (PR #418) lifted the m=5 cap to
@@ -1251,14 +1264,14 @@ K4aClassify := function(arg)
     #     data per EA via direct ComputeModularData).
     # Fall back to single-EA only when neither multi-EA path is feasible
     # (m < 5 default-opts, or omega != 0 with no D-VAN family loaded).
-    if m >= 5 and _K4A_GetDVANEAFamily(m) <> fail
+    if m >= 3 and _K4A_GetDVANEAFamily(m) <> fail
        and _K4A_OmegaIsZero(opts.omega_vec) then
-        # Default-opts spectral path at m >= 5 with D-VAN family available.
+        # Unified m >= 3 default-opts spectral multi-EA path (PR #481).
         # The sparse spectral data is already built at this point.
         if opts.verbose then
             Print("  [E branch] routing to spectral multi-EA classifier ",
-                  "over D-VAN minimum family at m = ", m,
-                  " (issue #449).\n");
+                  "over D-VAN family at m = ", m,
+                  " (issue #449 unified).\n");
         fi;
         E_class := _K4A_ClassifySpectralEBranchMulti(
             opts, m, sparse_data, _K4A_GetDVANEAFamily(m));
@@ -1294,22 +1307,20 @@ K4aClassify := function(arg)
                   "      in k4a_classify.g.\n",
                   "  ============================================================\n");
         fi;
-        # Issue #449: similarly warn for the default-opts spectral path at
-        # m >= 5 when the D-VAN family is unavailable. This is the
-        # mathematically-suspect case the multi-EA reroute above guards.
-        if m >= 5
+        # Issue #449 unified: warn at m >= 3 when D-VAN family unavailable.
+        if m >= 3
            and _K4A_OmegaIsZero(opts.omega_vec)
            and _K4A_GetDVANEAFamily(m) = fail then
             Print("\n",
                   "  ============================================================\n",
-                  "  WARNING: D-VAN minimum detecting family unavailable at m = ", m, ".\n",
+                  "  WARNING: D-VAN detecting family unavailable at m = ", m, ".\n",
                   "    _K4A_GetDVANEAFamily(", m, ") returned fail.\n",
-                  "    Falling back to single-EA spectral E-branch.\n",
+                  "    Falling back to single-EA spectral/baseline E-branch.\n",
                   "    Single-EA restriction is NOT injective at m >= 3.\n",
                   "    A FALSE-NEGATIVE 'trivial' verdict is POSSIBLE.\n",
                   "  ============================================================\n");
         fi;
-        if m >= 5 then
+        if m >= 3 then
             data_E := TranslateSpectralDataToEPlus(sparse_data, ea_rec.parent);
             restricted_E := RestrictTraceOnWToSubgroupHonourParent(
                 data_E, ea_rec.subgroup);
@@ -1326,7 +1337,7 @@ K4aClassify := function(arg)
            and _K4A_GetDVANEAFamily(m) = fail then
             E_class.dvan_family_missing := true;
         fi;
-        if m >= 5
+        if m >= 3
            and _K4A_OmegaIsZero(opts.omega_vec)
            and _K4A_GetDVANEAFamily(m) = fail then
             E_class.dvan_family_missing := true;
@@ -1341,7 +1352,7 @@ K4aClassify := function(arg)
     t_branch_0 := Runtime();
     d8_rec := D8Section_E_plus(m);
     Print("  |D_8| = ", Order(d8_rec.subgroup), " (expected 8)\n");
-    if m >= 5 then
+    if m >= 3 then
         data_D8 := TranslateSpectralDataToEPlus(sparse_data, d8_rec.parent);
         restricted_D8 := RestrictTraceOnWToSubgroupHonourParent(
             data_D8, d8_rec.subgroup);
@@ -1361,7 +1372,7 @@ K4aClassify := function(arg)
     t_branch_0 := Runtime();
     q8_rec := Q8Section_E_plus(m);
     Print("  |Q_8| = ", Order(q8_rec.subgroup), " (expected 8)\n");
-    if m >= 5 then
+    if m >= 3 then
         data_Q8 := TranslateSpectralDataToEPlus(sparse_data, q8_rec.parent);
         restricted_Q8 := RestrictTraceOnWToSubgroupHonourParent(
             data_Q8, q8_rec.subgroup);
