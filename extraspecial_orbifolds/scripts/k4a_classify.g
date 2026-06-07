@@ -567,30 +567,16 @@ _K4A_ClassifySpectralEBranchMulti := function(opts, m, sparse_data, ea_family)
         Print("  [_K4A_ClassifySpectralEBranchMulti] EA ", ea_idx,
               "/", Length(ea_family), " (idx ", ea_label,
               ", |EA| = ", Order(H_EA), ") starting ...\n");
-        # Issue #449 fast-path skip-restriction:
-        # `ClassifyAbelianBranchFast(H, omega_cocycle, modulus)` reads
-        # only the (H, omega_cocycle, modulus) triple — NOT the
-        # restricted spectral data. When the fast path is going to
-        # fire, we can skip `RestrictTraceOnWToSubgroupHonourParent`
-        # entirely (which at m=7 dominates the wall via
-        # `RestrictedIrrepDecomposition` → `ClassIndexInCentraliser`
-        # × 256 H-classes × 8 EAs).
-        # At default opts the cocycle is implicit-zero; surface stub.
-        if IsBoundGlobal("_K4A_USE_FAST_ABELIAN_BRANCH")
-           and ValueGlobal("_K4A_USE_FAST_ABELIAN_BRANCH") = true then
-            restricted_E := rec(
-                H := H_EA,
-                omega_cocycle :=
-                    function(x, y, z) return 0; end,
-                modulus := 1
-            );
-        else
-            restricted_E := RestrictTraceOnWToSubgroupHonourParent(
-                data_E, H_EA);
-            restricted_E.omega_cocycle :=
-                function(x, y, z) return 0; end;
-            restricted_E.modulus := 1;
-        fi;
+        # PR #485: the actual spectral restriction is the only path
+        # that produces α-twisted character data on H. The restricted
+        # record IS the α-twisted modular data input for the abelian
+        # branch classifier — there are no shortcuts here. Prior PRs
+        # (#475, #483) injected a zero-cocycle stub that caused
+        # `ClassifyAbelianBranchFast` to report `is_coboundary = true`
+        # tautologically; that was a downscope of K-4b's claim from
+        # "α is a coboundary" to "0 is a coboundary". Removed.
+        restricted_E := RestrictTraceOnWToSubgroupHonourParent(
+            data_E, H_EA);
         E_class_i := _K4A_ClassifyAbelianBranch(restricted_E, H_EA);
         Add(per_ea, rec(
             ea_idx        := ea_label,
@@ -933,7 +919,7 @@ K4aClassify := function(arg)
           restricted_Q8, E_class, D8_class, Q8_class, trivial, verdict,
           spectral_data, sparse_data, t_branch_0, t_E_branch,
           t_D8_branch, t_Q8_branch, t_total, t_spectral, fld,
-          t_dvan, wall_dvan, is_trivial, modular_ct_untwisted;
+          t_dvan, wall_dvan, is_trivial;
 
     # ---- Argument validation -----------------------------------------
     if Length(arg) < 1 then
@@ -1361,28 +1347,13 @@ K4aClassify := function(arg)
     t_branch_0 := Runtime();
     d8_rec := D8Section_E_plus(m);
     Print("  |D_8| = ", Order(d8_rec.subgroup), " (expected 8)\n");
-    # Issue #449 skip-restriction for D_8/Q_8 (extending PR #483 to the
-    # non-abelian branches). At default opts (lattice_source = false
-    # AND omega = 0), the spectral data restricted to H structurally
-    # equals the untwisted H modular data (the T4a downscope ε = 1
-    # plus ω = 0 implies the per-H trace functional is just the
-    # untwisted character). So we can compute untwisted modular data
-    # for H directly (small group, |H| = 8) and pass it as a
-    # `modular_ct_override` on a minimal restricted stub, skipping the
-    # expensive TranslateSpectralDataToEPlus + RestrictTraceOnW...
-    # call chain (which at m=7 cost ~265 s for D_8 + ~268 s for Q_8).
-    if m >= 3
-       and not opts.lattice_source
-       and _K4A_OmegaIsZero(opts.omega_vec) then
-        # Default-opts fast path: |H| = 8 modular data is small.
-        modular_ct_untwisted := ComputeUntwistedModularData(d8_rec.subgroup);
-        restricted_D8 := rec(
-            modular_ct_override := rec(
-                S := modular_ct_untwisted.S,
-                T := DiagonalMat(modular_ct_untwisted.T)
-            )
-        );
-    elif m >= 3 then
+    # PR #485: the spectral restriction is the only path that yields
+    # α-twisted character data on D_8. Prior PR #484 substituted the
+    # untwisted D_8 modular data here at default opts, which made
+    # `ClassifyOnD8` compare untwisted-against-untwisted — a tautology
+    # that verified "0 is a coboundary", not "KRR α is a coboundary".
+    # Removed.
+    if m >= 3 then
         data_D8 := TranslateSpectralDataToEPlus(sparse_data, d8_rec.parent);
         restricted_D8 := RestrictTraceOnWToSubgroupHonourParent(
             data_D8, d8_rec.subgroup);
@@ -1402,18 +1373,11 @@ K4aClassify := function(arg)
     t_branch_0 := Runtime();
     q8_rec := Q8Section_E_plus(m);
     Print("  |Q_8| = ", Order(q8_rec.subgroup), " (expected 8)\n");
-    if m >= 3
-       and not opts.lattice_source
-       and _K4A_OmegaIsZero(opts.omega_vec) then
-        # Same skip-restriction fast path as D_8.
-        modular_ct_untwisted := ComputeUntwistedModularData(q8_rec.subgroup);
-        restricted_Q8 := rec(
-            modular_ct_override := rec(
-                S := modular_ct_untwisted.S,
-                T := DiagonalMat(modular_ct_untwisted.T)
-            )
-        );
-    elif m >= 3 then
+    # PR #485: the spectral restriction is the only path that yields
+    # α-twisted character data on Q_8. Same removal as D_8 above —
+    # the untwisted-against-untwisted shortcut from PR #484 made the
+    # K-4b verdict mathematically vacuous.
+    if m >= 3 then
         data_Q8 := TranslateSpectralDataToEPlus(sparse_data, q8_rec.parent);
         restricted_Q8 := RestrictTraceOnWToSubgroupHonourParent(
             data_Q8, q8_rec.subgroup);
