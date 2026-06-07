@@ -567,21 +567,30 @@ _K4A_ClassifySpectralEBranchMulti := function(opts, m, sparse_data, ea_family)
         Print("  [_K4A_ClassifySpectralEBranchMulti] EA ", ea_idx,
               "/", Length(ea_family), " (idx ", ea_label,
               ", |EA| = ", Order(H_EA), ") starting ...\n");
-        restricted_E := RestrictTraceOnWToSubgroupHonourParent(
-            data_E, H_EA);
-        # Issue #449 fast-path stub: surface a zero cocycle + modulus 1
-        # so _K4A_ClassifyAbelianBranch's fast path (gated on
-        # `_K4A_USE_FAST_ABELIAN_BRANCH`) can engage and skip the
-        # ~6 min ComputeCTModularData + JointPermutationMatcher per EA.
-        # At default opts (no explicit omega_vec), the H-side trace
-        # functional IS the H-untwisted baseline (the T4a downscope
-        # ε = 1), so the cocycle is implicitly 0 and is_coboundary = true
-        # trivially. The fast q_omega + b_omega path confirms this in
-        # O(|H|^2) instead of O(|H|^4); at m=7 (|H|=256) this is
-        # essential for tractability.
-        restricted_E.omega_cocycle :=
-            function(x, y, z) return 0; end;
-        restricted_E.modulus := 1;
+        # Issue #449 fast-path skip-restriction:
+        # `ClassifyAbelianBranchFast(H, omega_cocycle, modulus)` reads
+        # only the (H, omega_cocycle, modulus) triple — NOT the
+        # restricted spectral data. When the fast path is going to
+        # fire, we can skip `RestrictTraceOnWToSubgroupHonourParent`
+        # entirely (which at m=7 dominates the wall via
+        # `RestrictedIrrepDecomposition` → `ClassIndexInCentraliser`
+        # × 256 H-classes × 8 EAs).
+        # At default opts the cocycle is implicit-zero; surface stub.
+        if IsBoundGlobal("_K4A_USE_FAST_ABELIAN_BRANCH")
+           and ValueGlobal("_K4A_USE_FAST_ABELIAN_BRANCH") = true then
+            restricted_E := rec(
+                H := H_EA,
+                omega_cocycle :=
+                    function(x, y, z) return 0; end,
+                modulus := 1
+            );
+        else
+            restricted_E := RestrictTraceOnWToSubgroupHonourParent(
+                data_E, H_EA);
+            restricted_E.omega_cocycle :=
+                function(x, y, z) return 0; end;
+            restricted_E.modulus := 1;
+        fi;
         E_class_i := _K4A_ClassifyAbelianBranch(restricted_E, H_EA);
         Add(per_ea, rec(
             ea_idx        := ea_label,
