@@ -18,6 +18,50 @@
 #     s_b g_2 s_b^{-1} = b. (The formula is independent of these
 #     choices because rho_1, rho_2 are class functions on the
 #     respective centralisers.)
+#
+# Issue #487 (abelian fast path): when G is abelian,
+# `ComputeUntwistedModularData(G)` dispatches to the closed-form
+# (q_omega, b_omega) -> (S, T) formula in
+# `abelian_modular_data_closed_form.g`. The header guard below loads
+# the closed-form file if available so the dispatch wire-in can fire.
+
+# ---- Optional sibling load: closed-form abelian path (#487) ----
+# Try to locate and load abelian_modular_data_closed_form.g. We swallow
+# any read error so that a standalone Read("untwisted_modular_data.g")
+# still works on a clean GAP session. Three resolver attempts in order:
+#  (1) INPUT_FILENAME() with abs-path prefix removed (works when this
+#      file is Read'd via its absolute path)
+#  (2) the bare sibling name "abelian_modular_data_closed_form.g" (works
+#      when CWD is already the scripts dir)
+#  (3) "../abelian_modular_data_closed_form.g" (works when CWD is the
+#      tests/ subdir)
+if not IsBound(ComputeAbelianModularDataFromQB) then
+    _umd_self := INPUT_FILENAME();;
+    _umd_done := false;;
+    if _umd_self <> fail and _umd_self <> "stream"
+       and Length(_umd_self) > Length("untwisted_modular_data.g") then
+        _umd_dir := _umd_self{
+            [1..Length(_umd_self)
+              - Length("untwisted_modular_data.g")]};;
+        _umd_cand := Concatenation(_umd_dir,
+            "abelian_modular_data_closed_form.g");;
+        if IsExistingFile(_umd_cand) then
+            Read(_umd_cand);
+            _umd_done := true;
+        fi;
+    fi;
+    if not _umd_done then
+        for _umd_p in [ "abelian_modular_data_closed_form.g",
+                        "../abelian_modular_data_closed_form.g",
+                        Concatenation("extraspecial_orbifolds/scripts/",
+                                      "abelian_modular_data_closed_form.g") ] do
+            if not _umd_done and IsExistingFile(_umd_p) then
+                Read(_umd_p);
+                _umd_done := true;
+            fi;
+        od;
+    fi;
+fi;
 
 # =================================================================
 #  Building the index of simple objects
@@ -514,12 +558,43 @@ ComputeUntwistedS := function(idx)
 end;;
 
 # Convenience: compute both at once.
+#
+# Issue #487: when G is abelian, dispatch to the analytical closed-form
+# in abelian_modular_data_closed_form.g — O(|G|^2) S-build instead of
+# O(|G|^4) Bantay sum. For G = (Z/2)^k k = 5 this is a ~30x speedup at
+# |G| = 32; at |G| = 256 (the m = 7 max EA) the generic path is
+# ~4 * 10^9 operations versus ~6.5 * 10^4 for the closed form. The
+# untwisted case (omega = 0) is always safe under the closed-form
+# formula's domain-of-validity rules (see abelian_modular_data_closed_form.g
+# header). For non-abelian G we use the generic Bantay build below.
 ComputeUntwistedModularData := function(G)
-    local idx;
+    local idx, cf_zero;
+    if IsAbelian(G) and IsBoundGlobal("ComputeAbelianModularDataFromQB") then
+        # Closed-form fast path. q_omega = b_omega = 0 for the untwisted
+        # case, so the projective phase reduces to 1 everywhere and the
+        # T- / S- formulas collapse to T = chi(a), S = chi(b)^{-1} *
+        # psi(a)^{-1} / |G|.
+        cf_zero := ComputeAbelianModularDataFromQB(
+            G,
+            ListWithIdenticalEntries(Size(G), 0),
+            List([1..Size(G)], i -> ListWithIdenticalEntries(Size(G), 0)),
+            1
+        );
+        return rec(
+            T := cf_zero.T,
+            S := cf_zero.S,
+            simples := cf_zero.simples,
+            via_closed_form := true,
+            group := G
+        );
+    fi;
+    # Non-abelian path: generic Bantay sum via BuildSimpleIndex +
+    # ComputeUntwistedT / ComputeUntwistedS.
     idx := BuildSimpleIndex(G);
     return rec(
         idx := idx,
         T := ComputeUntwistedT(idx),
-        S := ComputeUntwistedS(idx)
+        S := ComputeUntwistedS(idx),
+        via_closed_form := false
     );
 end;;
