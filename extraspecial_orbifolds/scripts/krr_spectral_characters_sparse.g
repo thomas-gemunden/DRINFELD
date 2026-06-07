@@ -1135,8 +1135,24 @@ CharacterMultiplicities := function(idx, class_idx, cls_data, traces)
     mults := [];
     # Convert each cls_data.reps[j] to the corresponding character-table
     # class index (idx.cc_centraliser[class_idx] ordering).
-    cc_idx := List(cls_data.reps,
-                   h -> ClassIndexInCentraliser(idx, class_idx, h));
+    #
+    # Issue #449 A1'''' completion: when idx is closed-form AND the
+    # centraliser at this class is the ambient group G itself (the
+    # central class C = G), `cls_data := CentraliserClassData(idx, i)`
+    # returns idx.classes (PR #450 memoised ConjugacyClasses(G) →
+    # idx.classes), so `cls_data.reps = idx.reps` and cc_idx[j] = j is
+    # the identity permutation. Skip the 16385-class linear-scan
+    # `ClassIndexInCentraliser` (16385² ≈ 268M IN-tests at m=7,
+    # ~30-50 min wall). Legacy non-closed-form / non-central paths
+    # fall through to the scan.
+    if IsBound(idx.is_closed_form) and idx.is_closed_form = true
+       and IsBound(idx.centralisers[class_idx])
+       and idx.centralisers[class_idx] = idx.group then
+        cc_idx := [1..cls_data.num];
+    else
+        cc_idx := List(cls_data.reps,
+                       h -> ClassIndexInCentraliser(idx, class_idx, h));
+    fi;
     for k in [1..num_irreps] do
         chi := irreps[k];
         total := 0;
