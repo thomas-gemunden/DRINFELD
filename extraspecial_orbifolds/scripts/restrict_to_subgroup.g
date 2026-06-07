@@ -505,8 +505,19 @@ _RTS_FindGClassOfGeneric := function(idx_G, a_H, G)
 end;;
 
 # ----- Dispatcher entry point -------------------------------------------
+# Issue #449 routing follow-up: fire the closed-form path whenever
+# `idx_G.class_types` is bound — that's the only structural input the
+# closed-form lookup actually needs. The original `is_closed_form` gate
+# was too narrow: PR #475's translated EP-side `idx_EP` carries
+# `class_types` (copied from `idx_EU`) but deliberately does NOT set
+# `is_closed_form := true` (because the closed-form irrep evaluator
+# `EPlusBuildAllCharacterRows` requires MATRIX reps, while EP-side
+# reps are PC-group elements). The class-lookup machinery here works
+# on any idx with `class_types` regardless of whether reps are matrices
+# or PC elements.
 _RTS_FindGClassOf := function(idx_G, a_H, G)
-    if IsBound(idx_G.is_closed_form) and idx_G.is_closed_form = true then
+    if (IsBound(idx_G.is_closed_form) and idx_G.is_closed_form = true)
+       or IsBound(idx_G.class_types) then
         return _RTS_FindGClassOfClosedForm(idx_G, a_H, G);
     fi;
     return _RTS_FindGClassOfGeneric(idx_G, a_H, G);
