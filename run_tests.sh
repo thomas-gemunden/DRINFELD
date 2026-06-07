@@ -42,6 +42,7 @@ echo
 SKIP_SLOW=(
     "test_quillen_vs_hap.g"
     "test_krr_spectral_characters_sparse.g"
+    "test_k4b_e2e_sweep_m7.g"
 )
 
 is_slow() {
