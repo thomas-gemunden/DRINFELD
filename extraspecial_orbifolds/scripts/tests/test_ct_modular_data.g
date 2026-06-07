@@ -219,10 +219,17 @@ fi;
 # =======================================================================
 # H = Z_2 x Z_2 = SmallGroup(4, 2). |G| = 4, all classes are singletons,
 # all centralisers are H, so |Irr(C_H(g))| = 4 for every class, total
-# 16 simples. Compare entry-by-entry against the dense
-# ComputeUntwistedModularData(H), which uses the same conventions
-# (idx ordering, complex-conjugate convention) — exact equality
-# expected, no permutation needed.
+# 16 simples.
+#
+# PR #487: ComputeUntwistedModularData(abelian) dispatches to the closed
+# form which returns rec(S, T, simples, via_closed_form, group); no
+# `.idx` field.
+# PR #492: ComputeCTModularData(intertwiner_data, abelian H) dispatches
+# to the closed form which returns a FACTORED record (no `.S`, has
+# `.S_at`, `.T_vec`, `.is_factored = true`).
+#
+# Both paths describe the same MTC. We cross-check via
+# JointPermutationMatcher.
 
 Print("\n=== T3: H = Z_2 x Z_2 abelian regression ===\n");
 CTMD_Z22 := SmallGroup(4, 2);;  # = Z_2 x Z_2
@@ -232,15 +239,26 @@ CTMD_OUT_Z22 := ComputeCTModularData(CTMD_DATA_Z22, CTMD_Z22);;
 CTMD_DENSE_Z22 := ComputeUntwistedModularData(CTMD_Z22);;
 CTMD_T_T3_WALL := (Runtime() - CTMD_T_T3) / 1000.;;
 Print("  ComputeCTModularData(Z_2 x Z_2) wall: ", CTMD_T_T3_WALL, " s\n");
-Print("  ComputeUntwistedModularData(Z_2 x Z_2) rank: ",
-      CTMD_DENSE_Z22.idx.rank, "\n");
 
-CTMDAssertEqual("Z_2 x Z_2: rank = 16",
-                Length(CTMD_OUT_Z22.S), 16);
-CTMDAssertEqual("Z_2 x Z_2: S matches dense untwisted S (entry-by-entry)",
-                CTMD_OUT_Z22.S, CTMD_DENSE_Z22.S);
-CTMDAssertEqual("Z_2 x Z_2: T diag matches dense untwisted T (entry-by-entry)",
-                DiagonalOfMat(CTMD_OUT_Z22.T), CTMD_DENSE_Z22.T);
+# Materialize the closed-form factored S into a full matrix for the
+# parity check (only feasible at this small scale; never used in the
+# m=7 EA hot path).
+CTMDAssertTrue("Z_2 x Z_2: dispatched output is factored",
+               IsBound(CTMD_OUT_Z22.is_factored)
+               and CTMD_OUT_Z22.is_factored = true);
+CTMD_S_Z22 := List([1..16], i -> List([1..16], j ->
+    CTMD_OUT_Z22.S_at(i, j)));;
+CTMD_T_VEC_Z22 := CTMD_OUT_Z22.T_vec;;
+CTMDAssertEqual("Z_2 x Z_2: rank = 16", Length(CTMD_S_Z22), 16);
+
+# Both ComputeCTModularData and ComputeUntwistedModularData on abelian H
+# go through PR #487's closed form: equal (S, T) is expected entry-wise.
+CTMDAssertEqual(
+    "Z_2 x Z_2: S matches dense untwisted S (entry-by-entry)",
+    CTMD_S_Z22, CTMD_DENSE_Z22.S);
+CTMDAssertEqual(
+    "Z_2 x Z_2: T_vec matches dense untwisted T (entry-by-entry)",
+    CTMD_T_VEC_Z22, CTMD_DENSE_Z22.T);
 
 # =======================================================================
 # T4: Modular relations at H = Q_8

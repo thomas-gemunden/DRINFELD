@@ -387,7 +387,8 @@ end;;
 # Returns: rec(is_abelian, is_coboundary, match, modular_ct,
 # modular_untwisted, wall_seconds).
 _K4A_ClassifyAbelianBranch := function(restricted, H)
-    local t0, modular_ct, ea_class, fast_res;
+    local t0, modular_ct, ea_class, fast_res,
+          ea_match, ea_modular_untwisted;
     # Issue #434: optional fast q_ω + b_ω abelian-branch path. Opt-in
     # via `_K4A_USE_FAST_ABELIAN_BRANCH = true`. Requires the restricted
     # rec to carry `omega_cocycle` + `modulus`; `_K4A_RestrictForBranch`
@@ -434,14 +435,45 @@ _K4A_ClassifyAbelianBranch := function(restricted, H)
     # untwisted reference and runs `JointPermutationMatcher` internally.
     # `ClassifyEAFromModularData` returns the untwisted MD via
     # `.modular_untwisted` so we surface it on our diagnostic record too.
-    ea_class := ClassifyEAFromModularData(H, modular_ct.S, modular_ct.T);
+    #
+    # PR #492: when H is abelian, ComputeCTModularData returns a factored
+    # modular-data record (rec(is_factored := true, S_at := function,
+    # T_vec := ..., ...)) instead of the legacy rec(S := matrix, T :=
+    # DiagonalMat). ClassifyEAFromModularData accepts both shapes; we
+    # pass the whole record as the second argument in the factored case
+    # so it engages the qb_extraction path (PR #490, O(|H|^2) feasible
+    # at H = (Z/2)^8 where the legacy joint_permutation path is not).
+    if IsBound(modular_ct.is_factored)
+       and modular_ct.is_factored = true then
+        ea_class := ClassifyEAFromModularData(H, modular_ct,
+                                              modular_ct.T_vec);
+    else
+        ea_class := ClassifyEAFromModularData(H, modular_ct.S,
+                                              modular_ct.T);
+    fi;
+    # PR #492: the qb_extraction path (factored modular_ct) returns a
+    # rec without `.match` or `.modular_untwisted`; the joint_permutation
+    # path (legacy full-(S, T)) returns both. Surface either via local
+    # field-presence guards so downstream consumers don't read an
+    # unbound field.
+    if IsBound(ea_class.match) then
+        ea_match := ea_class.match;
+    else
+        ea_match := fail;
+    fi;
+    if IsBound(ea_class.modular_untwisted) then
+        ea_modular_untwisted := ea_class.modular_untwisted;
+    else
+        ea_modular_untwisted := fail;
+    fi;
     return rec(
         is_abelian          := true,
         is_coboundary       := ea_class.is_trivial,
-        match               := ea_class.match,
+        match               := ea_match,
         modular_ct          := modular_ct,
-        modular_untwisted   := ea_class.modular_untwisted,
+        modular_untwisted   := ea_modular_untwisted,
         ea_class_idx        := ea_class.class_idx,
+        ea_method           := ea_class.method,
         wall_seconds        := _K4A_SecsSince(t0)
     );
 end;;
@@ -610,12 +642,26 @@ _K4A_ClassifySpectralEBranchMulti := function(opts, m, sparse_data, ea_family)
         # all-EA modular_ct ranks are identical since all EAs are
         # (Z/2)^(m+1)). On the fast path, modular_ct is not built, so
         # we use the formula |H|^2 = (2^(m+1))^2 for the rank.
+        #
+        # PR #492: when H is abelian, modular_ct is a factored record
+        # (no `.S`; rank = |H|^2 = `.n^2`). Detect via the is_factored
+        # marker; otherwise fall back to the legacy `Length(.S)` read.
         if IsBound(E_class_i.modular_ct) then
-            last_rank_ct := Length(E_class_i.modular_ct.S);
+            if IsBound(E_class_i.modular_ct.is_factored)
+               and E_class_i.modular_ct.is_factored = true then
+                last_rank_ct := E_class_i.modular_ct.n ^ 2;
+            else
+                last_rank_ct := Length(E_class_i.modular_ct.S);
+            fi;
         else
             last_rank_ct := Order(H_EA) ^ 2;
         fi;
-        if IsBound(E_class_i.modular_untwisted) then
+        if IsBound(E_class_i.modular_untwisted)
+           and IsRecord(E_class_i.modular_untwisted)
+           and IsBound(E_class_i.modular_untwisted.S) then
+            # modular_untwisted from ClassifyEAFromModularData's
+            # joint_permutation path; on the qb_extraction path
+            # (factored input) this field is `fail` or absent.
             last_rank_untw := Length(E_class_i.modular_untwisted.S);
         else
             last_rank_untw := Order(H_EA) ^ 2;
