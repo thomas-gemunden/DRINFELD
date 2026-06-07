@@ -49,6 +49,7 @@ FILES=(
     solver/mod2_solver.g
     transgression_kernel.g
     abelian_branch_fast.g
+    abelian_modular_data_closed_form.g
     joint_permutation_matcher.g
     untwisted_modular_data.g
     em_construction.g

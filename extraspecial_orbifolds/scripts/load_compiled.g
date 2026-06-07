@@ -28,6 +28,11 @@ end;;
 _LoadCompiledOrInterpreted("mod2_solver", "solver/mod2_solver.g");
 _LoadCompiledOrInterpreted("transgression_kernel", "transgression_kernel.g");
 _LoadCompiledOrInterpreted("abelian_branch_fast", "abelian_branch_fast.g");
+# Issue #487: load abelian_modular_data_closed_form before
+# untwisted_modular_data so the latter's IsAbelian-dispatch fast path
+# is bound before ComputeUntwistedModularData fires for an abelian G.
+_LoadCompiledOrInterpreted("abelian_modular_data_closed_form",
+                           "abelian_modular_data_closed_form.g");
 _LoadCompiledOrInterpreted("joint_permutation_matcher", "joint_permutation_matcher.g");
 _LoadCompiledOrInterpreted("untwisted_modular_data", "untwisted_modular_data.g");
 _LoadCompiledOrInterpreted("em_construction", "em_construction.g");
