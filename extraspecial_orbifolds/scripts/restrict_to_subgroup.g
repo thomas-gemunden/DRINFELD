@@ -726,7 +726,36 @@ RestrictedIrrepDecomposition := function(idx_G, idx_H, k_G, k_H, conj)
     # so we amortise the conjugation + class-lookup work.
     chi_G_phi_values := [];
     class_size_h := [];
-    if abelian_fast then
+    # Issue #449 A1'''' completion (extension to RestrictedIrrepDecomposition):
+    # at m=7 the inner `ClassIndexInCentraliser(idx_G, k_G, phi_rep)` does
+    # a linear scan over `idx.cc_centraliser[k_G]` = `idx.classes`. For the
+    # central class (the typical k_G here), |classes| = 16385 → 16385
+    # `IN`-tests × 256 H-classes × 8 EAs = ~9h wall.
+    # Bypass: when `idx_G` has `class_types` bound (closed-form CC enum),
+    # use the O(1) dictionary lookup built by `_RTS_BuildClassLookup` via
+    # `_RTS_FindGClassOf`. The returned k_G is the same index as
+    # `ClassIndexInCentraliser` returns for the central class (since
+    # `idx.cc_centraliser[central] = idx.classes`).
+    if IsBound(idx_G.class_types) then
+        if abelian_fast then
+            for j in [1..n_classes_H] do
+                rep_h := Representative(cc_H[j]);
+                phi_rep := conj * rep_h * conj^-1;
+                cls_idx_G := _RTS_FindGClassOf(idx_G, phi_rep, idx_G.group).k_G;
+                Add(chi_G_phi_values, cls_idx_G);
+                Add(class_size_h, 1);
+            od;
+        else
+            for j in [1..n_classes_H] do
+                cls_H := cc_H[j];
+                rep_h := Representative(cls_H);
+                phi_rep := conj * rep_h * conj^-1;
+                cls_idx_G := _RTS_FindGClassOf(idx_G, phi_rep, idx_G.group).k_G;
+                Add(chi_G_phi_values, cls_idx_G);
+                Add(class_size_h, Size(cls_H));
+            od;
+        fi;
+    elif abelian_fast then
         # Abelian path: cc_H[j] is a singleton ConjugacyClass; we still
         # need `Representative(cc_H[j])` to get the matrix, but we can
         # skip the `Size(cls_H)` dispatch (always 1 for abelian).
