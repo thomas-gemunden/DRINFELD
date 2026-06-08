@@ -367,28 +367,37 @@ end;;
 # distinct classes, so sign is always +1 for centrals (since each
 # central class has only one element). Non-centrals have sign ±1.
 _RTS_BuildClassLookup := function(idx_G)
-    local d, k, rep, neg_rep, central_type, z, use_matrix_neg;
+    local d, k, rep, neg_rep, central_type, z, use_matrix_neg,
+          use_pc_extrep, key_fn, sample_key;
     if IsBound(idx_G._rts_class_lookup) then
         return idx_G._rts_class_lookup;
     fi;
-    # Use a dictionary keyed by the matrix/element object. `NewDictionary`
-    # with the first arg = a sample key works for any GAP element type.
-    d := NewDictionary(idx_G.reps[1], true);
-    # Determine how to compute the "negation" of a class rep:
-    # for matrix reps, neg(x) = -x (matrix negation); for PC-group
-    # reps (e.g. EP-side translated idx — issue #449), there is no
-    # additive inverse, so we use neg(x) = z * x where z is the
-    # central involution. In the closed-form CC enumeration the
-    # central class i = 2 always holds {z}, so we can read z from
-    # `idx_G.reps[2]` (= Representative(idx_G.classes[2])).
+    # For matrix reps, `NewDictionary(rep, true)` hashes via the flat
+    # element list and is fast. For PC-group element reps (e.g. EP-side
+    # translated idx), GAP has no efficient hash and falls back to O(n²)
+    # linear scans during insertion (~1B EqPlist comparisons at m=7 with
+    # |reps|=16385 + 16384 negations). PR #493 routes PC reps through
+    # `ExtRepOfObj` (a small integer list with stable canonicalization)
+    # so the dictionary backing uses GAP's standard int-list hash —
+    # ~30 sec build at m=7 vs 50+ min in the unhashed path.
     use_matrix_neg := IsMatrix(idx_G.reps[1]);
+    use_pc_extrep := (not use_matrix_neg)
+                     and IsPcGroup(idx_G.group);
     if not use_matrix_neg then
         z := idx_G.reps[2];
+    fi;
+    if use_pc_extrep then
+        key_fn := function(g) return ExtRepOfObj(g); end;
+        sample_key := ExtRepOfObj(idx_G.reps[1]);
+        d := NewDictionary(sample_key, true);
+    else
+        key_fn := function(g) return g; end;
+        d := NewDictionary(idx_G.reps[1], true);
     fi;
     for k in [1..Length(idx_G.reps)] do
         rep := idx_G.reps[k];
         # Insert the canonical rep with sign = +1.
-        AddDictionary(d, rep, rec(k_G := k, sign := 1));
+        AddDictionary(d, key_fn(rep), rec(k_G := k, sign := 1));
         # For non-central classes, also insert -rep (= z * rep) with
         # sign = -1. We can detect "non-central" by the closed-form type
         # marker, or simply check class size.
@@ -400,7 +409,7 @@ _RTS_BuildClassLookup := function(idx_G)
             else
                 neg_rep := z * rep;
             fi;
-            AddDictionary(d, neg_rep, rec(k_G := k, sign := -1));
+            AddDictionary(d, key_fn(neg_rep), rec(k_G := k, sign := -1));
         elif (not IsBound(idx_G.class_types))
              and IsBound(idx_G.class_sizes)
              and idx_G.class_sizes[k] = 2 then
@@ -409,11 +418,11 @@ _RTS_BuildClassLookup := function(idx_G)
             else
                 neg_rep := z * rep;
             fi;
-            AddDictionary(d, neg_rep, rec(k_G := k, sign := -1));
+            AddDictionary(d, key_fn(neg_rep), rec(k_G := k, sign := -1));
         fi;
     od;
-    idx_G._rts_class_lookup := d;
-    return d;
+    idx_G._rts_class_lookup := rec(dict := d, key_fn := key_fn);
+    return idx_G._rts_class_lookup;
 end;;
 
 # Cache of conjugators `g_k` per non-central class `k`, such that
@@ -474,9 +483,9 @@ _RTS_GetNegConjugator := function(idx_G, k, G)
 end;;
 
 _RTS_FindGClassOfClosedForm := function(idx_G, a_H, G)
-    local d, hit, k_G, conj;
-    d := _RTS_BuildClassLookup(idx_G);
-    hit := LookupDictionary(d, a_H);
+    local lk, hit, k_G, conj;
+    lk := _RTS_BuildClassLookup(idx_G);
+    hit := LookupDictionary(lk.dict, lk.key_fn(a_H));
     if hit = fail then
         Error("_RTS_FindGClassOfClosedForm: element ", a_H,
               " is not in idx_G's class lookup. Either a_H is not in ",
