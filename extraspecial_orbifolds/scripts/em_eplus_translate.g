@@ -549,20 +549,20 @@ TranslateSpectralDataToEPlus := function(arg)
         ep_rank := idx_EU.rank;
         ep_global_offset := idx_EU.global_offset;
         ep_global_to_local := idx_EU.global_to_local;
-        # Note: we do NOT set `is_closed_form := true` on idx_EP, even
-        # though the EU-side was closed-form. The reason: the closed-form
-        # irrep evaluator `EPlusBuildAllCharacterRows` requires class
-        # representatives to be MATRICES (it does `h mod 2` to extract
-        # symplectic bits), but our `ep_reps` are PC group elements (EP
-        # = `EPlusGroup(m)` = an `ExtraspecialGroup` PC realisation, not
-        # a matrix group). Setting `is_closed_form := true` would route
-        # `_EnsureClassData` at the central class through the matrix-only
-        # closed-form path and crash. Instead, we leave it as a plain
-        # lazy idx: the per-class CT is built generically via
-        # `CharacterTable(C)` on first access, which is acceptable for
-        # the central class (single CT build, dominated by other costs).
-        # The B2 win is in skipping `ConjugacyClasses(ep_group)`, which
-        # is independent of the per-class CT decision.
+        # PR #494: pre-populate idx_EP with the central-class character
+        # data from idx_EU. The character VALUES are cyclotomics (don't
+        # depend on whether reps are matrices vs PC elements), so we can
+        # copy idx_EU.irreps[i] directly. cc_centraliser[i] for the
+        # central class IS the class list itself (centraliser = G), so
+        # we point at idx_EP.classes (the PC-side class objects).
+        #
+        # Without this pre-population, `_EnsureClassData(idx_EP, central)`
+        # falls through to `CharacterTable(ep_group)` on the 32768-element
+        # PC realization at m=7 — which calls SingleCollectWord (PC
+        # element multiplication) millions of times via the
+        # Dixon-Schneider algorithm. Measured: ~hours per `RestrictTrace...`
+        # call at m=7. With this pre-population, the central class is a
+        # cached read.
         idx_EP := rec(
             group := ep_group,
             order := idx_EU.order,
@@ -581,6 +581,21 @@ TranslateSpectralDataToEPlus := function(arg)
             is_lazy := true,
             source := "translated-closed-form-eplus"
         );
+        # Copy materialized irrep data from idx_EU per class (psi is the
+        # identity on the class index, so idx_EU.irreps[i] = idx_EP irreps
+        # at class i). Cyclotomic values are independent of the rep
+        # representation. cc_centraliser at the central class = full
+        # class list (centraliser = G), point at idx_EP's own classes.
+        for i in [1..num_classes_eu] do
+            if idx_EU.irreps[i] <> fail then
+                idx_EP.irreps[i] := idx_EU.irreps[i];
+                idx_EP.irrep_dims[i] := idx_EU.irrep_dims[i];
+                # For the central class (centraliser = whole group),
+                # cc_centraliser is the class list.
+                idx_EP.cc_centraliser[i] := idx_EP.classes;
+                idx_EP.ct_centraliser[i] := "translated-from-eu-closed-form";
+            fi;
+        od;
         if IsBound(idx_EU.class_types) then
             idx_EP.class_types := ep_class_types;
         fi;
