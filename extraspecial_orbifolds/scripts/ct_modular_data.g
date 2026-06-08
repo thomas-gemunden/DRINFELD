@@ -91,6 +91,17 @@ if not IsBound(ProjectorFormula) then
           "Read \"krr_projector.g\" before this file.");
 fi;
 
+# PR #492: abelian-H closed-form dispatch reuses _AbelianCharacterTable
+# from abelian_modular_data_closed_form.g (which is auto-loaded by
+# untwisted_modular_data.g via its header guard — see the file header
+# of that sibling).
+if not IsBound(_AbelianCharacterTable) then
+    Error("ct_modular_data.g: _AbelianCharacterTable not bound; ",
+          "Read \"abelian_modular_data_closed_form.g\" before this ",
+          "file (or load \"untwisted_modular_data.g\" which auto-loads ",
+          "it).");
+fi;
+
 
 # ============================================================
 # Internal helper: batched per-(class, element) trace_on_W lookup.
@@ -322,11 +333,349 @@ end;;
 
 
 # ============================================================
+# Abelian-H closed-form specialisation (PR #492)
+# ============================================================
+#
+# When H is abelian, the (S, T) computed by the generic loop above
+# admits a closed-form representation in terms of a quadratic form
+# q_α : H → Z/(2N) and its polarisation b_α : H × H → Z/(2N):
+#
+#   T_{(a, χ)}        = χ(a) · E(2N)^{q_α(a)}
+#   S_{(a,χ),(b,ψ)}   = (1/|H|) · ψ(a)^{-1} · χ(b)^{-1} · E(2N)^{-b_α(a, b)}
+#
+# (See `abelian_modular_data_closed_form.g` for the math; the factored
+# variant produces a record with O(|H|^2) memory + O(1) per-entry S.)
+#
+# Under the K-4b CT pipeline gauge ε ≡ 1 with `trace_on_W` = ordinary
+# H-characters (the `EvalIrr` baseline produced by
+# `BuildIntertwinerDataUntwisted` / `RestrictTraceOnWToSubgroupHonourParent`),
+# the diagonal T-entry at the trivial character of H reduces to
+#
+#   T_{(a, χ_triv)} = trace_on_W(class_of(a), trivial_irrep_idx, a)
+#                     / trace_on_W(class_of(a), trivial_irrep_idx, e)
+#
+# from which q_α(a) is the discrete log to base E(2N). This single
+# closed-form `_CTModularDataAbelianClosedForm` handles both the ε ≡ 1
+# baseline (untwisted, q = b = 0) and any forward-compatible α-twisted
+# extension that uses the same gauge convention.
+#
+# Returns a factored modular-data record (PR #487 shape) when |H| is
+# large; the same record is consumed by `ClassifyEAFromModularData`
+# (PR #486 + #490) via its `qb_extraction` path. At small |H| (k ≤ 4
+# in (Z/2)^k) the record is still factored — the downstream consumer
+# handles both shapes uniformly.
+
+# Helper: find the index of the trivial irrep (all-1 character) in
+# idx.irreps[class_idx]. For abelian H, every centraliser is H, and
+# the trivial irrep is the row of `Irr(CharacterTable(H))` that is
+# identically 1. In GAP's standard ordering this is row 1 for
+# elementary-abelian groups; we scan robustly.
+_CTFindTrivialIrrepIdx := function(idx, class_idx)
+    local irreps, num_cc, k, k_idx, all_one;
+    _EnsureClassData(idx, class_idx);
+    irreps := idx.irreps[class_idx];
+    num_cc := Length(idx.cc_centraliser[class_idx]);
+    for k in [1..Length(irreps)] do
+        all_one := true;
+        for k_idx in [1..num_cc] do
+            if irreps[k][k_idx] <> 1 then
+                all_one := false;
+                break;
+            fi;
+        od;
+        if all_one then
+            return k;
+        fi;
+    od;
+    Error("_CTFindTrivialIrrepIdx: no all-1 row in idx.irreps[", class_idx,
+          "]; centraliser is not abelian as expected");
+end;;
+
+# Helper: determine the modulus N such that all T-values are powers
+# of E(2N). T-values are roots of unity; we take 2N = LCM of their
+# orders. If all T-values equal 1, return N = 1 (so 2N = 2; E(2)^0 = 1
+# is a valid representation).
+_CTDetermineModulusFromTValues := function(T_values)
+    local order_lcm, v, ord;
+    order_lcm := 1;
+    for v in T_values do
+        if v = 1 then
+            ord := 1;
+        elif v = -1 then
+            ord := 2;
+        else
+            ord := Order(v);
+        fi;
+        order_lcm := LcmInt(order_lcm, ord);
+    od;
+    # 2N must be a multiple of order_lcm. Use the smallest N >= 1 such
+    # that 2N is divisible by order_lcm. If order_lcm is odd, N = order_lcm
+    # gives 2N = 2*order_lcm, which works. If order_lcm is even, N = order_lcm/2
+    # gives 2N = order_lcm. We pick N = max(1, order_lcm / 2) when order_lcm
+    # is even, else N = order_lcm.
+    if order_lcm mod 2 = 0 then
+        return order_lcm / 2;
+    fi;
+    # Odd order_lcm: 2N = 2*order_lcm.
+    return order_lcm;
+end;;
+
+# Helper: compute the discrete log of x to base E(2N), returning k ∈
+# [0, 2N) such that x = E(2N)^k. Fails (returns `fail`) if no such k
+# exists.
+_CTDiscreteLogBaseE2N := function(x, two_N)
+    local k, z, pow;
+    z := E(two_N);
+    pow := 1;
+    for k in [0..two_N - 1] do
+        if pow = x then
+            return k;
+        fi;
+        pow := pow * z;
+    od;
+    return fail;
+end;;
+
+# Helper: build the (q, b) representation of the modular data from
+# the intertwiner_data record. Returns rec(q, b, modulus, elems) where:
+#   - elems = idx.reps  (the class-representative list of the cached
+#                        idx; for abelian H every class is a singleton
+#                        so this is the full element list of the idx's
+#                        group instance).
+#   - q[i_a] = q_α(elems[i_a]) mod 2*modulus
+#   - b[i_a][i_b] = q_α(elems[i_a]*elems[i_b]) - q_α(elems[i_a])
+#                   - q_α(elems[i_b]) mod 2*modulus
+#   - modulus = N (chosen minimally; 2N is the actual exponent for E(.))
+#
+# CRITICAL CONVENTION (PR #492):
+# We use `idx.reps` (the cached group instance's class reps) rather
+# than `AsList(H)`. In the K-4b spectral pipeline, `_RTS_GetBIDUCached(H)`
+# may return an intertwiner_data whose `idx.classes` lives in a CACHED
+# group instance that is isomorphic-but-not-equal to H (when two H_EA
+# subgroups share the same `IdGroup` key). Using `idx.reps` keeps the
+# q/b indexing consistent with the idx ordering and avoids cross-instance
+# element-equality bugs in dictionary lookup.
+#
+# For abelian H every class is a singleton, so `idx.reps[i]` is the i-th
+# element of the cached group instance, and the class index of
+# `idx.reps[i]` is exactly i.
+_CTExtractQBFromIntertwinerData := function(intertwiner_data, H)
+    local idx, elems, n, T_values, i_a, a, cls_idx,
+          triv_idx_cache, triv_idx, chi_e, chi_a, T_a, modulus, two_N,
+          q, b, i_b, ab, q_ab_idx, row, e_idx, one_idx_group;
+    idx := intertwiner_data.idx;
+    elems := idx.reps;
+    n := Length(elems);
+
+    # Sanity: |idx.reps| must match |H|. For abelian H every class is a
+    # singleton so this is automatic — but we guard against a caller
+    # accidentally passing the wrong intertwiner_data.
+    if n <> Size(H) then
+        Error("_CTExtractQBFromIntertwinerData: |idx.reps| = ", n,
+              " but |H| = ", Size(H),
+              " — intertwiner_data built for a different-order group?");
+    fi;
+
+    # Identity of the cached group instance (NOT One(H), which may live
+    # in a different instance). idx.reps[i] is a class representative
+    # in the cached idx.group instance; One(idx.reps[1]) gives the
+    # identity element in that instance. We pick reps[1] arbitrarily
+    # since `One` only depends on the parent group, not the element.
+    one_idx_group := One(idx.reps[1]);
+
+    # Cache the trivial irrep index per class (it can vary per class
+    # since each class has a different centraliser; for abelian H all
+    # centralisers are the same group, but we don't assume that.)
+    triv_idx_cache := [];
+
+    # Evaluate T_{(a, χ_triv)} = trace_on_W(cls, triv, a) /
+    #                            trace_on_W(cls, triv, e).
+    # For abelian H the class index of elems[i_a] is exactly i_a.
+    T_values := EmptyPlist(n);
+    for i_a in [1..n] do
+        a := elems[i_a];
+        cls_idx := i_a;
+        if not IsBound(triv_idx_cache[cls_idx]) then
+            triv_idx_cache[cls_idx] := _CTFindTrivialIrrepIdx(idx, cls_idx);
+        fi;
+        triv_idx := triv_idx_cache[cls_idx];
+        chi_e := intertwiner_data.trace_on_W(cls_idx, triv_idx,
+                                              one_idx_group);
+        chi_a := intertwiner_data.trace_on_W(cls_idx, triv_idx, a);
+        T_a := chi_a / chi_e;
+        Add(T_values, T_a);
+    od;
+
+    modulus := _CTDetermineModulusFromTValues(T_values);
+    two_N := 2 * modulus;
+
+    # Discrete-log each T_value to read off q.
+    q := EmptyPlist(n);
+    for i_a in [1..n] do
+        e_idx := _CTDiscreteLogBaseE2N(T_values[i_a], two_N);
+        if e_idx = fail then
+            Error("_CTExtractQBFromIntertwinerData: T_value at i_a = ",
+                  i_a, " (= ", T_values[i_a],
+                  ") is not a power of E(", two_N, ")");
+        fi;
+        Add(q, e_idx);
+    od;
+
+    # b via polarisation. For abelian H, elems[i_a] * elems[i_b] is also
+    # in the cached group; use Position on idx.reps for the index lookup.
+    b := EmptyPlist(n);
+    for i_a in [1..n] do
+        row := EmptyPlist(n);
+        for i_b in [1..n] do
+            ab := elems[i_a] * elems[i_b];
+            q_ab_idx := Position(elems, ab);
+            if q_ab_idx = fail then
+                Error("_CTExtractQBFromIntertwinerData: product ", ab,
+                      " not in idx.reps; H non-abelian or caching bug?");
+            fi;
+            row[i_b] := (q[q_ab_idx] - q[i_a] - q[i_b]) mod two_N;
+        od;
+        b[i_a] := row;
+    od;
+
+    return rec(
+        q := q,
+        b := b,
+        modulus := modulus,
+        two_N := two_N,
+        elems := elems
+    );
+end;;
+
+# Helper: build a factored modular-data record from pre-computed (q, b).
+# Indexes chi_at via `idx.reps` (the cached idx's class-representative
+# ordering), aligning with `_CTExtractQBFromIntertwinerData`'s output.
+#
+# For abelian H every class is a singleton, so `idx.irreps[k][j][i]` =
+# j-th irrep of `C_H(idx.reps[k])` = H evaluated at the i-th class
+# representative = chi_at[j][i] when the i-th class rep is idx.reps[i].
+#
+# We use `idx.irreps[1]` (the irreps of C_H(idx.reps[1]) = H) since for
+# abelian H all centralisers are H and idx.irreps[k] = Irr(H) for every k.
+#
+# Output shape matches `ComputeAbelianModularDataFactored`:
+#   rec(is_factored := true, n, modulus, two_N, normaliser, simples,
+#        T_vec, chi_at, chi_at_inv, zeta_q, b_omega, S_at, T_at)
+_CTBuildFactoredFromQB := function(idx, H, q, b, modulus)
+    local n, m, two_N, normaliser, irreps_H, chi_at, chi_at_inv,
+          zeta_q, T_vec, i_a, i_chi, simples, i, j, rec_out;
+    n := Length(idx.reps);
+    m := n;
+    two_N := 2 * modulus;
+    normaliser := 1 / n;
+
+    # Materialise the class data for the first class (so idx.irreps[1]
+    # is populated under the lazy idx). For abelian H idx.irreps[k]
+    # equals Irr(H) for every k; we only need k = 1.
+    _EnsureClassData(idx, 1);
+    irreps_H := idx.irreps[1];
+    if Length(irreps_H) <> n then
+        Error("_CTBuildFactoredFromQB: |idx.irreps[1]| = ",
+              Length(irreps_H), " != |H| = ", n,
+              "; H is not actually abelian?");
+    fi;
+    # chi_at[k][i] = k-th irrep evaluated at the i-th class
+    # (= idx.reps[i] under abelian H).
+    chi_at := List([1..m], k_idx ->
+        List([1..n], i_idx -> irreps_H[k_idx][i_idx]));
+    chi_at_inv := List(chi_at, r -> List(r, x -> 1 / x));
+
+    zeta_q := List(q, k_ -> E(two_N)^k_);
+
+    T_vec := EmptyPlist(n * m);
+    for i_a in [1..n] do
+        for i_chi in [1..m] do
+            Add(T_vec, chi_at[i_chi][i_a] * zeta_q[i_a]);
+        od;
+    od;
+
+    simples := EmptyPlist(n * m);
+    for i in [1..n] do
+        for j in [1..m] do
+            Add(simples, [i, j]);
+        od;
+    od;
+
+    rec_out := rec(
+        H := H,
+        n := n,
+        modulus := modulus,
+        two_N := two_N,
+        normaliser := normaliser,
+        simples := simples,
+        T_vec := T_vec,
+        chi_at := chi_at,
+        chi_at_inv := chi_at_inv,
+        zeta_q := zeta_q,
+        b_omega := b,
+        is_factored := true,
+        # Preserve `group` for API symmetry with the generic path's
+        # return (the generic path sets `.group := H`).
+        group := H,
+        # PR #492 marker: this record came from the abelian closed-form
+        # specialisation of ComputeCTModularData (not from the generic
+        # loop). Surface for diagnostic / test introspection.
+        source := "ct-abelian-closed-form"
+    );
+
+    rec_out.S_at := function(global_i, global_j)
+        local i_a_, i_chi_, i_b_, i_psi_;
+        i_a_   := QuoInt(global_i - 1, m) + 1;
+        i_chi_ := ((global_i - 1) mod m) + 1;
+        i_b_   := QuoInt(global_j - 1, m) + 1;
+        i_psi_ := ((global_j - 1) mod m) + 1;
+        return normaliser
+               * chi_at_inv[i_psi_][i_a_]
+               * chi_at_inv[i_chi_][i_b_]
+               * E(two_N)^(-b[i_a_][i_b_]);
+    end;
+    rec_out.T_at := function(global_i)
+        return T_vec[global_i];
+    end;
+
+    # API compatibility: the generic path also returns a `T` field
+    # (a DiagonalMat). We surface the same shape via a T DiagonalMat
+    # synthesised from T_vec — but at large |H| this would materialise
+    # |H|^2 x |H|^2 zeros, which we do NOT want. Skip the DiagonalMat
+    # synthesis; the downstream consumer (`ClassifyEAFromModularData`)
+    # detects `is_factored` and reads `T_vec` directly. Callers wanting
+    # the legacy DiagonalMat T can synthesise it themselves.
+
+    return rec_out;
+end;;
+
+# Public-facing closed-form: builds the factored modular-data record
+# from `intertwiner_data` for abelian H. Returns a record matching the
+# `ComputeAbelianModularDataFactored` shape (with `is_factored := true`).
+_CTModularDataAbelianClosedForm := function(intertwiner_data, H)
+    local qb;
+    qb := _CTExtractQBFromIntertwinerData(intertwiner_data, H);
+    return _CTBuildFactoredFromQB(intertwiner_data.idx, H,
+                                   qb.q, qb.b, qb.modulus);
+end;;
+
+
+# ============================================================
 # Public: ComputeCTModularData(intertwiner_data, H)
 # ============================================================
 #
 # See the file header for the contract. The math is CGR (5.20)+(5.21)
 # specialised to the CT case under T4a's gauge choice ε ≡ 1.
+#
+# Dispatch (PR #492):
+#   * H abelian → `_CTModularDataAbelianClosedForm(intertwiner_data, H)`.
+#     Returns a FACTORED modular-data record (see PR #487 + #490). The
+#     downstream consumer `ClassifyEAFromModularData` reads `is_factored`
+#     and routes through the `qb_extraction` path (O(|H|^2) memory +
+#     O(1) per-entry S accessor). At H = (Z/2)^8 (m=7 max EA) the
+#     generic O(|H|^4) loop is infeasible (~10 h / EA); the closed-form
+#     completes in minutes.
+#   * H non-abelian → generic O(|H|^4) block-sweep loop (unchanged).
 
 ComputeCTModularData := function(intertwiner_data, H)
     local idx, simples, n, S, T_diag, i, j, off_i, off_j, k, l, block,
@@ -348,6 +697,11 @@ ComputeCTModularData := function(intertwiner_data, H)
     if not IsBound(idx.classes) then
         Error("ComputeCTModularData: intertwiner_data.idx is missing ",
               ".classes; was it built via BuildSimpleIndex?");
+    fi;
+
+    # PR #492: abelian-H closed-form dispatch.
+    if IsAbelian(H) then
+        return _CTModularDataAbelianClosedForm(intertwiner_data, H);
     fi;
 
     simples := _CTBuildSimplesList(idx);

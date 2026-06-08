@@ -35,6 +35,9 @@ _LoadCompiledOrInterpreted("abelian_modular_data_closed_form",
                            "abelian_modular_data_closed_form.g");
 _LoadCompiledOrInterpreted("joint_permutation_matcher", "joint_permutation_matcher.g");
 _LoadCompiledOrInterpreted("untwisted_modular_data", "untwisted_modular_data.g");
+# Tier-1 leaf: ea_modular_data_classifier (#486) depends only on
+# joint_permutation_matcher + untwisted_modular_data (just-loaded above).
+_LoadCompiledOrInterpreted("ea_modular_data_classifier", "ea_modular_data_classifier.g");
 _LoadCompiledOrInterpreted("em_construction", "em_construction.g");
 _LoadCompiledOrInterpreted("bw_lattice", "bw_lattice.g");
 _LoadCompiledOrInterpreted("quillen_detecting_subgroup", "quillen_detecting_subgroup.g");
