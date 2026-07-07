@@ -52,6 +52,7 @@ FILES=(
     abelian_modular_data_closed_form.g
     joint_permutation_matcher.g
     untwisted_modular_data.g
+    ea_modular_data_classifier.g
     em_construction.g
     bw_lattice.g
     quillen_detecting_subgroup.g

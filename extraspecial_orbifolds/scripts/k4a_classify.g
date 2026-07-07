@@ -221,6 +221,10 @@ fi;
 if not _K4A_LoadSibling("ComputeCTModularData", "ct_modular_data.g") then
     Error("k4a_classify.g: cannot locate ct_modular_data.g");
 fi;
+if not _K4A_LoadSibling("ClassifyEAFromModularData",
+                         "ea_modular_data_classifier.g") then
+    Error("k4a_classify.g: cannot locate ea_modular_data_classifier.g");
+fi;
 if not _K4A_LoadSibling("MaximalElementaryAbelian_E_plus",
                          "quillen_detecting_subgroup.g") then
     Error("k4a_classify.g: cannot locate quillen_detecting_subgroup.g");
@@ -369,17 +373,32 @@ _K4A_GetDVANEAFamily := function(m)
 end;;
 
 # Given an `H` (abelian subgroup) and a restricted intertwiner_data,
-# compute the CT modular data and the H-untwisted modular data, then
-# call JointPermutationMatcher. Return rec(is_abelian, is_coboundary,
-# match, modular_ct, modular_untwisted, wall_seconds).
+# compute the CT modular data on H and delegate to
+# `ClassifyEAFromModularData(H, S, T)` for the triviality verdict.
+#
+# Architecture (#486): modular data in, triviality verdict out. The
+# spectral input `restricted` is consumed once by `ComputeCTModularData`
+# to produce (S^α, T^α) on H; from there we are in modular-data land
+# (the same architecture as `ClassifyOnD8` / `ClassifyOnQ_8`). PR #485
+# removed the zero-cocycle stubs that previously made this verdict
+# vacuous at default opts; this PR (#486) provides the analogous
+# modular-data classifier for the EA branch.
+#
+# Returns: rec(is_abelian, is_coboundary, match, modular_ct,
+# modular_untwisted, wall_seconds).
 _K4A_ClassifyAbelianBranch := function(restricted, H)
-    local t0, modular_ct, modular_untwisted, match, fast_res;
-    # Issue #434: fast q_ω + b_ω abelian-branch path. Opt-in via the
-    # global `_K4A_USE_FAST_ABELIAN_BRANCH = true`. Requires the
-    # restricted rec to carry `omega_cocycle` (3-arg fn) + `modulus`
-    # (the cocycle's coefficient exponent N). _K4A_RestrictForBranch
-    # surfaces these whenever opts.lattice_source = true and ω ≠ 0,
-    # which is exactly the case where the fast path is needed.
+    local t0, modular_ct, ea_class, fast_res;
+    # Issue #434: optional fast q_ω + b_ω abelian-branch path. Opt-in
+    # via `_K4A_USE_FAST_ABELIAN_BRANCH = true`. Requires the restricted
+    # rec to carry `omega_cocycle` + `modulus`; `_K4A_RestrictForBranch`
+    # surfaces these for the lattice_source code path where the cocycle
+    # is a *real* (non-trivial) cocycle on H. PR #485 removed the
+    # zero-cocycle stub that previously routed default-opts spectral
+    # calls down this path with `omega_cocycle = (_,_,_) -> 0`, so the
+    # fast path is now ONLY engaged when a genuine cocycle is available
+    # — i.e., the math is equivalent to (not a bypass of) the modular-
+    # data path below. We keep it for the lattice-source case where the
+    # full ComputeCTModularData is unnecessarily expensive.
     if IsBoundGlobal("_K4A_USE_FAST_ABELIAN_BRANCH")
        and ValueGlobal("_K4A_USE_FAST_ABELIAN_BRANCH") = true
        and IsBound(restricted.omega_cocycle)
@@ -387,7 +406,7 @@ _K4A_ClassifyAbelianBranch := function(restricted, H)
         if not _K4A_LoadSibling("ClassifyAbelianBranchFast",
                                 "abelian_branch_fast.g") then
             Print("[K4aClassify] fast abelian-branch unavailable; ",
-                  "falling back to slow path.\n");
+                  "falling back to modular-data path.\n");
         else
             fast_res := ClassifyAbelianBranchFast(
                 H, restricted.omega_cocycle, restricted.modulus);
@@ -398,30 +417,31 @@ _K4A_ClassifyAbelianBranch := function(restricted, H)
     # Issue #333: at omega != 0 the projective consumption downstream of
     # RestrictTraceOnWToSubgroupProjective produces a (S, T) that does
     # not match the ground-truth Z(Vec^{omega|_H}_H) modular data. When
-    # _K4A_RestrictForBranch attaches `modular_ct_override` (computed
-    # via direct ComputeModularData(H, omega|_H, val, exp)), prefer it.
+    # `_K4A_RestrictForBranch` attaches `modular_ct_override` (computed
+    # via direct `ComputeModularData(H, omega|_H, val, exp)`), prefer
+    # it. Otherwise compute the alpha-restricted (S, T) from the
+    # spectral data via `ComputeCTModularData`. This is the expensive
+    # step (~minutes per EA at m=5) but it is the only path that
+    # produces correct alpha-twisted modular data on H from a spectral
+    # restriction; bypasses here are the K-4b mathematical-vacuity hazard
+    # that PR #485 removed.
     if IsBound(restricted.modular_ct_override) then
         modular_ct := restricted.modular_ct_override;
     else
         modular_ct := ComputeCTModularData(restricted, H);
     fi;
-    modular_untwisted := ComputeUntwistedModularData(H);
-    # Matcher arg order doesn't matter (it's symmetric in the (S, T)
-    # comparison up to relabelling), but for readability we put the
-    # "reference" (untwisted) first and the "candidate" (CT) second.
-    # Note on T shapes: ComputeUntwistedModularData returns T as a raw
-    # vector (the diag), while ComputeCTModularData wraps it via
-    # DiagonalMat. JointPermutationMatcher accepts both forms (see
-    # joint_permutation_matcher.g docstring) and normalises internally.
-    match := JointPermutationMatcher(
-        modular_untwisted.S, modular_untwisted.T,
-        modular_ct.S, modular_ct.T);
+    # Delegate to the modular-data classifier (#486). It computes the
+    # untwisted reference and runs `JointPermutationMatcher` internally.
+    # `ClassifyEAFromModularData` returns the untwisted MD via
+    # `.modular_untwisted` so we surface it on our diagnostic record too.
+    ea_class := ClassifyEAFromModularData(H, modular_ct.S, modular_ct.T);
     return rec(
         is_abelian          := true,
-        is_coboundary       := match.ok,
-        match               := match,
+        is_coboundary       := ea_class.is_trivial,
+        match               := ea_class.match,
         modular_ct          := modular_ct,
-        modular_untwisted   := modular_untwisted,
+        modular_untwisted   := ea_class.modular_untwisted,
+        ea_class_idx        := ea_class.class_idx,
         wall_seconds        := _K4A_SecsSince(t0)
     );
 end;;
